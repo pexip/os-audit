@@ -1,6 +1,7 @@
 Source: audit
 Priority: extra
-Maintainer: Philipp Matthias Hahn <pmhahn@debian.org>
+Maintainer: Pexip AS <packaging@pexip.com>
+XSBC-Pexip-Original-Maintainer: Philipp Matthias Hahn <pmhahn@debian.org>
 Build-Depends: debhelper (>= 8),
  python-all-dev (>= 2.6.6-3~), swig,
  automake1.10, autoconf (>= 2.59), libtool, autotools-dev,
@@ -10,6 +11,7 @@ Build-Conflicts: autoconf2.13, automake1.4
 Standards-Version: 3.9.2
 Section: libs
 Homepage: http://people.redhat.com/sgrubb/audit/
+XS-Pexip-Upstream: http://archive.ubuntu.com/ubuntu/ precise
 
 Package: auditd
 Section: admin
