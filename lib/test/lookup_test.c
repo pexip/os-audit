@@ -26,11 +26,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "../libaudit.h"
 
-/* Number of looku
- * #include "config.h"ps of random strings */
+/* Number of lookups of random strings */
 #define RAND_ITERATIONS 1000
 
 /* Maximum size of randomly generated strings, including the terminating NUL. */
@@ -129,6 +129,42 @@ test_alpha_table(void)
 	printf("Testing alpha_table...\n");
 #define I2S(I) audit_syscall_to_name((I), MACH_ALPHA)
 #define S2I(S) audit_name_to_syscall((S), MACH_ALPHA)
+	TEST_I2S(0);
+	TEST_S2I(-1);
+#undef I2S
+#undef S2I
+}
+#endif
+
+#ifdef WITH_ARM
+static void
+test_arm_table(void)
+{
+	static const struct entry t[] = {
+#include "../arm_table.h"
+	};
+
+	printf("Testing arm_table...\n");
+#define I2S(I) audit_syscall_to_name((I), MACH_ARM)
+#define S2I(S) audit_name_to_syscall((S), MACH_ARM)
+	TEST_I2S(0);
+	TEST_S2I(-1);
+#undef I2S
+#undef S2I
+}
+#endif
+
+#ifdef WITH_AARCH64
+static void
+test_aarch64_table(void)
+{
+	static const struct entry t[] = {
+#include "../aarch64_table.h"
+	};
+
+	printf("Testing aarch64_table...\n");
+#define I2S(I) audit_syscall_to_name((I), MACH_AARCH64)
+#define S2I(S) audit_name_to_syscall((S), MACH_AARCH64)
 	TEST_I2S(0);
 	TEST_S2I(-1);
 #undef I2S
@@ -298,6 +334,22 @@ test_flagtab(void)
 }
 
 static void
+test_ftypetab(void)
+{
+	static const struct entry t[] = {
+#include "../ftypetab.h"
+	};
+
+	printf("Testing ftypetab...\n");
+#define I2S(I) audit_ftype_to_name(I)
+#define S2I(S) audit_name_to_ftype(S)
+	TEST_I2S(0);
+	TEST_S2I(-1);
+#undef I2S
+#undef S2I
+}
+
+static void
 test_machinetab(void)
 {
 	static const struct entry t[] = {
@@ -307,8 +359,9 @@ test_machinetab(void)
 	printf("Testing machinetab...\n");
 #define I2S(I) audit_machine_to_name(I)
 #define S2I(S) audit_name_to_machine(S)
-	TEST_I2S(t[i].s[0] == 'i' && t[i].s[1] >= '4' && t[i].s[1] <= '6'
-		 && strcmp(t[i].s + 2, "86") == 0);
+	TEST_I2S((t[i].s[0] == 'i' && t[i].s[1] >= '4' && t[i].s[1] <= '6'
+		 && strcmp(t[i].s + 2, "86") == 0) ||
+		(strncmp(t[i].s, "arm", 3) == 0));
 	TEST_S2I(-1);
 #undef I2S
 #undef S2I
@@ -346,8 +399,17 @@ test_optab(void)
 int
 main(void)
 {
+	// This is only for preventing collisions in s2i tests.
+	// If collisions are found in future, change the number. 
+	srand(3);
 #ifdef WITH_ALPHA
 	test_alpha_table();
+#endif
+#ifdef WITH_ARM
+	test_arm_table();
+#endif
+#ifdef WITH_AARCH64
+	test_aarch64_table();
 #endif
 	test_i386_table();
 	test_ia64_table();
@@ -359,8 +421,10 @@ main(void)
 	test_errtab();
 	test_fieldtab();
 	test_flagtab();
+	test_ftypetab();
 	test_machinetab();
 	test_msg_typetab();
 	test_optab();
 	return EXIT_SUCCESS;
 }
+

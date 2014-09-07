@@ -1,5 +1,5 @@
 /* autrace.c -- 
- * Copyright 2005-08 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-09,2011 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <time.h>
+#include <linux/net.h>
 #include "libaudit.h"
 #include "private.h"
 
@@ -49,9 +50,11 @@ static void usage(void)
 static int insert_rule(int audit_fd, const char *field)
 {
 	int rc;
-	int flags = AUDIT_FILTER_ENTRY;
+	int flags = AUDIT_FILTER_EXIT;
 	int action = AUDIT_ALWAYS;
 	struct audit_rule_data *rule = malloc(sizeof(struct audit_rule_data));
+	int machine = audit_detect_machine();
+	char *t_field = NULL;
 
 	if (rule == NULL)
 		goto err;
@@ -84,25 +87,55 @@ static int insert_rule(int audit_fd, const char *field)
 		rc |= audit_rule_syscallbyname_data(rule, "readlink");
 		rc |= audit_rule_syscallbyname_data(rule, "readlinkat");
 		rc |= audit_rule_syscallbyname_data(rule, "execve");
-		rc |= audit_rule_syscallbyname_data(rule, "connect");
-		rc |= audit_rule_syscallbyname_data(rule, "bind");
-		rc |= audit_rule_syscallbyname_data(rule, "accept");
-		rc |= audit_rule_syscallbyname_data(rule, "sendto");
-		rc |= audit_rule_syscallbyname_data(rule, "recvfrom");
+		rc |= audit_rule_syscallbyname_data(rule, "name_to_handle_at");
+
+		if (machine != MACH_X86 && machine != MACH_S390X && 
+						machine != MACH_S390) {
+			rc |= audit_rule_syscallbyname_data(rule, "connect");
+			rc |= audit_rule_syscallbyname_data(rule, "bind");
+			rc |= audit_rule_syscallbyname_data(rule, "accept");
+			rc |= audit_rule_syscallbyname_data(rule, "sendto");
+			rc |= audit_rule_syscallbyname_data(rule, "recvfrom");
+			rc |= audit_rule_syscallbyname_data(rule, "accept4");
+		}
+
 		rc |= audit_rule_syscallbyname_data(rule, "sendfile");
 	} else
 		rc = audit_rule_syscallbyname_data(rule, "all");
 	if (rc < 0)
 		goto err;
-	rc = audit_rule_fieldpair_data(&rule, field, flags);
+	t_field = strdup(field);
+	rc = audit_rule_fieldpair_data(&rule, t_field, flags);
+	free(t_field);
 	if (rc < 0)
 		goto err;
 	rc = audit_add_rule_data(audit_fd, rule, flags, action);
 	if (rc < 0)
 		goto err;
+
+	// Now if i386, lets add its network rules
+	if (machine == MACH_X86 || machine == MACH_S390X ||
+						machine == MACH_S390) {
+		int i, a0[6] = { SYS_CONNECT, SYS_BIND, SYS_ACCEPT, SYS_SENDTO,
+				 SYS_RECVFROM, SYS_ACCEPT4 };
+		for (i=0; i<6; i++) {
+			char pair[32];
+
+			memset(rule, 0, sizeof(struct audit_rule_data));
+			rc |= audit_rule_syscallbyname_data(rule, "socketcall");
+			snprintf(pair, sizeof(pair), "a0=%d", a0[i]);
+			rc |= audit_rule_fieldpair_data(&rule, pair, flags);
+			t_field = strdup(field);
+			rc |= audit_rule_fieldpair_data(&rule, t_field, flags);
+			free(t_field);
+			rc |= audit_add_rule_data(audit_fd, rule, flags, action);
+		}
+	}
+	free(rule);
 	return 0;
 err:
 	fprintf(stderr, "Error inserting audit rule for %s\n", field);
+	free(rule);
 	return 1;
 }
 
@@ -194,25 +227,29 @@ int main(int argc, char *argv[])
 			close(fd[0]);
 			fcntl(fd[1], F_SETFD, FD_CLOEXEC);
 			{
-				char rule[16];
+				char field[16];
 				int audit_fd;
   				audit_fd = audit_open();
 				if (audit_fd < 0)
 					exit(1);
-				snprintf(rule, sizeof(rule), "pid=%d", pid);
-				if (insert_rule(audit_fd, rule)) {
+				snprintf(field, sizeof(field), "pid=%d", pid);
+				if (insert_rule(audit_fd, field)) {
 					kill(pid,SIGTERM);
 					(void)delete_all_rules(audit_fd);
 					exit(1);
 				}
-				snprintf(rule, sizeof(rule), "ppid=%d", pid);
-				if (insert_rule(audit_fd, rule)) {
+				snprintf(field, sizeof(field), "ppid=%d", pid);
+				if (insert_rule(audit_fd, field)) {
 					kill(pid,SIGTERM);
 					(void)delete_all_rules(audit_fd);
 					exit(1);
 				}
 				sleep(1);
-				(void)write(fd[1],"1", 1);
+				if (write(fd[1],"1", 1) != 1) {
+					kill(pid,SIGTERM);
+					(void)delete_all_rules(audit_fd);
+					exit(1);
+				}
 				waitpid(pid, NULL, 0);
 				close(fd[1]);
 				puts("Cleaning up...");
@@ -237,7 +274,7 @@ static int count_rules(void)
 	if (fd < 0) 
 		return -1;
 
-	rc = audit_request_rules_list(fd);
+	rc = audit_request_rules_list_data(fd);
 	if (rc > 0) 
 		total = count_em(fd);
 	else 
@@ -274,7 +311,7 @@ static int count_em(int fd)
 			{
 				case NLMSG_DONE:
 					return count;
-				case AUDIT_LIST:
+				case AUDIT_LIST_RULES:
 					i = 0;
 					count++;
 					break;

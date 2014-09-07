@@ -26,9 +26,6 @@ SCRIPTNAME=/etc/init.d/"$NAME"
 # Read configuration variable file if it is present
 [ -r /etc/default/"$NAME" ] && . /etc/default/"$NAME"
 
-# Load the VERBOSE setting and other rcS variables
-. /lib/init/vars.sh
-
 # Define LSB log_* functions.
 . /lib/lsb/init-functions
 
@@ -46,16 +43,14 @@ do_start()
 	start-stop-daemon --start --quiet --pidfile "$PIDFILE" --exec "$DAEMON" -- \
 		$EXTRAOPTIONS \
 		|| return 2
+        # Call augenrules to compile audit rules.
+        case "$USE_AUGENRULES" in
+                no|NO) ;;
+                *) [ -d /etc/audit/rules.d ] && /sbin/augenrules >/dev/null ;;
+        esac
 	if [ -f /etc/audit/audit.rules ]
 	then
 		/sbin/auditctl -R /etc/audit/audit.rules >/dev/null
-	fi
-	# check if we have a rules directory and load the .rules files
-	if [ -d /etc/audit/rules.d ]; then
-		for rulesfile in /etc/audit/rules.d/*.rules
-		do
-			[ -f ${rulesfile} ] && /sbin/auditctl -R ${rulesfile} > /dev/null
-		done
 	fi
 }
 
@@ -82,6 +77,11 @@ do_stop()
 		no|NO) ;;
 		*) /sbin/auditctl -D >/dev/null ;;
 	esac
+	# Disable audit system on daemon shutdown
+	case "$AUDITD_STOP_DISABLE" in
+		no|NO) ;;
+		*) /sbin/auditctl -e 0 >/dev/null ;;
+	esac
 	return "$RETVAL"
 }
 
@@ -95,19 +95,19 @@ do_reload() {
 
 case "$1" in
   start)
-	[ "$VERBOSE" != no ] && log_daemon_msg "Starting $DESC" "$NAME"
+	log_daemon_msg "Starting $DESC" "$NAME"
 	do_start
 	case "$?" in
-		0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
-		2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
+		0|1) log_end_msg 0 ;;
+		2) log_end_msg 1 ;;
 	esac
 	;;
   stop)
-	[ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME"
+	log_daemon_msg "Stopping $DESC" "$NAME"
 	do_stop
 	case "$?" in
-		0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
-		2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
+		0|1) log_end_msg 0 ;;
+		2) log_end_msg 1 ;;
 	esac
 	;;
   reload|force-reload)

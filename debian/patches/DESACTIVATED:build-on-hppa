@@ -1,0 +1,591 @@
+Author: Helge Deller <deller@gmx.de>
+Description: build on on the hppa architecture
+Debian-bug: #735944
+
+Index: auparse/interpret.c
+===================================================================
+--- a/auparse/interpret.c	(revision 892)
++++ b/auparse/interpret.c	(working copy)
+@@ -338,7 +338,7 @@
+         const char *ptr;
+ 	char *out;
+ 
+-	if (machine > MACH_AARCH64) {
++	if (machine > MACH_PARISC) {
+ 		unsigned int ival;
+ 
+ 		errno = 0;
+Index: configure.ac
+===================================================================
+--- a/configure.ac	(revision 892)
++++ b/configure.ac	(working copy)
+@@ -210,6 +210,17 @@
+ AM_CONDITIONAL(USE_AARCH64, test x$use_aarch64 = xyes)
+ AC_MSG_RESULT($use_aarch64)
+ 
++AC_MSG_CHECKING(whether to include hppa/parisc processor support)
++AC_ARG_WITH(hppa,
++AS_HELP_STRING([--with-hppa],[enable hppa/parisc processor support]),
++use_hppa=$withval,
++use_hppa=no)
++if test x$use_hppa != xno ; then
++      AC_DEFINE(WITH_HPPA,1,[Define if you want to enable hppa/parisc processor support.])
++fi
++AM_CONDITIONAL(USE_HPPA, test x$use_hppa = xyes)
++AC_MSG_RESULT($use_hppa)
++
+ AC_MSG_CHECKING(whether to use apparmor)
+ AC_ARG_WITH(apparmor,
+ AS_HELP_STRING([--with-apparmor],[enable AppArmor events]),
+Index: lib/Makefile.am
+===================================================================
+--- a/lib/Makefile.am	(revision 892)
++++ b/lib/Makefile.am	(working copy)
+@@ -50,6 +50,9 @@
+ if USE_AARCH64
+ BUILT_SOURCES += aarch64_tables.h
+ endif
++if USE_HPPA
++BUILT_SOURCES += parisc_tables.h
++endif
+ noinst_PROGRAMS = gen_actiontabs_h gen_errtabs_h gen_fieldtabs_h \
+ 	gen_flagtabs_h gen_ftypetabs_h gen_i386_tables_h \
+ 	gen_ia64_tables_h gen_machinetabs_h gen_msg_typetabs_h \
+@@ -64,6 +67,9 @@
+ if USE_AARCH64
+ noinst_PROGRAMS += gen_aarch64_tables_h
+ endif
++if USE_HPPA
++noinst_PROGRAMS += gen_parisc_tables_h
++endif
+ gen_actiontabs_h_SOURCES = gen_tables.c gen_tables.h actiontab.h
+ gen_actiontabs_h_CFLAGS = $(AM_CFLAGS) '-DTABLE_H="actiontab.h"'
+ actiontabs.h: gen_actiontabs_h Makefile
+@@ -142,6 +148,13 @@
+ ppc_tables.h: gen_ppc_tables_h Makefile
+ 	./gen_ppc_tables_h --lowercase --i2s --s2i ppc_syscall > $@
+ 
++if USE_HPPA
++gen_parisc_tables_h_SOURCES = gen_tables.c gen_tables.h parisc_table.h
++gen_parisc_tables_h_CFLAGS = $(AM_CFLAGS) '-DTABLE_H="parisc_table.h"'
++parisc_tables.h: gen_parisc_tables_h Makefile
++	./gen_parisc_tables_h --lowercase --i2s --s2i parisc_syscall > $@
++endif
++
+ gen_s390_tables_h_SOURCES = gen_tables.c gen_tables.h s390_table.h
+ gen_s390_tables_h_CFLAGS = $(AM_CFLAGS) '-DTABLE_H="s390_table.h"'
+ s390_tables.h: gen_s390_tables_h Makefile
+Index: lib/libaudit.c
+===================================================================
+--- a/lib/libaudit.c	(revision 892)
++++ b/lib/libaudit.c	(working copy)
+@@ -1303,7 +1303,12 @@
+ 				else if (bits == ~__AUDIT_ARCH_64BIT &&
+ 					machine == MACH_PPC64)
+ 						machine = MACH_PPC;
++#ifdef WITH_HPPA
+ 				else if (bits == ~__AUDIT_ARCH_64BIT &&
++					machine == MACH_PARISC64)
++						machine = MACH_PARISC;
++#endif
++				else if (bits == ~__AUDIT_ARCH_64BIT &&
+ 					machine == MACH_S390X)
+ 						machine = MACH_S390;
+ 
+@@ -1340,6 +1345,13 @@
+ 							return -6;
+ 						break;
+ #endif
++#ifdef WITH_HPPA
++					case MACH_PARISC:
++						if (bits == __AUDIT_ARCH_64BIT)
++							return -6;
++					case MACH_PARISC64: /* fallthrough */
++						break;
++#endif
+ 					case MACH_86_64: /* fallthrough */
+ 					case MACH_PPC64: /* fallthrough */
+ 					case MACH_S390X: /* fallthrough */
+Index: lib/libaudit.h
+===================================================================
+--- a/lib/libaudit.h	(revision 892)
++++ b/lib/libaudit.h	(working copy)
+@@ -418,7 +418,9 @@
+ 	MACH_S390,
+ 	MACH_ALPHA,
+ 	MACH_ARMEB,
+-	MACH_AARCH64
++	MACH_AARCH64,
++	MACH_PARISC64,
++	MACH_PARISC
+ } machine_t;
+ 
+ /* These are the valid audit failure tunable enum values */
+Index: lib/lookup_table.c
+===================================================================
+--- a/lib/lookup_table.c	(revision 892)
++++ b/lib/lookup_table.c	(working copy)
+@@ -44,6 +44,9 @@
+ #ifdef WITH_AARCH64
+ #include "aarch64_tables.h"
+ #endif
++#ifdef WITH_HPPA
++#include "parisc_tables.h"
++#endif
+ #include "i386_tables.h"
+ #include "ia64_tables.h"
+ #include "ppc_tables.h"
+@@ -82,6 +85,10 @@
+ #ifdef WITH_AARCH64
+     { MACH_AARCH64, AUDIT_ARCH_AARCH64},
+ #endif
++#ifdef WITH_HPPA
++    { MACH_PARISC64,AUDIT_ARCH_PARISC64 },
++    { MACH_PARISC,  AUDIT_ARCH_PARISC   },
++#endif
+ };
+ #define AUDIT_ELF_NAMES (sizeof(elftab)/sizeof(elftab[0]))
+ 
+@@ -147,7 +154,13 @@
+ 			found = aarch64_syscall_s2i(sc, &res);
+ 			break;
+ #endif
++#ifdef WITH_HPPA
++		case MACH_PARISC64:
++		case MACH_PARISC:
++			found = parisc_syscall_s2i(sc, &res);
++			break;
+ #endif
++#endif
+ 		default:
+ 			return -1;
+ 	}
+@@ -187,6 +200,11 @@
+ 	        case MACH_AARCH64:
+ 			return aarch64_syscall_i2s(sc);
+ #endif
++#ifdef WITH_HPPA
++		case MACH_PARISC64:
++		case MACH_PARISC:
++			return parisc_syscall_i2s(sc);
++#endif
+ 	}
+ #endif
+ 	return NULL;
+Index: lib/machinetab.h
+===================================================================
+--- a/lib/machinetab.h	(revision 892)
++++ b/lib/machinetab.h	(working copy)
+@@ -43,3 +43,7 @@
+ #ifdef WITH_AARCH64
+ _S(MACH_AARCH64,   "aarch64"  )
+ #endif
++#ifdef WITH_HPPA
++_S(MACH_PARISC64, "parisc64" )
++_S(MACH_PARISC,   "parisc"   )
++#endif
+Index: lib/syscall-update.txt
+===================================================================
+--- a/lib/syscall-update.txt	(revision 892)
++++ b/lib/syscall-update.txt	(working copy)
+@@ -18,3 +18,6 @@
+ cat unistd.h | grep '^#define __NR_' | tr -d ')' | tr 'NR+' ' ' | awk '{ printf "_S(%s, \"%s\")\n", $6, $3 }; '
+ 
+ it will still need hand editing
++
++for parisc:
++cat /usr/include/hppa-linux-gnu/asm/unistd.h  | grep '^#define __NR_'   | grep \(__NR_Linux | sed  "s/#define *__NR_//g" | tr -d ")" | awk '{ printf "_S(%s, \"%s\")\n", $4, $1 };'
+Index: lib/test/lookup_test.c
+===================================================================
+--- a/lib/test/lookup_test.c	(revision 892)
++++ b/lib/test/lookup_test.c	(working copy)
+@@ -221,7 +221,26 @@
+ #undef S2I
+ }
+ 
++#ifdef WITH_HPPA
+ static void
++test_parisc_table(void)
++{
++	static const struct entry t[] = {
++#include "../parisc_table.h"
++	};
++
++	printf("Testing parisc_table...\n");
++#define I2S(I) audit_syscall_to_name((I), MACH_PARISC)
++#define S2I(S) audit_name_to_syscall((S), MACH_PARISC)
++	TEST_I2S(0);
++	TEST_S2I(-1);
++#undef I2S
++#undef S2I
++}
++#endif
++
++
++static void
+ test_s390_table(void)
+ {
+ 	static const struct entry t[] = {
+@@ -415,6 +434,9 @@
+ 	test_i386_table();
+ 	test_ia64_table();
+ 	test_ppc_table();
++#ifdef WITH_HPPA
++	test_parisc_table();
++#endif
+ 	test_s390_table();
+ 	test_s390x_table();
+ 	test_x86_64_table();
+Index: tools/ausyscall/ausyscall.c
+===================================================================
+--- a/tools/ausyscall/ausyscall.c	(revision 892)
++++ b/tools/ausyscall/ausyscall.c	(working copy)
+@@ -83,6 +83,12 @@
+ 					stderr);
+ 			exit(1);
+ #endif
++#ifndef WITH_HPPA
++		} else if (strcmp("hppa", argv[i]) == 0) {
++			fputs("HP-PARISC/hppa processor support is not enabled\n",
++					stderr);
++			exit(1);
++#endif
+ 		} else {
+ 			if (name != NULL) {
+ 				fputs("Two syscall names not allowed\n",stderr);
+--- a/dev/null
++++ b/lib/parisc_table.h
+@@ -0,0 +1,333 @@
++_S(0, "restart_syscall")
++_S(1, "exit")
++_S(2, "fork")
++_S(3, "read")
++_S(4, "write")
++_S(5, "open")
++_S(6, "close")
++_S(7, "waitpid")
++_S(8, "creat")
++_S(9, "link")
++_S(10, "unlink")
++_S(11, "execve")
++_S(12, "chdir")
++_S(13, "time")
++_S(14, "mknod")
++_S(15, "chmod")
++_S(16, "lchown")
++_S(17, "socket")
++_S(18, "stat")
++_S(19, "lseek")
++_S(20, "getpid")
++_S(21, "mount")
++_S(22, "bind")
++_S(23, "setuid")
++_S(24, "getuid")
++_S(25, "stime")
++_S(26, "ptrace")
++_S(27, "alarm")
++_S(28, "fstat")
++_S(29, "pause")
++_S(30, "utime")
++_S(31, "connect")
++_S(32, "listen")
++_S(33, "access")
++_S(34, "nice")
++_S(35, "accept")
++_S(36, "sync")
++_S(37, "kill")
++_S(38, "rename")
++_S(39, "mkdir")
++_S(40, "rmdir")
++_S(41, "dup")
++_S(42, "pipe")
++_S(43, "times")
++_S(44, "getsockname")
++_S(45, "brk")
++_S(46, "setgid")
++_S(47, "getgid")
++_S(48, "signal")
++_S(49, "geteuid")
++_S(50, "getegid")
++_S(51, "acct")
++_S(52, "umount2")
++_S(53, "getpeername")
++_S(54, "ioctl")
++_S(55, "fcntl")
++_S(56, "socketpair")
++_S(57, "setpgid")
++_S(58, "send")
++_S(59, "uname")
++_S(60, "umask")
++_S(61, "chroot")
++_S(62, "ustat")
++_S(63, "dup2")
++_S(64, "getppid")
++_S(65, "getpgrp")
++_S(66, "setsid")
++_S(67, "pivot_root")
++_S(68, "sgetmask")
++_S(69, "ssetmask")
++_S(70, "setreuid")
++_S(71, "setregid")
++_S(72, "mincore")
++_S(73, "sigpending")
++_S(74, "sethostname")
++_S(75, "setrlimit")
++_S(76, "getrlimit")
++_S(77, "getrusage")
++_S(78, "gettimeofday")
++_S(79, "settimeofday")
++_S(80, "getgroups")
++_S(81, "setgroups")
++_S(82, "sendto")
++_S(83, "symlink")
++_S(84, "lstat")
++_S(85, "readlink")
++_S(86, "uselib")
++_S(87, "swapon")
++_S(88, "reboot")
++_S(89, "mmap2")
++_S(90, "mmap")
++_S(91, "munmap")
++_S(92, "truncate")
++_S(93, "ftruncate")
++_S(94, "fchmod")
++_S(95, "fchown")
++_S(96, "getpriority")
++_S(97, "setpriority")
++_S(98, "recv")
++_S(99, "statfs")
++_S(100, "fstatfs")
++_S(101, "stat64")
++_S(103, "syslog")
++_S(104, "setitimer")
++_S(105, "getitimer")
++_S(106, "capget")
++_S(107, "capset")
++_S(108, "pread64")
++_S(109, "pwrite64")
++_S(110, "getcwd")
++_S(111, "vhangup")
++_S(112, "fstat64")
++_S(113, "vfork")
++_S(114, "wait4")
++_S(115, "swapoff")
++_S(116, "sysinfo")
++_S(117, "shutdown")
++_S(118, "fsync")
++_S(119, "madvise")
++_S(120, "clone")
++_S(121, "setdomainname")
++_S(122, "sendfile")
++_S(123, "recvfrom")
++_S(124, "adjtimex")
++_S(125, "mprotect")
++_S(126, "sigprocmask")
++_S(127, "create_module")
++_S(128, "init_module")
++_S(129, "delete_module")
++_S(130, "get_kernel_syms")
++_S(131, "quotactl")
++_S(132, "getpgid")
++_S(133, "fchdir")
++_S(134, "bdflush")
++_S(135, "sysfs")
++_S(136, "personality")
++_S(137, "afs_syscall")
++_S(138, "setfsuid")
++_S(139, "setfsgid")
++_S(140, "_llseek")
++_S(141, "getdents")
++_S(142, "_newselect")
++_S(143, "flock")
++_S(144, "msync")
++_S(145, "readv")
++_S(146, "writev")
++_S(147, "getsid")
++_S(148, "fdatasync")
++_S(149, "_sysctl")
++_S(150, "mlock")
++_S(151, "munlock")
++_S(152, "mlockall")
++_S(153, "munlockall")
++_S(154, "sched_setparam")
++_S(155, "sched_getparam")
++_S(156, "sched_setscheduler")
++_S(157, "sched_getscheduler")
++_S(158, "sched_yield")
++_S(159, "sched_get_priority_max")
++_S(160, "sched_get_priority_min")
++_S(161, "sched_rr_get_interval")
++_S(162, "nanosleep")
++_S(163, "mremap")
++_S(164, "setresuid")
++_S(165, "getresuid")
++_S(166, "sigaltstack")
++_S(167, "query_module")
++_S(168, "poll")
++_S(169, "nfsservctl")
++_S(170, "setresgid")
++_S(171, "getresgid")
++_S(172, "prctl")
++_S(173, "rt_sigreturn")
++_S(174, "rt_sigaction")
++_S(175, "rt_sigprocmask")
++_S(176, "rt_sigpending")
++_S(177, "rt_sigtimedwait")
++_S(178, "rt_sigqueueinfo")
++_S(179, "rt_sigsuspend")
++_S(180, "chown")
++_S(181, "setsockopt")
++_S(182, "getsockopt")
++_S(183, "sendmsg")
++_S(184, "recvmsg")
++_S(185, "semop")
++_S(186, "semget")
++_S(187, "semctl")
++_S(188, "msgsnd")
++_S(189, "msgrcv")
++_S(190, "msgget")
++_S(191, "msgctl")
++_S(192, "shmat")
++_S(193, "shmdt")
++_S(194, "shmget")
++_S(195, "shmctl")
++_S(196, "getpmsg")
++_S(197, "putpmsg")
++_S(198, "lstat64")
++_S(199, "truncate64")
++_S(200, "ftruncate64")
++_S(201, "getdents64")
++_S(202, "fcntl64")
++_S(203, "attrctl")
++_S(204, "acl_get")
++_S(205, "acl_set")
++_S(206, "gettid")
++_S(207, "readahead")
++_S(208, "tkill")
++_S(209, "sendfile64")
++_S(210, "futex")
++_S(211, "sched_setaffinity")
++_S(212, "sched_getaffinity")
++_S(213, "set_thread_area")
++_S(214, "get_thread_area")
++_S(215, "io_setup")
++_S(216, "io_destroy")
++_S(217, "io_getevents")
++_S(218, "io_submit")
++_S(219, "io_cancel")
++_S(220, "alloc_hugepages")
++_S(221, "free_hugepages")
++_S(222, "exit_group")
++_S(223, "lookup_dcookie")
++_S(224, "epoll_create")
++_S(225, "epoll_ctl")
++_S(226, "epoll_wait")
++_S(227, "remap_file_pages")
++_S(228, "semtimedop")
++_S(229, "mq_open")
++_S(230, "mq_unlink")
++_S(231, "mq_timedsend")
++_S(232, "mq_timedreceive")
++_S(233, "mq_notify")
++_S(234, "mq_getsetattr")
++_S(235, "waitid")
++_S(236, "fadvise64_64")
++_S(237, "set_tid_address")
++_S(238, "setxattr")
++_S(239, "lsetxattr")
++_S(240, "fsetxattr")
++_S(241, "getxattr")
++_S(242, "lgetxattr")
++_S(243, "fgetxattr")
++_S(244, "listxattr")
++_S(245, "llistxattr")
++_S(246, "flistxattr")
++_S(247, "removexattr")
++_S(248, "lremovexattr")
++_S(249, "fremovexattr")
++_S(250, "timer_create")
++_S(251, "timer_settime")
++_S(252, "timer_gettime")
++_S(253, "timer_getoverrun")
++_S(254, "timer_delete")
++_S(255, "clock_settime")
++_S(256, "clock_gettime")
++_S(257, "clock_getres")
++_S(258, "clock_nanosleep")
++_S(259, "tgkill")
++_S(260, "mbind")
++_S(261, "get_mempolicy")
++_S(262, "set_mempolicy")
++_S(263, "vserver")
++_S(264, "add_key")
++_S(265, "request_key")
++_S(266, "keyctl")
++_S(267, "ioprio_set")
++_S(268, "ioprio_get")
++_S(269, "inotify_init")
++_S(270, "inotify_add_watch")
++_S(271, "inotify_rm_watch")
++_S(272, "migrate_pages")
++_S(273, "pselect6")
++_S(274, "ppoll")
++_S(275, "openat")
++_S(276, "mkdirat")
++_S(277, "mknodat")
++_S(278, "fchownat")
++_S(279, "futimesat")
++_S(280, "fstatat64")
++_S(281, "unlinkat")
++_S(282, "renameat")
++_S(283, "linkat")
++_S(284, "symlinkat")
++_S(285, "readlinkat")
++_S(286, "fchmodat")
++_S(287, "faccessat")
++_S(288, "unshare")
++_S(289, "set_robust_list")
++_S(290, "get_robust_list")
++_S(291, "splice")
++_S(292, "sync_file_range")
++_S(293, "tee")
++_S(294, "vmsplice")
++_S(295, "move_pages")
++_S(296, "getcpu")
++_S(297, "epoll_pwait")
++_S(298, "statfs64")
++_S(299, "fstatfs64")
++_S(300, "kexec_load")
++_S(301, "utimensat")
++_S(302, "signalfd")
++_S(303, "timerfd")
++_S(304, "eventfd")
++_S(305, "fallocate")
++_S(306, "timerfd_create")
++_S(307, "timerfd_settime")
++_S(308, "timerfd_gettime")
++_S(309, "signalfd4")
++_S(310, "eventfd2")
++_S(311, "epoll_create1")
++_S(312, "dup3")
++_S(313, "pipe2")
++_S(314, "inotify_init1")
++_S(315, "preadv")
++_S(316, "pwritev")
++_S(317, "rt_tgsigqueueinfo")
++_S(318, "perf_event_open")
++_S(319, "recvmmsg")
++_S(320, "accept4")
++_S(321, "prlimit64")
++_S(322, "fanotify_init")
++_S(323, "fanotify_mark")
++_S(324, "clock_adjtime")
++_S(325, "name_to_handle_at")
++_S(326, "open_by_handle_at")
++_S(327, "syncfs")
++_S(328, "setns")
++_S(329, "sendmmsg")
++_S(330, "process_vm_readv")
++_S(331, "process_vm_writev")
++_S(332, "kcmp")
++_S(333, "finit_module")

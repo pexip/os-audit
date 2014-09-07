@@ -1,5 +1,5 @@
 /* msg_typetab.h --
- * Copyright 2005-07 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-07,2009-14 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -24,11 +24,12 @@
  * This table is arranged from lowest number to highest number. The
  * items that are commented out are for completeness. The audit 
  * daemon filters these and they never show up in the logs, therefore
- * they are not needed for reporting.
+ * they are not needed for reporting. Or they have been deprecated for
+ * a long time.
  */
 //_S(AUDIT_GET,                      "GET"                           )
 //_S(AUDIT_SET,                      "SET"                           )
-_S(AUDIT_LIST,                       "LIST"                          )
+//_S(AUDIT_LIST,                     "LIST"                          )
 //_S(AUDIT_ADD,                      "ADD"                           )
 //_S(AUDIT_DEL,                      "DEL"                           )
 _S(AUDIT_USER,                       "USER"                          )
@@ -39,8 +40,10 @@ _S(AUDIT_LOGIN,                      "LOGIN"                         )
 _S(AUDIT_LIST_RULES,                 "LIST_RULES"                    )
 //_S(AUDIT_TRIM,                     "TRIM"                          )
 //_S(AUDIT_MAKE_EQUIV,               "MAKE_EQUIV"                    )
-_S(AUDIT_TTY_GET,                    "TTY_GET"                       )
-_S(AUDIT_TTY_SET,                    "TTY_SET"                       )
+//_S(AUDIT_TTY_GET,                    "TTY_GET"                       )
+//_S(AUDIT_TTY_SET,                    "TTY_SET"                       )
+//_S(AUDIT_SET_FEATURE,                "SET_FEATURE"                   )
+//_S(AUDIT_GET_FEATURE,                "GET_FEATURE"                   )
 _S(AUDIT_USER_AUTH,                  "USER_AUTH"                     )
 _S(AUDIT_USER_ACCT,                  "USER_ACCT"                     )
 _S(AUDIT_USER_MGMT,                  "USER_MGMT"                     )
@@ -71,6 +74,8 @@ _S(AUDIT_GRP_AUTH,                   "GRP_AUTH"                      )
 _S(AUDIT_SYSTEM_BOOT,                "SYSTEM_BOOT"                   )
 _S(AUDIT_SYSTEM_SHUTDOWN,            "SYSTEM_SHUTDOWN"               )
 _S(AUDIT_SYSTEM_RUNLEVEL,            "SYSTEM_RUNLEVEL"               )
+_S(AUDIT_SERVICE_START,              "SERVICE_START"                 )
+_S(AUDIT_SERVICE_STOP,               "SERVICE_STOP"                  )
 _S(AUDIT_DAEMON_START,               "DAEMON_START"                  )
 _S(AUDIT_DAEMON_END,                 "DAEMON_END"                    )
 _S(AUDIT_DAEMON_ABORT,               "DAEMON_ABORT"                  )
@@ -102,6 +107,12 @@ _S(AUDIT_TTY,                        "TTY"                           )
 _S(AUDIT_EOE,                        "EOE"                           )
 _S(AUDIT_BPRM_FCAPS,                 "BPRM_FCAPS"                    )
 _S(AUDIT_CAPSET,                     "CAPSET"                        )
+_S(AUDIT_MMAP,                       "MMAP"                          )
+_S(AUDIT_NETFILTER_PKT,              "NETFILTER_PKT"                 )
+_S(AUDIT_NETFILTER_CFG,              "NETFILTER_CFG"                 )
+_S(AUDIT_SECCOMP,                    "SECCOMP"                       )
+_S(AUDIT_PROCTITLE,                  "PROCTITLE"                     )
+_S(AUDIT_FEATURE_CHANGE,             "FEATURE_CHANGE"                )
 _S(AUDIT_AVC,                        "AVC"                           )
 _S(AUDIT_SELINUX_ERR,                "SELINUX_ERR"                   )
 _S(AUDIT_AVC_PATH,                   "AVC_PATH"                      )
@@ -122,6 +133,7 @@ _S(AUDIT_MAC_UNLBL_STCADD,           "MAC_UNLBL_STCADD"              )
 _S(AUDIT_MAC_UNLBL_STCDEL,           "MAC_UNLBL_STCDEL"              )
 _S(AUDIT_ANOM_PROMISCUOUS,           "ANOM_PROMISCUOUS"              )
 _S(AUDIT_ANOM_ABEND,                 "ANOM_ABEND"                    )
+_S(AUDIT_ANOM_LINK,                  "ANOM_LINK"                     )
 _S(AUDIT_INTEGRITY_DATA,             "INTEGRITY_DATA"                )
 _S(AUDIT_INTEGRITY_METADATA,         "INTEGRITY_METADATA"            )
 _S(AUDIT_INTEGRITY_STATUS,           "INTEGRITY_STATUS"              )
@@ -181,6 +193,8 @@ _S(AUDIT_DEV_ALLOC,                  "DEV_ALLOC"                     )
 _S(AUDIT_DEV_DEALLOC,                "DEV_DEALLOC"                   )
 _S(AUDIT_FS_RELABEL,                 "FS_RELABEL"                    )
 _S(AUDIT_USER_MAC_POLICY_LOAD,       "USER_MAC_POLICY_LOAD"          )
+_S(AUDIT_ROLE_MODIFY,                "ROLE_MODIFY"                   )
+_S(AUDIT_USER_MAC_CONFIG_CHANGE,     "USER_MAC_CONFIG_CHANGE"        )
 _S(AUDIT_CRYPTO_TEST_USER,           "CRYPTO_TEST_USER"              )
 _S(AUDIT_CRYPTO_PARAM_CHANGE_USER,   "CRYPTO_PARAM_CHANGE_USER"      )
 _S(AUDIT_CRYPTO_LOGIN,               "CRYPTO_LOGIN"                  )

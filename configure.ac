@@ -1,7 +1,7 @@
 dnl
 define([AC_INIT_NOTICE],
 [### Generated automatically using autoconf version] AC_ACVERSION [
-### Copyright 2005-09 Steve Grubb <sgrubb@redhat.com>
+### Copyright 2005-14 Steve Grubb <sgrubb@redhat.com>
 ###
 ### Permission is hereby granted, free of charge, to any person obtaining a
 ### copy of this software and associated documentation files (the "Software"),
@@ -29,17 +29,17 @@ define([AC_INIT_NOTICE],
 ])
 
 AC_REVISION($Revision: 1.3 $)dnl
-AC_INIT(audit,1.7.18)
+AC_INIT(audit,2.4)
 AC_PREREQ(2.12)dnl
 AM_CONFIG_HEADER(config.h)
 
 echo Configuring auditd $VERSION
 
+AC_CONFIG_MACRO_DIR([m4])
 AC_CANONICAL_TARGET
 AM_INIT_AUTOMAKE
 AM_PROG_LIBTOOL
 AC_SUBST(LIBTOOL_DEPS)
-AM_PATH_PYTHON
 OLDLIBS="$LIBS"
 m4_include([src/libev/libev.m4])
 libev_LIBS="$LIBS"
@@ -62,6 +62,8 @@ AC_C_INLINE
 AC_CHECK_SIZEOF([unsigned int])
 AC_CHECK_SIZEOF([unsigned long])
 AM_PROG_CC_C_O
+AC_CHECK_DECLS([MS_DIRSYNC], [], [], [[#include <sys/mount.h>]])
+AC_CHECK_DECLS([AUDIT_FEATURE_VERSION], [], [], [[#include <linux/audit.h>]])
 
 ALLWARNS=""
 ALLDEBUG="-g"
@@ -78,6 +80,77 @@ if test x"$GCC" = x"yes"; then
     esac
 fi
 
+AC_MSG_CHECKING(whether to create python bindings)
+AC_ARG_WITH(python,
+AS_HELP_STRING([--with-python],[enable building python bindings]),
+use_python=$withval,
+use_python=auto)
+if test x$use_python = xno ; then
+	python_found="no"
+	AC_MSG_RESULT(no)
+else
+AC_MSG_RESULT(testing)
+AM_PATH_PYTHON
+if test -f /usr/include/python${am_cv_python_version}/Python.h ; then
+	python_found="yes"
+	pybind_dir="python"
+	AC_SUBST(pybind_dir)
+	AC_MSG_NOTICE(Python bindings will be built)
+else
+	python_found="no"
+	if test x$use_python = xyes ; then
+		AC_MSG_ERROR([Python explicitly required and python headers found])
+	else
+		AC_MSG_WARN("Python headers not found - python bindings will not be made")
+	fi
+fi
+fi
+AM_CONDITIONAL(HAVE_PYTHON, test ${python_found} = "yes")
+
+AC_MSG_CHECKING(whether to create Go language bindings)
+AC_ARG_WITH(golang,
+AS_HELP_STRING([--with-golang],[enable building golang bindings]),
+use_golang=$withval,
+use_golang=auto)
+if test x$use_golang = xno ; then
+    golang_found="no"
+    AC_MSG_RESULT(no)
+else
+    AC_MSG_RESULT(testing)
+    AC_CHECK_PROG([GOLANG],[go],[go],[no])
+    AS_IF([test "x$GOLANG" != "xno"],[
+	AC_MSG_NOTICE(Go bindings will be built)
+        golang_found="yes"
+
+        # Substitute some golang environment.
+        GOROOT=`$GOLANG env GOROOT`
+        AC_SUBST([GOROOT])
+        gobind_dir="golang"
+        AC_SUBST([gobind_dir])
+    ], [
+	if test x$use_golang = xyes ; then
+		AC_MSG_ERROR([Go language explicitly requested and program not found])
+	else
+		AC_MSG_WARN("Go not found - go bindings will not be made")
+	fi
+    ])
+fi
+AM_CONDITIONAL(HAVE_GOLANG, test ${golang_found} = "yes")
+
+#auditd listener
+AC_MSG_CHECKING(whether to include auditd network listener support)
+AC_ARG_ENABLE(listener,
+	      [AS_HELP_STRING([--disable-listener],
+			      [Disable auditd network listener support])],
+	      enable_listener=$enableval,
+	      enable_listener=yes)
+if test "x$enable_listener" != "xno"; then
+	AC_DEFINE(USE_LISTENER, 1,
+		  [Define if you want to use the auditd network listener.])
+fi
+AM_CONDITIONAL(ENABLE_LISTENER, test "x$enable_listener" != "xno")
+AC_MSG_RESULT($enable_listener)
+
 #gssapi
 AC_ARG_ENABLE(gssapi_krb5,
 	[AS_HELP_STRING([--enable-gssapi-krb5],[Enable GSSAPI Kerberos 5 support @<:@default=no@:>@])],
@@ -86,19 +159,31 @@ AC_ARG_ENABLE(gssapi_krb5,
           no) want_gssapi_krb5="no" ;;
            *) AC_MSG_ERROR(bad value ${enableval} for --enable-gssapi-krb5) ;;
          esac],
-	[want_gssapi_krb5=yes]
+	[want_gssapi_krb5="no"]
 )
 if test $want_gssapi_krb5 = yes; then
 	AC_CHECK_LIB(gssapi_krb5, gss_acquire_cred, [
 		AC_CHECK_HEADER(gssapi/gssapi.h, [
 			AC_DEFINE(USE_GSSAPI,,
 				  Define if you want to use GSSAPI)
-			gss_libs="-lgssapi_krb5"
+			gss_libs="-lgssapi_krb5 -lkrb5"
 			AC_SUBST(gss_libs)
 		])
 	])
 fi
 AM_CONDITIONAL(ENABLE_GSSAPI, test x$want_gssapi_krb5 = xyes)
+
+#systemd
+AC_ARG_ENABLE(systemd,
+	[AS_HELP_STRING([--enable-systemd],[Enable systemd init scripts @<:@default=no@:>@])],
+        [case "${enableval}" in
+         yes) want_systemd="yes" ;;
+          no) want_systemd="no" ;;
+           *) AC_MSG_ERROR(bad value ${enableval} for --enable-systemd) ;;
+         esac],
+	[want_systemd="no"]
+)
+AM_CONDITIONAL(ENABLE_SYSTEMD, test x$want_systemd = xyes)
 
 ALLDEBUG="-g"
 AC_ARG_WITH(debug,
@@ -132,10 +217,31 @@ use_alpha=$withval,
 use_alpha=no)
 if test x$use_alpha != xno ; then
       AC_DEFINE(WITH_ALPHA,1,[Define if you want to enable Alpha processor support.])
-else
-	AC_MSG_RESULT(no)
 fi
 AM_CONDITIONAL(USE_ALPHA, test x$use_alpha = xyes)
+AC_MSG_RESULT($use_alpha)
+
+AC_MSG_CHECKING(whether to include arm eabi processor support)
+AC_ARG_WITH(arm,
+AS_HELP_STRING([--with-arm],[enable Arm eabi processor support]),
+use_arm=$withval,
+use_arm=no)
+if test x$use_arm != xno ; then
+      AC_DEFINE(WITH_ARM,1,[Define if you want to enable Arm eabi processor support.])
+fi
+AM_CONDITIONAL(USE_ARM, test x$use_arm = xyes)
+AC_MSG_RESULT($use_arm)
+
+AC_MSG_CHECKING(whether to include aarch64 processor support)
+AC_ARG_WITH(aarch64,
+AS_HELP_STRING([--with-aarch64],[enable Aarch64 processor support]),
+use_aarch64=$withval,
+use_aarch64=no)
+if test x$use_aarch64 != xno ; then
+      AC_DEFINE(WITH_AARCH64,1,[Define if you want to enable Aarch64 processor support.])
+fi
+AM_CONDITIONAL(USE_AARCH64, test x$use_aarch64 = xyes)
+AC_MSG_RESULT($use_aarch64)
 
 AC_MSG_CHECKING(whether to use apparmor)
 AC_ARG_WITH(apparmor,
@@ -144,17 +250,17 @@ use_apparmor=$withval,
 use_apparmor=no)
 if test x$use_apparmor != xno ; then
       AC_DEFINE(WITH_APPARMOR,1,[Define if you want to enable AppArmor events.])
-else
-	AC_MSG_RESULT(no)
 fi
+AC_MSG_RESULT($use_apparmor)
 
+AC_MSG_CHECKING(whether to use prelude)
 AC_ARG_WITH(prelude,
 AS_HELP_STRING([--with-prelude],[enable prelude IDS support]),
 use_prelude=$withval,
 use_prelude=no)
+AC_MSG_RESULT($use_prelude)
 if test x$use_prelude = xno ; then
 	have_prelude=no;
-	AC_MSG_RESULT(no)
 else
       AC_CHECK_LIB(prelude, prelude_init,
                  have_prelude=yes, have_prelude=no)
@@ -163,7 +269,7 @@ else
       else
 	LIBPRELUDE_CFLAGS=`libprelude-config --pthread-cflags 2>/dev/null`
 	LIBPRELUDE_LDFLAGS=`libprelude-config --ldflags 2>/dev/null`
-
+        AC_MSG_RESULT(yes)
       fi
 fi
 AM_CONDITIONAL(HAVE_PRELUDE, test x$have_prelude = xyes)
@@ -208,14 +314,17 @@ AC_ARG_WITH(libwrap,
 if test x"$LIBWRAP_LIBS" != "x"; then
 	AC_DEFINE_UNQUOTED(HAVE_LIBWRAP, [], Define if tcp_wrappers support is enabled )
 fi
+
+# See if we want to support lower capabilities for plugins
+LIBCAP_NG_PATH
+
 AC_SUBST(DEBUG)
 AC_SUBST(LIBWRAP_LIBS)
-AC_SUBST(libev_LIBS)
+#AC_SUBST(libev_LIBS)
 AC_SUBST(LIBPRELUDE_CFLAGS)
 AC_SUBST(LIBPRELUDE_LDFLAGS)
 
-AC_CONFIG_SUBDIRS([system-config-audit])
-AC_OUTPUT(Makefile lib/Makefile lib/test/Makefile auparse/Makefile auparse/test/Makefile src/Makefile src/mt/Makefile src/libev/Makefile src/test/Makefile swig/Makefile docs/Makefile init.d/Makefile audisp/Makefile audisp/plugins/Makefile audisp/plugins/builtins/Makefile audisp/plugins/prelude/Makefile audisp/plugins/remote/Makefile audisp/plugins/zos-remote/Makefile bindings/Makefile bindings/python/Makefile tools/Makefile tools/aulast/Makefile tools/aulastlog/Makefile tools/ausyscall/Makefile)
+AC_OUTPUT(Makefile lib/Makefile lib/audit.pc lib/test/Makefile auparse/Makefile auparse/test/Makefile src/Makefile src/mt/Makefile src/libev/Makefile src/test/Makefile swig/Makefile docs/Makefile init.d/Makefile audisp/Makefile audisp/plugins/Makefile audisp/plugins/builtins/Makefile audisp/plugins/prelude/Makefile audisp/plugins/remote/Makefile audisp/plugins/zos-remote/Makefile bindings/Makefile bindings/python/Makefile bindings/golang/Makefile tools/Makefile tools/aulast/Makefile tools/aulastlog/Makefile tools/ausyscall/Makefile tools/auvirt/Makefile)
 
 echo .
 echo "

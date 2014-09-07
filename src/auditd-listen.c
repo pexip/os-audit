@@ -1,5 +1,5 @@
 /* auditd-listen.c -- 
- * Copyright 2008,2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2008,2009,2011 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -75,6 +75,7 @@ typedef struct ev_tcp {
 
 static int listen_socket;
 static struct ev_io tcp_listen_watcher;
+static struct ev_periodic periodic_watcher;
 static int min_port, max_port, max_per_addr;
 static int use_libwrap = 1;
 #ifdef USE_GSSAPI
@@ -87,12 +88,22 @@ static char msgbuf[MAX_AUDIT_MESSAGE_LENGTH + 1];
 
 static struct ev_tcp *client_chain = NULL;
 
-static char *sockaddr_to_ip (struct sockaddr_in *addr)
+static char *sockaddr_to_ipv4(struct sockaddr_in *addr)
 {
 	unsigned char *uaddr = (unsigned char *)&(addr->sin_addr);
 	static char buf[40];
 
-	snprintf (buf, sizeof(buf), "%d.%d.%d.%d:%d",
+	snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
+		uaddr[0], uaddr[1], uaddr[2], uaddr[3]);
+	return buf;
+}
+
+static char *sockaddr_to_addr4(struct sockaddr_in *addr)
+{
+	unsigned char *uaddr = (unsigned char *)&(addr->sin_addr);
+	static char buf[40];
+
+	snprintf(buf, sizeof(buf), "%u.%u.%u.%u:%u",
 		uaddr[0], uaddr[1], uaddr[2], uaddr[3],
 		ntohs (addr->sin_port));
 	return buf;
@@ -107,24 +118,30 @@ static void set_close_on_exec (int fd)
 	fcntl (fd, F_SETFD, flags);
 }
 
-static void close_client (struct ev_tcp *client)
+static void release_client(struct ev_tcp *client)
 {
 	char emsg[DEFAULT_BUF_SZ];
 
 	snprintf(emsg, sizeof(emsg), "addr=%s port=%d res=success",
-		sockaddr_to_ip (&client->addr), ntohs (client->addr.sin_port));
+		sockaddr_to_ipv4(&client->addr), ntohs (client->addr.sin_port));
 	send_audit_event(AUDIT_DAEMON_CLOSE, emsg); 
 #ifdef USE_GSSAPI
 	if (client->remote_name)
 		free (client->remote_name);
 #endif
-	close (client->io.fd);
+	shutdown(client->io.fd, SHUT_RDWR);
+	close(client->io.fd);
 	if (client_chain == client)
 		client_chain = client->next;
 	if (client->next)
 		client->next->prev = client->prev;
 	if (client->prev)
 		client->prev->next = client->next;
+}
+
+static void close_client(struct ev_tcp *client)
+{
+	release_client (client);
 	free (client);
 }
 
@@ -195,7 +212,7 @@ static int recv_token (int s, gss_buffer_t tok)
 	       | lenbuf[3]);
 	if (len > MAX_AUDIT_MESSAGE_LENGTH) {
 		audit_msg(LOG_ERR,
-			"GSS-API error: event length exceeds MAX_AUDIT_LENGTH");
+			"GSS-API error: event length excedes MAX_AUDIT_LENGTH");
 		return -1;
 	}
 	tok->length = len;
@@ -286,7 +303,9 @@ static void gss_failure (const char *msg, int major_status, int minor_status)
 }
 
 #define KCHECK(x,f) if (x) { \
-		audit_msg (LOG_ERR, "krb5 error: %s in %s\n", krb5_get_error_message (kcontext, x), f); \
+		const char *kstr = krb5_get_error_message(kcontext, x); \
+		audit_msg(LOG_ERR, "krb5 error: %s in %s\n", kstr, f); \
+		krb5_free_error_message(kcontext, kstr); \
 		return -1; }
 
 /* These are our private credentials, which come from a key file on
@@ -357,7 +376,7 @@ static int negotiate_credentials (ev_tcp *io)
 		if (recv_token(io->io.fd, &recv_tok) <= 0) {
 			audit_msg(LOG_ERR,
 			"TCP session from %s will be closed, error ignored",
-				  sockaddr_to_ip (&io->addr));
+				  sockaddr_to_addr4(&io->addr));
 			return -1;
 		}
 		if (recv_tok.length == 0)
@@ -394,7 +413,7 @@ static int negotiate_credentials (ev_tcp *io)
 				gss_release_buffer(&min_stat, &send_tok);
 				audit_msg(LOG_ERR,
 			"TCP session from %s will be closed, error ignored",
-					  sockaddr_to_ip (&io->addr));
+					  sockaddr_to_addr4(&io->addr));
 				if (*context != GSS_C_NO_CONTEXT)
 					gss_delete_sec_context(&min_stat,
 						context, GSS_C_NO_BUFFER);
@@ -481,6 +500,7 @@ static void client_ack (void *ack_data, const unsigned char *header,
 			free (utok.value);
 			return;
 		}
+		// FIXME: What were we going to do with rc?
 		rc = send_token (io->io.fd, &etok);
 		free (utok.value);
 		(void) gss_release_buffer(&minor_status, &etok);
@@ -514,7 +534,7 @@ static void client_message (struct ev_tcp *io, unsigned int length,
 				0, seq);
 			client_ack (io, ack, "");
 		} else 
-			enqueue_formatted_event (header+AUDIT_RMW_HEADER_SIZE,
+			enqueue_formatted_event(header+AUDIT_RMW_HEADER_SIZE,
 				client_ack, io, seq);
 		header[length] = ch;
 	} else {
@@ -561,7 +581,7 @@ read_more:
 		if (r < 0)
 			audit_msg (LOG_WARNING,
 				"client %s socket closed unexpectedly",
-				sockaddr_to_ip (&io->addr));
+				sockaddr_to_addr4(&io->addr));
 
 		/* There may have been a final message without a LF.  */
 		if (io->bufptr) {
@@ -723,7 +743,7 @@ static int check_num_connections(struct sockaddr_in *aaddr)
 		if (memcmp(&aaddr->sin_addr, &client->addr.sin_addr, 
 					sizeof(struct in_addr)) == 0) {
 			num++;
-			if (num > max_per_addr)
+			if (num >= max_per_addr)
 				return 1;
 		}
 		client = client->next;
@@ -751,12 +771,13 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 
 	if (use_libwrap) {
 		if (auditd_tcpd_check(afd)) {
-			close (afd);
+			shutdown(afd, SHUT_RDWR);
+			close(afd);
 	        	audit_msg(LOG_ERR, "TCP connection from %s rejected",
-					sockaddr_to_ip (&aaddr));
+					sockaddr_to_addr4(&aaddr));
 			snprintf(emsg, sizeof(emsg),
 				"op=wrap addr=%s port=%d res=no",
-				sockaddr_to_ip (&aaddr),
+				sockaddr_to_ipv4(&aaddr),
 				ntohs (aaddr.sin_port));
 			send_audit_event(AUDIT_DAEMON_ACCEPT, emsg);
 			return;
@@ -768,26 +789,28 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 	if (min_port > ntohs (aaddr.sin_port) ||
 					ntohs (aaddr.sin_port) > max_port) {
         	audit_msg(LOG_ERR, "TCP connection from %s rejected",
-				sockaddr_to_ip (&aaddr));
+				sockaddr_to_addr4(&aaddr));
 		snprintf(emsg, sizeof(emsg),
 			"op=port addr=%s port=%d res=no",
-			sockaddr_to_ip (&aaddr),
+			sockaddr_to_ipv4(&aaddr),
 			ntohs (aaddr.sin_port));
 		send_audit_event(AUDIT_DAEMON_ACCEPT, emsg);
-		close (afd);
+		shutdown(afd, SHUT_RDWR);
+		close(afd);
 		return;
 	}
 
 	/* Make sure we don't have too many connections */
 	if (check_num_connections(&aaddr)) {
         	audit_msg(LOG_ERR, "Too many connections from %s - rejected",
-				sockaddr_to_ip (&aaddr));
+				sockaddr_to_addr4(&aaddr));
 		snprintf(emsg, sizeof(emsg),
 			"op=dup addr=%s port=%d res=no",
-			sockaddr_to_ip (&aaddr),
+			sockaddr_to_ipv4(&aaddr),
 			ntohs (aaddr.sin_port));
 		send_audit_event(AUDIT_DAEMON_ACCEPT, emsg);
-		close (afd);
+		shutdown(afd, SHUT_RDWR);
+		close(afd);
 		return;
 	}
 
@@ -803,10 +826,11 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
         	audit_msg(LOG_CRIT, "Unable to allocate TCP client data");
 		snprintf(emsg, sizeof(emsg),
 			"op=alloc addr=%s port=%d res=no",
-			sockaddr_to_ip (&aaddr),
+			sockaddr_to_ipv4(&aaddr),
 			ntohs (aaddr.sin_port));
 		send_audit_event(AUDIT_DAEMON_ACCEPT, emsg);
-		close (afd);
+		shutdown(afd, SHUT_RDWR);
+		close(afd);
 		return;
 	}
 
@@ -820,8 +844,9 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 
 #ifdef USE_GSSAPI
 	if (use_gss && negotiate_credentials (client)) {
-		close (afd);
-		free (client);
+		shutdown(afd, SHUT_RDWR);
+		close(afd);
+		free(client);
 		return;
 	}
 #endif
@@ -837,16 +862,42 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 
 	/* And finally log that we accepted the connection */
 	snprintf(emsg, sizeof(emsg),
-		"addr=%s port=%d res=success", sockaddr_to_ip (&aaddr),
+		"addr=%s port=%d res=success", sockaddr_to_ipv4(&aaddr),
 		ntohs (aaddr.sin_port));
 	send_audit_event(AUDIT_DAEMON_ACCEPT, emsg);
 }
 
-void auditd_set_ports(int minp, int maxp, int max_p_addr)
+static void auditd_set_ports(int minp, int maxp, int max_p_addr)
 {
 	min_port = minp;
 	max_port = maxp;
 	max_per_addr = max_p_addr;
+}
+
+static void periodic_handler(struct ev_loop *loop, struct ev_periodic *per,
+			int revents )
+{
+	struct daemon_conf *config = (struct daemon_conf *) per->data;
+	struct ev_tcp *ev, *next = NULL;
+	int active;
+
+	if (!config->tcp_client_max_idle)
+		return;
+
+	for (ev = client_chain; ev; ev = next) {
+		active = ev->client_active;
+		ev->client_active = 0;
+		if (active)
+			continue;
+
+		audit_msg(LOG_NOTICE,
+			"client %s idle too long - closing connection\n",
+			sockaddr_to_addr4(&(ev->addr)));
+		ev_io_stop (loop, &ev->io);
+		release_client(ev);
+		next = ev->next;
+		free(ev);
+	}
 }
 
 int auditd_tcp_listen_init ( struct ev_loop *loop, struct daemon_conf *config )
@@ -854,13 +905,19 @@ int auditd_tcp_listen_init ( struct ev_loop *loop, struct daemon_conf *config )
 	struct sockaddr_in address;
 	int one = 1;
 
+	ev_periodic_init (&periodic_watcher, periodic_handler,
+			  0, config->tcp_client_max_idle, NULL);
+	periodic_watcher.data = config;
+	if (config->tcp_client_max_idle)
+		ev_periodic_start (loop, &periodic_watcher);
+
 	/* If the port is not set, that means we aren't going to
 	  listen for connections.  */
 	if (config->tcp_listen_port == 0)
 		return 0;
 
 	listen_socket = socket (AF_INET, SOCK_STREAM, 0);
-	if (listen_socket == 0) {
+	if (listen_socket < 0) {
         	audit_msg(LOG_ERR, "Cannot create tcp listener socket");
 		return 1;
 	}
@@ -870,7 +927,7 @@ int auditd_tcp_listen_init ( struct ev_loop *loop, struct daemon_conf *config )
 			(char *)&one, sizeof (int));
 
 	memset (&address, 0, sizeof(address));
-	address.sin_family = htons(AF_INET);
+	address.sin_family = AF_INET;
 	address.sin_port = htons(config->tcp_listen_port);
 	address.sin_addr.s_addr = htonl(INADDR_ANY);
 
@@ -939,10 +996,11 @@ int auditd_tcp_listen_init ( struct ev_loop *loop, struct daemon_conf *config )
 	return 0;
 }
 
-void auditd_tcp_listen_uninit ( struct ev_loop *loop )
+void auditd_tcp_listen_uninit ( struct ev_loop *loop,
+				struct daemon_conf *config )
 {
 #ifdef USE_GSSAPI
-	int status;
+	OM_uint32 status;
 #endif
 
 	ev_io_stop ( loop, &tcp_listen_watcher );
@@ -963,23 +1021,45 @@ void auditd_tcp_listen_uninit ( struct ev_loop *loop )
 		ev_io_stop (loop, &client_chain->io);
 		close_client (client_chain);
 	}
+
+	if (config->tcp_client_max_idle)
+		ev_periodic_stop (loop, &periodic_watcher);
 }
 
-void auditd_tcp_listen_check_idle (struct ev_loop *loop )
+static void periodic_reconfigure(struct daemon_conf *config)
 {
-	struct ev_tcp *ev;
-	int active;
+	struct ev_loop *loop = ev_default_loop (EVFLAG_AUTO);
+	if (config->tcp_client_max_idle) {
+		ev_periodic_set (&periodic_watcher, ev_now (loop),
+				 config->tcp_client_max_idle, NULL);
+		ev_periodic_start (loop, &periodic_watcher);
+	} else {
+		ev_periodic_stop (loop, &periodic_watcher);
+	}
+}
 
-	for (ev = client_chain; ev; ev = ev->next) {
-		active = ev->client_active;
-		ev->client_active = 0;
-		if (active)
-			continue;
-
-		audit_msg(LOG_NOTICE,
-			"client %s idle too long - closing connection\n",
-			sockaddr_to_ip (&(ev->addr)));
-		ev_io_stop (loop, &ev->io);
-		close_client(ev);
+void auditd_tcp_listen_reconfigure ( struct daemon_conf *nconf,
+				     struct daemon_conf *oconf )
+{
+	/* Look at network things that do not need restarting */
+	if (oconf->tcp_client_min_port != nconf->tcp_client_min_port ||
+		    oconf->tcp_client_max_port != nconf->tcp_client_max_port ||
+		    oconf->tcp_max_per_addr != nconf->tcp_max_per_addr) {
+		oconf->tcp_client_min_port = nconf->tcp_client_min_port;
+		oconf->tcp_client_max_port = nconf->tcp_client_max_port;
+		oconf->tcp_max_per_addr = nconf->tcp_max_per_addr;
+		auditd_set_ports(oconf->tcp_client_min_port,
+				oconf->tcp_client_max_port,
+				oconf->tcp_max_per_addr);
+	}
+	if (oconf->tcp_client_max_idle != nconf->tcp_client_max_idle) {
+		oconf->tcp_client_max_idle = nconf->tcp_client_max_idle;
+		periodic_reconfigure(oconf);
+	}
+	if (oconf->tcp_listen_port != nconf->tcp_listen_port ||
+			oconf->tcp_listen_queue != nconf->tcp_listen_queue) {
+		oconf->tcp_listen_port = nconf->tcp_listen_port;
+		oconf->tcp_listen_queue = nconf->tcp_listen_queue;
+		// FIXME: need to restart the network stuff
 	}
 }

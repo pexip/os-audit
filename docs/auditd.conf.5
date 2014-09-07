@@ -1,24 +1,10 @@
-.TH AUDITD.CONF: "5" "Dec 2008" "Red Hat" "System Administration Utilities"
+.TH AUDITD.CONF: "5" "March 2014" "Red Hat" "System Administration Utilities"
 .SH NAME
 auditd.conf \- audit daemon configuration file
 .SH DESCRIPTION
 The file
 .I /etc/audit/auditd.conf
-contains configuration information specific to the audit daemon.
-It should contain one configuration keyword per line, an equal sign,
-and then followed by appropriate configuration information. The
-keywords recognized are:
-.IR  log_file ", " log_format ", " log_group ", "priority_boost ",
-.IR  flush ", " freq ", " num_logs " , " disp_qos " , " dispatcher ",
-.IR  name_format " , " name ", " max_log_file ",
-.IR  max_log_file_action ", " space_left ",
-.IR  action_mail_acct ", " space_left_action ", " admin_space_left ",
-.IR  admin_space_left_action ", " disk_full_action ",
-.IR  disk_error_action ", " tcp_listen_port ",
-.IR  tcp_listen_queue ", " tcp_max_per_addr ", " use_libwrap ",
-.IR  tcp_client_ports ", " tcp_client_max_idle ", " enable_krb5 ",
-.IR  krb5_principal ", and " krb5_key_file ".
-These keywords are described below.
+contains configuration information specific to the audit daemon. Each line should contain one configuration keyword, an equal sign, and then followed by appropriate configuration information. All option names and values are case insensitive. The keywords recognized are listed and described below. Each line should be limited to 160 characters or the line will be skipped. You may add comments to the file by starting the line with a '#' character.
 
 .TP
 .I log_file
@@ -51,15 +37,15 @@ Then the
 parameter is used to determine how often an explicit flush to disk is issued.
 The
 .I data
-parameter tells the audit damon to keep the data portion of the disk file
+parameter tells the audit daemon to keep the data portion of the disk file
 sync'd at all times. The
 .I sync
 option tells the audit daemon to keep both the data and meta-data fully
 sync'd with every write to disk.
 .TP
 .I freq
-This is a non-negative number that tells the audit damon how many records to
-write before issuing an explicit flush to disk command. this value is only
+This is a non-negative number that tells the audit daemon how many records to
+write before issuing an explicit flush to disk command. This value is only
 valid when the
 .I flush
 keyword is set to
@@ -70,7 +56,7 @@ This keyword specifies the number of log files to keep if rotate is given
 as the
 .I max_log_file_action.
 If the number is < 2, logs are not rotated. This number must be 99 or less.
-The default is 0 - which means no rotation. As you increase the number of log files being rotated, you may need to adjust the kernel backlog setting upwards since it takes more time to rotate the files. This is typically done in /etc/audit/audit.rules.
+The default is 0 - which means no rotation. As you increase the number of log files being rotated, you may need to adjust the kernel backlog setting upwards since it takes more time to rotate the files. This is typically done in /etc/audit/audit.rules. If log rotation is configured to occur, the daemon will check for excess logs and remove them in effort to keep disk space available. The excess log check is only done on startup and when a reconfigure results in a space check.
 .TP
 .I disp_qos
 This option controls whether you want blocking/lossless or non-blocking/lossy communication between the audit daemon and the dispatcher. There is a 128k buffer between the audit daemon and dispatcher. This is good enogh for most uses. If lossy is chosen, incoming events going to the dispatcher are discarded when this queue is full. (Events are still written to disk if log_format is not nolog.) Otherwise the auditd daemon will wait for the queue to have an empty spot before logging to disk. The risk is that while the daemon is waiting for network IO, an event is not being recorded to disk. Valid values are: lossy and lossless. Lossy is the default value.
@@ -89,7 +75,7 @@ is the name returned by the gethostname syscall. The
 means that it takes the hostname and resolves it with dns for a fully qualified
 domain name of that machine.
 .IR Numeric
-is similar to fqd except it resolves the IP address of the machine.
+is similar to fqd except it resolves the IP address of the machine. In order to use this option, you might want to test that 'hostname \-i' or 'domainname \-i' returns a numeric address. Also, this option is not recommended if dhcp is used because you could have different addresses over time for the same machine.
 .IR User
 is an admin defined string from the name option. The default value is
 .IR none ".
@@ -119,7 +105,9 @@ will cause the audit daemon to stop writing records to the disk. The daemon will
 .IR rotate
 option will cause the audit daemon to rotate the logs. It should be noted that logs with higher numbers are older than logs with lower numbers. This is the same convention used by the logrotate utility. The
 .IR keep_logs
-option is similar to rotate except it does not use the num_logs setting. This prevents audit logs from being overwritten.
+option is similar to rotate except it does not use the num_logs setting. This prevents audit logs from being overwritten. The effect is that logs accumulate and are not deleted \- which will trigger the
+.I space_left_action
+if the volume fills up. This is best used in combination with an external script used to archive logs on a periodic basis.
 .TP
 .I action_mail_acct
 This option should contain a valid email address or alias. The default address is root. If the email address is not local to the machine, you must make sure you have email properly configured on your machine and network. Also, this option requires that /usr/lib/sendmail exists on the machine.
@@ -143,11 +131,11 @@ means that it will send a warning to the email account specified in
 .I action_mail_acct
 as well as sending the message to syslog.
 .I exec
-/path-to-script will execute the script. You cannot pass parameters to the script.
+/path-to-script will execute the script. You cannot pass parameters to the script. The script is also responsible for telling the auditd daemon to resume logging once its completed its action. This can be done by adding service auditd resume to the script.
 .I suspend
 will cause the audit daemon to stop writing records to the disk. The daemon will still be alive. The
 .I single
-option will cause the audit daemon to put the computer system in single user mode.
+option will cause the audit daemon to put the computer system in single user mode. The
 .I halt
 option will cause the audit daemon to shutdown the computer system.
 .TP
@@ -173,12 +161,13 @@ means that it will send a warning to the email account specified in
 .I action_mail_acct
 as well as sending the message to syslog.
 .I exec
-/path-to-script will execute the script. You cannot pass parameters to the script.
+/path-to-script will execute the script. You cannot pass parameters to the script. The script is also responsible for telling the auditd daemon to resume logging once its completed its action. This can be done by adding service auditd resume to the script.
 .I Suspend
 will cause the audit daemon to stop writing records to the disk. The daemon will still be alive. The
 .I single
-option will cause the audit daemon to put the computer system in single user mode.
+option will cause the audit daemon to put the computer system in single user mode. The
 .I halt
+option will cause the audit daemon to shutdown the computer system.
 .TP
 .I disk_full_action
 This parameter tells the system what action to take when the system has
@@ -186,11 +175,12 @@ detected that the partition to which log files are written has become full. Vali
 .IR ignore ", " syslog ", " exec ", " suspend ", " single ", and " halt .
 If set to
 .IR ignore ,
-the audit daemon does nothing.
+the audit daemon will issue a syslog message but no other action is taken.
 .I Syslog
 means that it will issue a warning to syslog.
 .I exec
-/path-to-script will execute the script. You cannot pass parameters to the script.
+/path-to-script will execute the script. You cannot pass parameters to the script. The script is also responsible for telling the auditd daemon to resume loggin
+g once its completed its action. This can be done by adding service auditd resume to the script.
 .I Suspend
 will cause the audit daemon to stop writing records to the disk. The daemon will still be alive. The
 .I single
@@ -204,9 +194,9 @@ detected when writing audit events to disk or rotating logs. Valid values are
 .IR ignore ", " syslog ", " exec ", " suspend ", " single ", and " halt .
 If set to
 .IR ignore ,
-the audit daemon does nothing.
+the audit daemon will not take any action.
 .I Syslog
-means that it will issue a warning to syslog.
+means that it will issue no more than 5 consecutive warnings to syslog.
 .I exec
 /path-to-script will execute the script. You cannot pass parameters to the script.
 .I Suspend
@@ -220,7 +210,7 @@ option will cause the audit daemon to shutdown the computer system.
 This is a numeric value in the range 1..65535 which, if specified,
 causes auditd to listen on the corresponding TCP port for audit
 records from remote systems. The audit daemon may be linked with
-tcp_wrappers. You may want to controll access with an entry in the
+tcp_wrappers. You may want to control access with an entry in the
 hosts.allow and deny files.
 .TP
 .I tcp_listen_queue
@@ -231,10 +221,13 @@ start up at exactly the same time, such as after a power failure.
 .TP
 .I tcp_max_per_addr
 This is a numeric value which indicates how many concurrent connections from
-one IP address is allowed.  The default is 1 and the maximum is 16. Setting
+one IP address is allowed.  The default is 1 and the maximum is 1024. Setting
 this too large may allow for a Denial of Service attack on the logging
-server. The default should be adequate in most cases unless a custom written
-recovery script runs to forward unsent events. In this case you would increase the number only large enough to let it in too.
+server. Also note that the kernel has an internal maximum that will eventually
+prevent this even if auditd allows it by config. The default should be adequate
+in most cases unless a custom written recovery script runs to forward unsent
+events. In this case you would increase the number only large enough to let it
+in too.
 .TP
 .I use_libwrap
 This setting determines whether or not to use tcp_wrappers to discern connection attempts that are from allowed machines. Legal values are either 
@@ -247,7 +240,7 @@ by a dash (no spaces allowed).  It indicates which client ports are
 allowed for incoming connections.  If not specified, any port is
 allowed.  Allowed values are 1..65535.  For example, to require the
 client use a priviledged port, specify
-.I 1-1023
+.I 1\-1023
 for this parameter. You will also need to set the local_port option in the audisp-remote.conf file. Making sure that clients send from a privileged port is a security feature to prevent log injection attacks by untrusted users.
 .TP
 .I tcp_client_max_idle
@@ -279,7 +272,7 @@ The flush parameter should be set to sync or data.
 .PP
 Max_log_file and num_logs need to be adjusted so that you get complete use of your partition. It should be noted that the more files that have to be rotated, the longer it takes to get back to receiving audit events. Max_log_file_action should be set to keep_logs.
 .PP
-Space_left should be set to a number that gives the admin enough time to react to any alert message and perform some maintenance to free up disk space. This would typically involve running the \fBaureport \-t\fP report and moving the oldest logs to an archive area. The value of space_left is site dependant since the rate at which events are generated varies with each deployment. The space_left_action is recommended to be set to email. If you need something like an snmp trap, you can use the exec option to send one.
+Space_left should be set to a number that gives the admin enough time to react to any alert message and perform some maintenance to free up disk space. This would typically involve running the \fBaureport \-t\fP report and moving the oldest logs to an archive area. The value of space_left is site dependent since the rate at which events are generated varies with each deployment. The space_left_action is recommended to be set to email. If you need something like an snmp trap, you can use the exec option to send one.
 .PP
 Admin_space_left should be set to the amount of disk space on the audit partition needed for admin actions to be recorded. Admin_space_left_action would be set to single so that use of the machine is restricted to just the console.
 .PP
@@ -299,7 +292,7 @@ Audit daemon configuration file
 
 .SH "SEE ALSO"
 .BR auditd (8),
-.BR audisp-remote.conf (5).
+.BR audisp\-remote.conf (5).
 
 .SH AUTHOR
 Steve Grubb

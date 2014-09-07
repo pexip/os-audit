@@ -1,5 +1,5 @@
 /* ausearch-options.h -- 
- * Copyright 2005,2008 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005,2008,2010 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -26,19 +26,21 @@
 
 #include <time.h>
 #include <sys/types.h>
-#include "ausearch-int.h"
+#include <stdint.h>
 #include "ausearch-common.h"
+#include "ausearch-int.h"
 
 /* Global variables that describe what search is to be performed */
-extern ilist *event_type;
 extern const char *event_key;
 extern const char *event_subject;
 extern const char *event_object;
 extern int event_se;
 extern int just_one;
 extern int line_buffered;
+extern int event_debug;
 extern pid_t event_ppid;
-extern int event_session_id;
+extern uint32_t event_session_id;
+extern ilist *event_type;
 
 /* Data type to govern output format */
 extern report_t report_format;

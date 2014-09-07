@@ -1,9 +1,203 @@
-audit (1.7.18-1ubuntu1) precise; urgency=low
+audit (1:2.4-1) unstable; urgency=medium
 
-  * debian/auditd.init: apply the intent of Peter Moody's patch to add support
-    for rules.d directory for splitting out audit.d rules (LP: #730872)
+  * New upstream release
+    - debian/patches/01-no-refusemanualstop.patch: Refreshed
+    - Adjust the .symbols files
 
- -- Andrew Pollock <apollock@google.com>  Thu, 29 Dec 2011 15:11:11 -0800
+ -- Laurent Bigonville <bigon@debian.org>  Sun, 07 Sep 2014 16:57:08 +0200
+
+audit (1:2.3.7-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Laurent Bigonville <bigon@debian.org>  Sat, 14 Jun 2014 14:02:55 +0200
+
+audit (1:2.3.6-1) unstable; urgency=medium
+
+  * New upstream release
+    - debian/rules: Rename --with-armeb flag to --with-arm, changed upstream
+    - Adjust debian/libaudit1.symbols file: Add audit_determine_machine()
+  * debian/rules: Include aarch64 support on arm64 architecture, we will build
+    with it on all architectures when it will be an official port
+
+ -- Laurent Bigonville <bigon@debian.org>  Sat, 12 Apr 2014 15:23:21 +0200
+
+audit (1:2.3.4-1) unstable; urgency=medium
+
+  * New upstream release
+    - Adjust debian/libauparse0.symbols: Add a new symbol
+  * Adopt the audit package (Closes: #692492)
+
+ -- Laurent Bigonville <bigon@debian.org>  Sat, 01 Mar 2014 18:52:55 +0100
+
+audit (1:2.3.3-4) unstable; urgency=low
+
+  * QA upload
+  * desactivated patch "build-on-hppa" since the package still doesn't
+    build on hppa, and since upstream is reluctant to integrate the patch.
+
+ -- Ralf Treinen <treinen@debian.org>  Mon, 27 Jan 2014 09:15:07 +0100
+
+audit (1:2.3.3-3) unstable; urgency=low
+
+  * QA upload
+  * fix pathnames of patches files in debian/patches/build-on-hppa
+
+ -- Ralf Treinen <treinen@debian.org>  Mon, 20 Jan 2014 21:21:32 +0100
+
+audit (1:2.3.3-2) unstable; urgency=low
+
+  * QA upload
+  * Enable compilation on hppa (closes: 735944). Thanks to Helge Deller!  
+    - patch build-on-hppa
+    - debian/rules: configure --with-hppa on hppa architecture
+
+ -- Ralf Treinen <treinen@debian.org>  Sun, 19 Jan 2014 13:25:25 +0100
+
+audit (1:2.3.3-1) unstable; urgency=medium
+
+  * QA upload.
+  * New upstream release
+    - Adjust debian/libauparse0.symbols
+
+ -- Laurent Bigonville <bigon@debian.org>  Fri, 17 Jan 2014 18:23:26 +0100
+
+audit (1:2.3.2-3) unstable; urgency=medium
+
+  * QA upload.
+  * debian/control: Relax the libaudit1 dependency against libaudit-common in
+    case the soname gets bumped again (Closes: #721361)
+  * debian/auditd.README.Debian: Rewrite the part on how enabling augenrules
+    on systemd systems without copying the complete unit file.
+  * debian/control: Mark -dev packages as Multi-arch: same (Closes: #731291)
+  * debian/control: Add dependency against "mawk | gawk" for augenrules
+  * debian/control: Bump Standards-Version to 3.9.5 (no further changes)
+
+ -- Laurent Bigonville <bigon@debian.org>  Mon, 30 Dec 2013 14:12:17 +0100
+
+audit (1:2.3.2-2) unstable; urgency=low
+
+  * QA upload.
+  * Upload to unstable.
+
+ -- Laurent Bigonville <bigon@debian.org>  Thu, 29 Aug 2013 10:38:17 +0200
+
+audit (1:2.3.2-1) experimental; urgency=low
+
+  * QA upload.
+  * New upstream release
+  * debian/control, debian/rules: Add support for dh-systemd
+  * debian/rules: Call dh_installinit with --restart-after-upgrade to minimize
+    downtime
+  * debian/patches/01-no-refusemanualstop.patch: Remove RefuseManualStop=yes
+    option, this is preventing the auditd daemon to be restarted on upgrade
+
+ -- Laurent Bigonville <bigon@debian.org>  Wed, 07 Aug 2013 19:14:09 +0200
+
+audit (1:2.3.1-1) experimental; urgency=low
+
+  * QA upload.
+  * New upstream release
+    - debian/libauparse0.symbols: Adjust .symbols file
+  * debian/control: Bump Standards-Version to 3.9.4 (no further changes)
+  * debian/control: Use canonical URL for VCS field
+  * debian/auditd.init: Remove the usage of the VERBOSE variable
+    (see lintian error: init.d-script-call-internal-API)
+
+ -- Laurent Bigonville <bigon@debian.org>  Sun, 02 Jun 2013 15:06:23 +0200
+
+audit (1:2.3-1) experimental; urgency=low
+
+  * QA upload.
+  * New upstream release
+  * debian/auditd.install: Install /sbin/augenrules and the related manpage
+  * debian/auditd.post{inst,rm}: /etc/audit/audit.rules is no longer shipped
+    in the package, copy it on first installation and remove it on purge.
+  * debian/auditd.default, debian/auditd.init: Automatically generate
+    /etc/audit/audit.rules on start if USE_AUGENRULES is set to yes
+  * debian/auditd.NEWS, debian/auditd.README.Debian: Add documentation about
+    automatically generating the audit.rules file on startup.
+  * debian/auditd.lintian-overrides: Adjust overrides to match new installed
+    config files.
+  * debian/auditd.default, debian/auditd.init: Add an option to disable the
+    audit system when the daemon is stopped.
+
+ -- Laurent Bigonville <bigon@debian.org>  Mon, 06 May 2013 22:01:18 +0200
+
+audit (1:2.2.3-1) experimental; urgency=low
+
+  * QA upload.
+  * New upstream release
+    - Properly document audit_open() can fails and sets errno (Closes: #642501)
+    - Drop all the patches, they have been applied upstream
+  * Remove libev-dev Build-Dependency
+    - debian/control: The upstream audit sources embed and build against their
+      own version of libev. This is not desirable, but there's no reason to
+      list libev-dev as a build dependency at this time. (Closes: #699933)
+
+ -- Laurent Bigonville <bigon@debian.org>  Thu, 21 Mar 2013 21:39:45 +0100
+
+audit (1:2.2.2-1) experimental; urgency=low
+
+  * QA upload.
+  * New upstream release
+    - Add debian/patches/fix-make-check.diff: Try to unbreak make check
+    - debian/auditd.install: Install systemd service file
+    - debian/libauparse0.symbols: Adjust .symbols file
+  * Enable support for Alpha and ARM ABI (Closes: #681457)
+
+ -- Laurent Bigonville <bigon@debian.org>  Wed, 12 Dec 2012 21:43:25 +0100
+
+audit (1:2.2.1-2) experimental; urgency=low
+
+  * QA upload.
+  * Orphan audit package with maintainer approval
+  * Split libauparse out of libaudit package and put /etc/libaudit.conf in its
+    own package thanks to Alban Browaeys (Closes: #682251)
+  * Drop useless debian/patches/rpath.diff and call to chrpath, call
+    dh_autoreconf to be sure autofoo are up-to-date instead.
+  * debian/auditd.install: Install auvirt executable, thanks to Guido Günther
+    (Closes: #688440)
+  * Convert to multiarch policy (Closes: #687121)
+  * Add missing X-Python-Version header
+  * Enable libcap-ng support
+  * Let's dh_python2 take care of removing *.p[co] files
+  * Drop pam-config stanza for loginuid, it's only intended to be called from
+    entry point PAM services (Closes: #676527)
+  * Drop debian/auditd.postinst: this was needed before squeeze release
+  * Drop useless debian/patches/ld-no-add-needed.diff: libkrb5 is already
+    properly passed at link time
+  * Drop debian/patches/mode.diff: Upstream is now checking if the mode of the
+    executable is either 0750 or 0755 and not only 0750
+  * Drop several patches and files that were not used anymore but not dropped
+    on disk
+  * Refresh and reapply debian/patches/manpage-dash.diff
+  * debian/control: Add Vcs-* fields
+  * Add debian/gbp.conf file
+  * Run wrap-and-sort script
+  * Only attempt to build on linux-any architectures
+
+ -- Laurent Bigonville <bigon@debian.org>  Mon, 12 Nov 2012 00:01:27 +0100
+
+audit (1:2.2.1-1) experimental; urgency=low
+
+  * Non-maintainer upload (with maintainer's blessing)
+  * New upstream release
+  * Refit patches
+  * debian/control: bump Standards-Version (no changes)
+  * debian/control: bump versioned build dep on debhelper to 9
+  * debian/control: add build dep on dpkg-dev >= 1.16.1~ to get
+    dpkg-buildflags support for hardening
+  * debian/compat: bump up to 9
+
+ -- Andrew Pollock <apollock@google.com>  Wed, 11 Jul 2012 16:53:40 -0700
+
+audit (1:1.7.18-1.1) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Revert last upload versioned 2.1.3-1 and made by Russell Coker.
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Tue, 31 Jan 2012 16:34:34 +0100
 
 audit (1.7.18-1) unstable; urgency=low
 

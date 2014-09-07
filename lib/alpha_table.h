@@ -1,5 +1,5 @@
 /* alpha_table.h --
- * Copyright 2005-07 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-07,2010-12,2014 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -419,4 +419,32 @@ _S(475, "utimensat")
 _S(476, "signalfd")
 _S(477, "timerfd")
 _S(478, "eventfd")
-
+_S(479, "recvmmsg")
+_S(480, "fallocate")
+_S(481, "timerfd_create")
+_S(482, "timerfd_settime")
+_S(483, "timerfd_gettime")
+_S(484, "signalfd4")
+_S(485, "eventfd2")
+_S(486, "epoll_create1")
+_S(487, "dup3")
+_S(488, "pipe2")
+_S(489, "inotify_init1")
+_S(490, "preadv")
+_S(491, "pwritev")
+_S(492, "rt_tgsigqueueinfo")
+_S(493, "perf_event_open")
+_S(494, "fanotify_init")
+_S(495, "fanotify_mark")
+_S(496, "prlimit64")
+_S(497, "name_to_handle_at")
+_S(498, "open_by_handle_at")
+_S(499, "clock_adjtime")
+_S(500, "syncfs")
+_S(501, "setns")
+_S(502, "accept4")
+_S(503, "sendmmsg")
+_S(504, "process_vm_readv")
+_S(505, "process_vm_writev")
+_S(506, "kcmp")
+_S(507, "finit_module")

@@ -1,5 +1,5 @@
 /* auditd-dispatch.c -- 
- * Copyright 2005-07 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-07,2013 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -40,6 +40,18 @@ static pid_t pid = 0;
 static int n_errs = 0;
 #define REPORT_LIMIT 10
 
+int dispatcher_pid(void)
+{
+	return pid;
+}
+
+void dispatcher_reaped(void)
+{
+	audit_msg(LOG_INFO, "dispatcher %d reaped\n", pid);
+	pid = 0;
+	shutdown_dispatcher();
+}
+
 /* set_flags: to set flags to file desc */
 static int set_flags(int fn, int flags)
 {
@@ -59,6 +71,8 @@ static int set_flags(int fn, int flags)
 /* This function returns 1 on error & 0 on success */
 int init_dispatcher(const struct daemon_conf *config)
 {
+	struct sigaction sa;
+
 	if (config->dispatcher == NULL) 
 		return 0;
 
@@ -83,6 +97,8 @@ int init_dispatcher(const struct daemon_conf *config)
 			dup2(disp_pipe[0], 0);
 			close(disp_pipe[0]);
 			close(disp_pipe[1]);
+			sigfillset (&sa.sa_mask);
+			sigprocmask (SIG_UNBLOCK, &sa.sa_mask, 0);
 			setsid();
 			execl(config->dispatcher, config->dispatcher, NULL);
 			audit_msg(LOG_ERR, "exec() failed");
@@ -128,11 +144,13 @@ void shutdown_dispatcher(void)
 	}
 }
 
-void reconfigure_dispatcher(void)
+void reconfigure_dispatcher(const struct daemon_conf *config)
 {
-	// signal child
+	// signal child or start it so it can see if config changed
 	if (pid)
 		kill(pid, SIGHUP);
+	else
+		init_dispatcher(config);
 }
 
 /* Returns -1 on err, 0 on success, and 1 if eagain occurred and not an err */

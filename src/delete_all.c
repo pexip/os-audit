@@ -1,5 +1,5 @@
 /* delete_all.c --
- * Copyright 2005-06, 2008 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-06, 2008-09 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -29,7 +29,7 @@
 
 #include "auditctl-llist.h"
 
-extern int key_match(struct audit_reply *rep);
+extern int key_match(const struct audit_rule_data *r);
 
 /* Returns 0 for success and -1 for failure */
 int delete_all_rules(int fd)
@@ -43,8 +43,6 @@ int delete_all_rules(int fd)
 
 	/* list the rules */
 	seq = audit_request_rules_list_data(fd);
-	if (seq == -EINVAL) 
-		seq = audit_request_rules_list(fd);
 	if (seq <= 0) 
 		return -1;
 
@@ -82,15 +80,10 @@ int delete_all_rules(int fd)
 			}
 
 			/* If its not what we are expecting, keep looping */
-			if (rep.type != AUDIT_LIST && 
-					rep.type != AUDIT_LIST_RULES)
+			if (rep.type != AUDIT_LIST_RULES)
 				continue;
 
-			if (rep.type == AUDIT_LIST)
-				list_append(&l, 
-					(struct audit_rule_data *)rep.rule, 
-					sizeof(struct audit_rule));
-			else if (key_match(&rep))
+			if (key_match(rep.ruledata))
 				list_append(&l, rep.ruledata, 
 					sizeof(struct audit_rule_data) +
 					rep.ruledata->buflen);
@@ -101,10 +94,7 @@ int delete_all_rules(int fd)
 	n = l.cur;
 	while (n) {
 		/* Bounce it right back with delete */
-		if (n->size == sizeof(struct audit_rule))
-			rc = audit_send(fd, AUDIT_DEL, n->r, n->size);
-		else
-			rc = audit_send(fd, AUDIT_DEL_RULE, n->r, n->size);
+		rc = audit_send(fd, AUDIT_DEL_RULE, n->r, n->size);
 		if (rc < 0) {
 			fprintf(stderr, "Error deleting rule (%s)\n",
 				strerror(-rc)); 

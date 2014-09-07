@@ -1,0 +1,10 @@
+audit (1:2.3-1) experimental; urgency=low
+
+  This new version is providing an executable (augenrules(8)) that can be used
+  to generate the audit.rules file by using snippets installed inside the
+  /etc/audit/rules.d/ directory.
+
+  The audit.rules file can be automatically regenerated on each startup.
+  To enable this feature, see: /usr/share/doc/auditd/README.Debian.
+
+ -- Laurent Bigonville <bigon@debian.org>  Mon, 06 May 2013 20:19:18 +0200

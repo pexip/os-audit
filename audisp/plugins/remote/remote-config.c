@@ -1,5 +1,5 @@
 /* remote-config.c -- 
- * Copyright 2008, 2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2008, 2009, 2011 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -68,6 +68,8 @@ static int transport_parser(struct nv_pair *nv, int line,
 		remote_conf_t *config);
 static int mode_parser(struct nv_pair *nv, int line, 
 		remote_conf_t *config);
+static int queue_file_parser(struct nv_pair *nv, int line,
+		remote_conf_t *config);
 static int depth_parser(struct nv_pair *nv, int line, 
 		remote_conf_t *config);
 static int format_parser(struct nv_pair *nv, int line, 
@@ -96,9 +98,12 @@ AP(disk_full)
 AP(disk_error)
 AP(generic_error)
 AP(generic_warning)
+AP(queue_error)
 #undef AP
 static int remote_ending_action_parser(struct nv_pair *nv, int line,
                 remote_conf_t *config);
+static int overflow_action_parser(struct nv_pair *nv, int line, 
+		remote_conf_t *config);
 static int sanity_check(remote_conf_t *config, const char *file);
 
 static const struct kw_pair keywords[] = 
@@ -108,6 +113,7 @@ static const struct kw_pair keywords[] =
   {"local_port",       local_port_parser,	0 },
   {"transport",        transport_parser,	0 },
   {"mode",             mode_parser,		0 },
+  {"queue_file",       queue_file_parser,	0 },
   {"queue_depth",      depth_parser,		0 },
   {"format",           format_parser,		0 },
   {"network_retry_time",     network_retry_time_parser,         0 },
@@ -125,6 +131,8 @@ static const struct kw_pair keywords[] =
   {"remote_ending_action",   remote_ending_action_parser,	1 },
   {"generic_error_action",   generic_error_action_parser,	1 },
   {"generic_warning_action", generic_warning_action_parser,	1 },
+  {"queue_error_action",     queue_error_action_parser,		1 },
+  {"overflow_action",        overflow_action_parser,		1 },
   { NULL,                    NULL,                              0 }
 };
 
@@ -137,7 +145,7 @@ static const struct nv_list transport_words[] =
 static const struct nv_list mode_words[] =
 {
   {"immediate",  M_IMMEDIATE },
-//  {"forward",    M_STORE_AND_FORWARD },
+  {"forward",    M_STORE_AND_FORWARD },
   { NULL,  0 }
 };
 
@@ -150,6 +158,16 @@ static const struct nv_list fail_action_words[] =
   {"single",   FA_SINGLE },
   {"halt",     FA_HALT },
   {"stop",     FA_STOP },
+  { NULL,  0 }
+};
+
+static const struct nv_list overflow_action_words[] =
+{
+  {"ignore",   OA_IGNORE },
+  {"syslog",   OA_SYSLOG },
+  {"suspend",  OA_SUSPEND },
+  {"single",   OA_SINGLE },
+  {"halt",     OA_HALT },
   { NULL,  0 }
 };
 
@@ -179,7 +197,8 @@ void clear_config(remote_conf_t *config)
 	config->local_port = 0;
 	config->transport = T_TCP;
 	config->mode = M_IMMEDIATE;
-	config->queue_depth = 200;
+	config->queue_file = NULL;
+	config->queue_depth = 2048;
 	config->format = F_MANAGED;
 
 	config->network_retry_time = 1;
@@ -192,10 +211,12 @@ void clear_config(remote_conf_t *config)
 	IA(disk_low, FA_IGNORE);
 	IA(disk_full, FA_IGNORE);
 	IA(disk_error, FA_SYSLOG);
-	IA(remote_ending, FA_SUSPEND);
+	IA(remote_ending, FA_RECONNECT);
 	IA(generic_error, FA_SYSLOG);
 	IA(generic_warning, FA_SYSLOG);
+	IA(queue_error, FA_STOP);
 #undef IA
+	config->overflow_action = OA_SYSLOG;
 
 	config->enable_krb5 = 0;
 	config->krb5_principal = NULL;
@@ -256,7 +277,7 @@ int load_config(remote_conf_t *config, const char *file)
 	}
 
 	/* it's ok, read line by line */
-	f = fdopen(fd, "r");
+	f = fdopen(fd, "rm");
 	if (f == NULL) {
 		syslog(LOG_ERR, "Error - fdopen failed (%s)", 
 			strerror(errno));
@@ -529,6 +550,21 @@ static int mode_parser(struct nv_pair *nv, int line, remote_conf_t *config)
 	return 1;
 }
 
+static int queue_file_parser(struct nv_pair *nv, int line,
+		remote_conf_t *config)
+{
+	if (nv->value) {
+		if (*nv->value != '/') {
+			syslog(LOG_ERR, "Absolute path needed for %s - line %d",
+			       nv->value, line);
+			return 1;
+		}
+		config->queue_file = strdup(nv->value);
+	} else
+		config->queue_file = NULL;
+	return 0;
+}
+
 static int depth_parser(struct nv_pair *nv, int line,
 		remote_conf_t *config)
 {
@@ -541,7 +577,7 @@ static int action_parser(struct nv_pair *nv, int line,
 	int i;
 	for (i=0; fail_action_words[i].name != NULL; i++) {
 		if (strcasecmp(nv->value, fail_action_words[i].name) == 0) {
-			if (i == FA_EXEC) {
+			if (fail_action_words[i].option == FA_EXEC) {
 				if (check_exe_name(nv->option, line))
 					return 1;
 				*exep = strdup(nv->option);
@@ -567,7 +603,23 @@ AP(disk_full)
 AP(disk_error)
 AP(generic_error)
 AP(generic_warning)
+AP(queue_error)
 #undef AP
+
+static int overflow_action_parser(struct nv_pair *nv, int line,
+	remote_conf_t *config)
+{
+        int i;
+
+        for (i=0; overflow_action_words[i].name != NULL; i++) {
+                if (strcasecmp(nv->value, overflow_action_words[i].name) == 0) {
+                        config->overflow_action = overflow_action_words[i].option;
+                        return 0;
+                }
+        }
+        syslog(LOG_ERR, "Option %s not found - line %d", nv->value, line);
+        return 1;
+}
 
 static int remote_ending_action_parser(struct nv_pair *nv, int line,
                 remote_conf_t *config)
@@ -700,12 +752,19 @@ static int sanity_check(remote_conf_t *config, const char *file)
 // port should be less that 32k
 // queue_depth should be less than 100k
 // If fail_action is F_EXEC, fail_exec must exist
+	if (config->mode == M_STORE_AND_FORWARD
+	    && config->format != F_MANAGED) {
+		syslog(LOG_ERR, "\"mode=forward\" is valid only with "
+		       "\"format=managed\"");
+		return 1;
+	}
 	return 0;
 }
 
 void free_config(remote_conf_t *config)
 {
 	free((void *)config->remote_server);
+	free((void *)config->queue_file);
 	free((void *)config->network_failure_exe);
 	free((void *)config->disk_low_exe);
 	free((void *)config->disk_full_exe);
@@ -713,6 +772,7 @@ void free_config(remote_conf_t *config)
 	free((void *)config->remote_ending_exe);
 	free((void *)config->generic_error_exe);
 	free((void *)config->generic_warning_exe);
+	free((void *)config->queue_error_exe);
 	free((void *)config->krb5_principal);
 	free((void *)config->krb5_client_name);
 	free((void *)config->krb5_key_file);

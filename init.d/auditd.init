@@ -71,6 +71,13 @@ start(){
 	echo
 	if test $RETVAL = 0 ; then
 		touch /var/lock/subsys/auditd
+		# Prepare the default rules
+		if test x"$USE_AUGENRULES" != "x" ; then
+			if test "`echo $USE_AUGENRULES | tr 'NO' 'no'`" != "no"
+			then
+				test -d /etc/audit/rules.d && /sbin/augenrules
+			fi
+		fi
 		# Load the default rules
 		test -f /etc/audit/audit.rules && /sbin/auditctl -R /etc/audit/audit.rules >/dev/null
 	fi
@@ -147,7 +154,7 @@ case "$1" in
     restart)
 	restart
 	;;
-    reload)
+    reload|force-reload)
 	reload
 	;;
     rotate)
@@ -156,11 +163,11 @@ case "$1" in
     resume)
 	resume
 	;;
-    condrestart)
+    condrestart|try-restart)
 	condrestart
 	;;
     *)
-	echo $"Usage: $0 {start|stop|status|restart|condrestart|reload|rotate|resume}"
+	echo $"Usage: $0 {start|stop|status|restart|condrestart|try-restart|reload|force-reload|rotate|resume}"
 	RETVAL=3
 esac
 

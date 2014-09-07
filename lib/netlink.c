@@ -1,5 +1,5 @@
 /* netlink.c --
- * Copyright 2004, 2005, 2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004, 2005, 2009, 2013 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -142,7 +142,7 @@ static int adjust_reply(struct audit_reply *rep, int len)
 	rep->len      = rep->msg.nlh.nlmsg_len;
 	rep->nlh      = &rep->msg.nlh;
 	rep->status   = NULL;
-	rep->rule     = NULL;
+	rep->ruledata = NULL;
 	rep->login    = NULL;
 	rep->message  = NULL;
 	rep->error    = NULL;
@@ -169,9 +169,6 @@ static int adjust_reply(struct audit_reply *rep, int len)
 			break;
 		case AUDIT_GET:   
 			rep->status  = NLMSG_DATA(rep->nlh); 
-			break;
-		case AUDIT_LIST:  
-			rep->rule    = NLMSG_DATA(rep->nlh); 
 			break;
 		case AUDIT_LIST_RULES:  
 			rep->ruledata = NLMSG_DATA(rep->nlh); 
@@ -246,6 +243,7 @@ int audit_send(int fd, int type, const void *data, unsigned int size)
 
 	return 0;
 }
+hidden_def(audit_send)
 
 /*
  * This function will take a peek into the next packet and see if there's
@@ -278,14 +276,14 @@ retry:
 	else if (rc == 0)
 		return -EINVAL; /* This can't happen anymore */
 	else if (rc > 0 && rep.type == NLMSG_ERROR) {
+		int error = rep.error->error;
 		/* Eat the message */
-		struct audit_reply rep2; /* throw away */
-		(void)audit_get_reply(fd, &rep2, GET_REPLY_NONBLOCKING, 0);
+		(void)audit_get_reply(fd, &rep, GET_REPLY_NONBLOCKING, 0);
 
 		/* NLMSG_ERROR can indicate success, only report nonzero */ 
-		if (rep.error->error) {
-			errno = -rep.error->error;
-			return rep.error->error;
+		if (error) {
+			errno = -error;
+			return error;
 		}
 	}
 	return 0;

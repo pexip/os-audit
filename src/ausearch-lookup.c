@@ -1,6 +1,6 @@
 /*
 * ausearch-lookup.c - Lookup values to something more readable
-* Copyright (c) 2005-06 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-06,2011-12 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -43,6 +43,8 @@ static int machine = 0;
 static const char *Q = "?";
 static const char *results[3]= { "unset", "denied", "granted" };
 static const char *success[3]= { "unset", "no", "yes" };
+static const char *aulookup_socketcall(long sc);
+static const char *aulookup_ipccall(long ic);
 
 const char *aulookup_result(avc_t result)
 {
@@ -96,6 +98,7 @@ const char *aulookup_syscall(llist *l, char *buf, size_t size)
 	return buf;
 }
 
+// See include/linux/net.h
 static struct nv_pair socktab[] = {
 	{SYS_SOCKET, "socket"},
 	{SYS_BIND, "bind"},
@@ -113,11 +116,14 @@ static struct nv_pair socktab[] = {
 	{SYS_SETSOCKOPT, "setsockopt"},
 	{SYS_GETSOCKOPT, "getsockopt"},
 	{SYS_SENDMSG, "sendmsg"},
-	{SYS_RECVMSG, "recvmsg"}
+	{SYS_RECVMSG, "recvmsg"},
+	{SYS_ACCEPT4, "accept4"},
+	{19, "recvmmsg"},
+	{20, "sendmmsg"}
 };
 #define SOCK_NAMES (sizeof(socktab)/sizeof(socktab[0]))
 
-const char *aulookup_socketcall(long sc)
+static const char *aulookup_socketcall(long sc)
 {
         int i;
 
@@ -133,6 +139,7 @@ const char *aulookup_socketcall(long sc)
 #define SEMOP            1
 #define SEMGET           2
 #define SEMCTL           3
+#define SEMTIMEDOP	 4
 #define MSGSND          11
 #define MSGRCV          12
 #define MSGGET          13
@@ -149,6 +156,7 @@ static struct nv_pair ipctab[] = {
         {SEMOP, "semop"},
         {SEMGET, "semget"},
         {SEMCTL, "semctl"},
+        {SEMTIMEDOP, "semtimedop"},
         {MSGSND, "msgsnd"},
         {MSGRCV, "msgrcv"},
         {MSGGET, "msgget"},
@@ -160,7 +168,7 @@ static struct nv_pair ipctab[] = {
 };
 #define IPC_NAMES (sizeof(ipctab)/sizeof(ipctab[0]))
 
-const char *aulookup_ipccall(long ic)
+static const char *aulookup_ipccall(long ic)
 {
         int i;
 
@@ -169,7 +177,7 @@ const char *aulookup_ipccall(long ic)
                         return ipctab[i].name;
 
         return NULL;
-}
+} 
 
 static nvlist uid_nvl;
 static int uid_list_created=0;
@@ -309,10 +317,11 @@ static unsigned char x2c(unsigned char *buf)
 }
 
 /* returns a freshly malloc'ed and converted buffer */
-char *unescape(char *buf)
+char *unescape(const char *buf)
 {
 	int len, i;
-	char saved, *ptr = buf, *str;
+	char *str, *strptr;
+	const char *ptr = buf;
 
 	/* Find the end of the name */
 	if (*ptr == '(') {
@@ -325,10 +334,7 @@ char *unescape(char *buf)
 		while (isxdigit(*ptr))
 			ptr++;
 	}
-	saved = *ptr;
-	*ptr = 0;
-	str = strdup(buf);
-	*ptr = saved;
+	str = strndup(buf, ptr - buf);
 
 	if (*buf == '(')
 		return str;
@@ -341,12 +347,12 @@ char *unescape(char *buf)
 		free(str);
 		return NULL;
 	}
-	ptr = str;
+	strptr = str;
 	for (i=0; i<len; i+=2) {
-		*ptr = x2c((unsigned char *)&str[i]);
-		ptr++;
+		*strptr = x2c((unsigned char *)&str[i]);
+		strptr++;
 	}
-	*ptr = 0;
+	*strptr = 0;
 	return str;
 }
 

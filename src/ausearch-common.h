@@ -1,5 +1,6 @@
 /* ausearch-common.h -- 
- * Copyright 2006-08 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-08,2010,2014 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2011 IBM Corp.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -18,6 +19,7 @@
  *
  * Authors:
  *   Steve Grubb <sgrubb@redhat.com>
+ *   Marcelo Henrique Cerri <mhcerri@br.ibm.com>
  * 
  */
 
@@ -26,6 +28,17 @@
 
 #include "ausearch-string.h"
 
+/*
+ * MAX_EVENT_DELTA_SECS is the maximum number of seconds it would take for
+ * auditd and the kernel to emit all of an events' records. Thus, when scanning
+ * a list of audit records without any End of Event marker, we can determine if
+ * all an event's records have been collected if we compare that event's time
+ * with the time of the event we are currently scanning. If
+ * MAX_EVENT_DELTA_SECS have passed, then the event is deamed to be complete
+ * and we have all it's records.
+ */
+#define	MAX_EVENT_DELTA_SECS	2
+
 /* Global variables that describe what search is to be performed */
 extern time_t start_time, end_time;
 extern unsigned int event_id;
@@ -33,15 +46,19 @@ extern gid_t event_gid, event_egid;
 extern pid_t event_pid;
 extern int event_exact_match;
 extern uid_t event_uid, event_euid, event_loginuid;
-const slist *event_node_list;
+slist *event_node_list;
 extern const char *event_comm;
 extern const char *event_filename;
 extern const char *event_hostname;
 extern const char *event_terminal;
 extern int event_syscall;
+extern int event_machine;
 extern const char *event_exe;
 extern int event_ua, event_ga;
-extern int event_exit, event_exit_is_set;
+extern long long event_exit;
+extern int event_exit_is_set;
+extern const char *event_uuid;
+extern const char *event_vmname;
 
 typedef enum { F_BOTH, F_FAILED, F_SUCCESS } failed_t;
 typedef enum { C_NEITHER, C_ADD, C_DEL } conf_act_t;
