@@ -1,0 +1,42 @@
+--- a/audisp/plugins/builtins/syslog.conf.old	2014-10-14 16:18:55.882040233 +0000
++++ b/audisp/plugins/builtins/syslog.conf	2014-10-14 16:19:19.894041428 +0000
+@@ -5,9 +5,9 @@
+ # a second argument indicating the facility that you want events
+ # logged to. Valid options are LOG_LOCAL0 through 7.
+ 
+-active = no
++active = yes
+ direction = out
+ path = builtin_syslog
+ type = builtin 
+-args = LOG_INFO
++args = LOG_INFO LOG_LOCAL6
+ format = string
+diff --git a/init.d/auditd.conf b/init.d/auditd.conf
+index a52b6c7..283850d 100644
+--- a/init.d/auditd.conf
++++ b/init.d/auditd.conf
+@@ -20,8 +20,8 @@ space_left_action = SYSLOG
+ action_mail_acct = root
+ admin_space_left = 50
+ admin_space_left_action = SUSPEND
+-disk_full_action = SUSPEND
+-disk_error_action = SUSPEND
++disk_full_action = SYSLOG
++disk_error_action = SYSLOG
+ ##tcp_listen_port = 
+ tcp_listen_queue = 5
+ tcp_max_per_addr = 1
+diff --git a/init.d/audit.rules b/init.d/audit.rules
+index 479ff47..111d616 100644
+--- a/init.d/audit.rules
++++ b/init.d/audit.rules
+@@ -8,7 +8,7 @@
+ 
+ # Increase the buffers to survive stress events.
+ # Make this bigger for busy systems
+--b 320
++-b 8192
+ 
+ # Feel free to add below this line. See auditctl man page
+ 

@@ -9,3 +9,5 @@ fix-out-of-tree-build.diff
 fix-desktopinfo.diff
 fix-spelling.diff
 manpage-dash.diff
+syslog-facilities.diff
+custom-config.diff
