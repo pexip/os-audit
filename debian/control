@@ -12,7 +12,7 @@ Build-Depends: debhelper (>= 9),
 #               libev-dev,
                libkrb5-dev,
                libldap2-dev,
-               libprelude-dev,
+#               libprelude-dev,
                libwrap0-dev,
                python-all-dev (>= 2.6.6-3~),
                swig

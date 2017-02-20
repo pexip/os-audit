@@ -35,7 +35,6 @@ debian/config-python-stamp:
 		--enable-shared=audit \
 		--enable-gssapi-krb5 \
 		--with-apparmor \
-		--with-prelude \
 		--with-libwrap \
 		--with-libcap-ng \
 		--with-arm ${EXTRA_ARCH_TABLE}
