@@ -11,7 +11,7 @@ Build-Conflicts: autoconf2.13, automake1.4
 Standards-Version: 3.9.2
 Section: libs
 Homepage: http://people.redhat.com/sgrubb/audit/
-XS-Pexip-Upstream: http://archive.ubuntu.com/ubuntu/ precise
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ jessie
 
 Package: auditd
 Section: admin
