@@ -91,7 +91,8 @@ static char *escape(const char *tmp)
 		}
 		p++;
 	}
-	asprintf(&name, "\"%s\"", tmp);
+	if (asprintf(&name, "\"%s\"", tmp) < 0)
+		name = NULL;
 	return name;
 }
 
@@ -104,8 +105,10 @@ static int parse_up_record(rnode* r)
 
 	buf = strdup(r->record);
 	ptr = strtok_r(buf, " ", &saved);
-	if (ptr == NULL)
+	if (ptr == NULL) {
+		free(buf);
 		return -1;
+	}
 
 	do {	// If there's an '=' sign, its a keeper
 		nvnode n;
@@ -163,9 +166,15 @@ static int parse_up_record(rnode* r)
 				if (*n.val == '"')
 					nvlist_append(&r->nv, &n);
 				else {
-					char *key = (char *)au_unescape(n.val);
-					char *ptr = strtok_r(key,
-							key_sep, &saved);
+					char *key, *ptr, *saved2 = NULL;
+
+					key = (char *)au_unescape(n.val);
+					if (key == NULL) {
+						// Malformed key - save as is
+						nvlist_append(&r->nv, &n);
+						continue;
+					}
+					ptr = strtok_r(key, key_sep, &saved2);
 					free(n.name);
 					free(n.val);
 					while (ptr) {
@@ -173,7 +182,7 @@ static int parse_up_record(rnode* r)
 						n.val = escape(ptr);
 						nvlist_append(&r->nv, &n);
 						ptr = strtok_r(NULL,
-							key_sep, &saved);
+							key_sep, &saved2);
 					}
 					free(key);
 				}
@@ -234,8 +243,10 @@ static int parse_up_record(rnode* r)
 					ptr = strtok_r(NULL, " ", &saved);
 					while (ptr && *ptr != '}') {
 						len = strlen(ptr);
-						if ((len+1) >= (256-total))
+						if ((len+1) >= (256-total)) {
+							free(buf);
 							return -1;
+						}
 						if (tmpctx[0]) {
 							to = stpcpy(to, ",");
 							total++;

@@ -38,6 +38,9 @@
 #include <pthread.h>
 #include <lber.h>
 #include <netinet/in.h>
+#ifdef HAVE_LIBCAP_NG
+#include <cap-ng.h>
+#endif
 #include "auparse.h"
 #include "zos-remote-log.h"
 #include "zos-remote-ldap.h"
@@ -216,6 +219,7 @@ push_event(auparse_state_t * au, auparse_cb_event_t cb_event_type,
          * 'originating' audit record
          */
         sprintf(logString, "Linux (%s): type: %s", node, orig_type);
+	free(node);
 
         /* 
          * Start writing to BER element.
@@ -452,6 +456,13 @@ int main(int argc, char *argv[])
                 log_err("Error - Can't initialize event queue. Aborting");
                 return -1;
         }
+
+#ifdef HAVE_LIBCAP_NG
+	// Drop all capabilities
+        capng_clear(CAPNG_SELECT_BOTH);
+        capng_apply(CAPNG_SELECT_BOTH);
+#endif
+
         /* set stdin to O_NONBLOCK */
         if (fcntl(0, F_SETFL, O_NONBLOCK) == -1) {
                 log_err("Error - Can't set input to Non-blocking mode: %s. Aborting",
@@ -480,6 +491,10 @@ int main(int argc, char *argv[])
 
                 /* initialize auparse */
                 au = auparse_init(AUSOURCE_FEED, 0);               /* 2 */
+                if (au == NULL) {
+                        log_err("Error - exiting due to auparse init errors");
+                        return -1;
+                }
                 
                 /* 
                  * Block signals for everyone,

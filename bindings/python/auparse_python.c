@@ -128,7 +128,6 @@ fmt_event(time_t seconds, unsigned int milli, unsigned long serial, const char *
 
     snprintf(buf2, sizeof(buf2), buf1, milli, serial, host, sizeof(buf2));
     return buf2;
-    exit(EXIT_SUCCESS);
 }
 
 static PyObject *
@@ -883,7 +882,7 @@ AuParser_search_set_stop(AuParser *self, PyObject *args)
  * ausearch_clear
  ********************************/
 PyDoc_STRVAR(search_clear_doc,
-"search_clear() Clear search paramters.\n\
+"search_clear() Clear search parameters.\n\
 \n\
 ausearch_clear clears any search parameters stored in the parser\n\
 instance and frees memory associated with it.\n\
@@ -973,9 +972,12 @@ AuParser_get_timestamp(AuParser *self)
     event_ptr = auparse_get_timestamp(self->au);
 
     if (event_ptr == NULL) {
-        Py_RETURN_NONE;
-        PyErr_SetFromErrno(PyExc_EnvironmentError);
-        return NULL;
+        if (errno) {
+            PyErr_SetFromErrno(PyExc_EnvironmentError);
+            return NULL;
+        } else {
+            Py_RETURN_NONE;
+        }
     }
     py_event = AuEvent_new_from_struct(event_ptr);
     Py_INCREF(py_event);        /* FIXME: should we be bumping the ref count? */

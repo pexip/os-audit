@@ -1,5 +1,5 @@
 /* private.h -- 
- * Copyright 2007 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2007,2013 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -24,28 +24,10 @@
 
 #include "auparse.h"
 #include "libaudit.h"
+#include "dso.h"
 
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-#ifdef PIC
-# define hidden __attribute__ ((visibility ("hidden")))
-# define hidden_proto(fct) __hidden_proto (fct, fct##_internal)
-# define __hidden_proto(fct, internal)  \
-     extern __typeof (fct) internal;    \
-     extern __typeof (fct) fct __asm (#internal) hidden;
-# if defined(__alpha__) || defined(__mips__)
-#  define hidden_def(fct) \
-     asm (".globl " #fct "\n" #fct " = " #fct "_internal");
-# else
-#  define hidden_def(fct) \
-     asm (".globl " #fct "\n.set " #fct ", " #fct "_internal");
-#endif
-#else
-# define hidden
-# define hidden_proto(fct)
-# define hidden_def(fct)
 #endif
 
 /* Internal syslog messaging */
@@ -58,14 +40,6 @@ void auparse_msg(int priority, const char *fmt, ...) hidden
         ;
 #endif
 void set_aumessage_mode(message_t mode, debug_message_t debug) hidden;
-
-// auparse.c
-hidden_proto(auparse_find_field_next);
-hidden_proto(auparse_first_record);
-hidden_proto(auparse_get_field_str);
-hidden_proto(auparse_next_event);
-hidden_proto(auparse_next_record);
-hidden_proto(ausearch_clear);
 
 #ifdef __cplusplus
 }

@@ -21,14 +21,14 @@
 #
 EXTRA_DIST = auditswig.i
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
-AM_CFLAGS = -fPIC -DPIC
+AM_CFLAGS = -fPIC -DPIC -fno-strict-aliasing
 PYLIBVER ?= python$(PYTHON_VERSION)
 INCLUDES = -I. -I$(top_builddir) -I${top_srcdir}/lib -I/usr/include/$(PYLIBVER)
 LIBS = $(top_builddir)/lib/libaudit.la
 pyexec_PYTHON = audit.py
 pyexec_LTLIBRARIES = _audit.la
 pyexec_SOLIBRARIES = _audit.so
-_audit_la_LDFLAGS = -module -avoid-version
+_audit_la_LDFLAGS = -module -avoid-version -Wl,-z,relro
 _audit_la_HEADERS: $(top_builddir)/config.h 
 _audit_la_DEPENDENCIES =${top_srcdir}/lib/libaudit.h ${top_builddir}/lib/libaudit.la
 nodist__audit_la_SOURCES  = audit_wrap.c

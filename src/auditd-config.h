@@ -84,9 +84,9 @@ struct daemon_conf
 
 void set_allow_links(int allow);
 int load_config(struct daemon_conf *config, log_test_t lt);
+void clear_config(struct daemon_conf *config);
 const char *audit_lookup_format(int fmt);
 int create_log_file(const char *val);
-int validate_email(const char *acct);
 int resolve_node(struct daemon_conf *config);
 
 void init_config_manager(void);
@@ -95,8 +95,6 @@ int start_config_manager(struct auditd_reply_list *rep);
 #endif
 void shutdown_config(void);
 void free_config(struct daemon_conf *config);
-
-void periodic_reconfigure(void);
 
 #endif
 

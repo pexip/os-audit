@@ -1,5 +1,5 @@
 /* i386_table.h --
- * Copyright 2005-09 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-14 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -354,5 +354,21 @@ _S(332, "inotify_init1")
 _S(333, "preadv")
 _S(334, "pwritev")
 _S(335, "rt_tgsigqueueinfo")
-_S(336, "perf_counter_open")
-
+_S(336, "perf_event_open")
+_S(337, "recvmmsg")
+_S(338, "fanotify_init")
+_S(339, "fanotify_mark")
+_S(340, "prlimit64")
+_S(341, "name_to_handle_at")
+_S(342, "open_by_handle_at")
+_S(343, "clock_adjtime")
+_S(344, "syncfs")
+_S(345, "sendmmsg")
+_S(346, "setns")
+_S(347, "process_vm_readv")
+_S(348, "process_vm_writev")
+_S(349, "kcmp")
+_S(350, "finit_module")
+_S(351, "sched_setattr")
+_S(352, "sched_getattr")
+_S(353, "renameat2")

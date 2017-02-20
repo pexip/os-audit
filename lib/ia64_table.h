@@ -1,5 +1,5 @@
 /* ia64_table.h --
- * Copyright 2005-09 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-14 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -312,4 +312,20 @@ _S(1318, "inotify_init1")
 _S(1319, "preadv")
 _S(1320, "pwritev")
 _S(1321, "rt_tgsigqueueinfo")
-
+_S(1322, "recvmmsg")
+_S(1323, "fanotify_init")
+_S(1324, "fanotify_mark")
+_S(1325, "prlimit64")
+_S(1326, "name_to_handle_at")
+_S(1327, "open_by_handle_at")
+_S(1328, "clock_adjtime")
+_S(1329, "syncfs")
+_S(1330, "setns")
+_S(1331, "sendmmsg")
+_S(1332, "process_vm_readv")
+_S(1333, "process_vm_writev")
+_S(1334, "accept4")
+_S(1335, "finit_module")
+_S(1336, "sched_setattr")
+_S(1337, "sched_getattr")
+_S(1338, "renameat2")

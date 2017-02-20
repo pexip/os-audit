@@ -1,5 +1,5 @@
 /* auparse.c --
- * Copyright 2006-08 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-08,2012-14 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -29,7 +29,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <regex.h>
 #include <stdio_ext.h>
 
 static int debug = 0;
@@ -71,9 +70,15 @@ static int setup_log_file_array(auparse_state_t *au)
 		num++;
 		snprintf(filename, len, "%s.%d", config.log_file, num);
 	} while (1);
+
+	if (num == 0) {
+		fprintf(stderr, "No log file\n");
+		free_config(&config);
+		free(filename);
+		return 1;
+	}
 	num--;
 	tmp = malloc((num+2)*sizeof(char *));
-
 
         /* Got it, now process logs from last to first */
 	if (num > 0)
@@ -180,7 +185,7 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 			break;
 		case AUSOURCE_DESCRIPTOR:
 			n = (long)b;
-			au->in = fdopen(n, "r");
+			au->in = fdopen(n, "rm");
 			break;
 		case AUSOURCE_FILE_POINTER:
 			au->in = (FILE *)b;
@@ -190,7 +195,7 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 			break;
 		default:
 			errno = EINVAL;
-			return NULL;
+			goto bad_exit;
 			break;
 	}
 	au->source = source;
@@ -205,7 +210,6 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 	au->expr = NULL;
 	au->find_field = NULL;
 	au->search_where = AUSEARCH_STOP_EVENT;
-	au->regex_valid = 0;
 
 	return au;
 bad_exit:
@@ -218,6 +222,11 @@ bad_exit:
 void auparse_add_callback(auparse_state_t *au, auparse_callback_ptr callback,
 			  void *user_data, user_destroy user_destroy_func)
 {
+	if (au == NULL) {
+		errno = EINVAL;
+		return;
+	}
+
 	if (au->callback_user_data_destroy) {
 		(*au->callback_user_data_destroy)(au->callback_user_data);
 		au->callback_user_data = NULL;
@@ -263,6 +272,15 @@ int auparse_feed(auparse_state_t *au, const char *data, size_t data_len)
 int auparse_flush_feed(auparse_state_t *au)
 {
 	consume_feed(au, 1);
+	return 0;
+}
+
+// If there is data in the state machine, return 1
+// Otherwise return 0 to indicate its empty
+int auparse_feed_has_data(const auparse_state_t *au)
+{
+	if (au->parse_state == EVENT_ACCUMULATING)
+		return 1;
 	return 0;
 }
 
@@ -343,10 +361,6 @@ static int ausearch_add_item_internal(auparse_state_t *au, const char *field,
 	if (field == NULL)
 		goto err_out;
 
-	// Do not allow regex to get replaced this way
-	if (au->regex_valid != 0)
-		goto err_out;
-
 	// Make sure how is within range
 	if (how < AUSEARCH_RULE_CLEAR || how > AUSEARCH_RULE_AND)
 		goto err_out;
@@ -392,8 +406,8 @@ int ausearch_add_interpreted_item(auparse_state_t *au, const char *field,
 					  EO_INTERPRETED_EQ, EO_INTERPRETED_NE);
 }
 
-int ausearch_add_timestamp_item(auparse_state_t *au, const char *op, time_t sec,
-				unsigned milli, ausearch_rule_t how)
+int ausearch_add_timestamp_item_ex(auparse_state_t *au, const char *op,
+	time_t sec, unsigned milli, unsigned serial, ausearch_rule_t how)
 {
 	static const struct {
 		unsigned value;
@@ -421,16 +435,12 @@ found_op:
 	if (milli >= 1000)
 		goto err_out;
 
-	// Do not allow regex to get replaced this way
-	if (au->regex_valid != 0)
-		goto err_out;
-
 	// Make sure how is within range
 	if (how < AUSEARCH_RULE_CLEAR || how > AUSEARCH_RULE_AND)
 		goto err_out;
 
 	// All pre-checks are done, build a rule
-	expr = expr_create_timestamp_comparison(t_op, sec, milli);
+	expr = expr_create_timestamp_comparison_ex(t_op, sec, milli, serial);
 	if (expr == NULL)
 		return -1;
 	if (add_expr(au, expr, how) != 0)
@@ -442,14 +452,17 @@ err_out:
 	return -1;
 }
 
+int ausearch_add_timestamp_item(auparse_state_t *au, const char *op, time_t sec,
+				unsigned milli, ausearch_rule_t how)
+{
+	return ausearch_add_timestamp_item_ex(au, op, sec, milli, 0, how);
+}
+
 int ausearch_add_expression(auparse_state_t *au, const char *expression,
 			    char **error, ausearch_rule_t how)
 {
 	struct expr *expr;
 
-	// Do not allow regex to get replaced this way
-	if (au->regex_valid != 0)
-		goto err_einval;
 	if (how < AUSEARCH_RULE_CLEAR || how > AUSEARCH_RULE_AND)
 		goto err_einval;
 
@@ -470,25 +483,20 @@ err:
 	return -1;
 }
 
-int ausearch_add_regex(auparse_state_t *au, const char *expr)
+int ausearch_add_regex(auparse_state_t *au, const char *regexp)
 {
-	int rc;
+	struct expr *expr;
 
 	// Make sure there's an expression
+	if (regexp == NULL)
+		goto err_out;
+
+	expr = expr_create_regexp_expression(regexp);
 	if (expr == NULL)
-		goto err_out;
-
-	if (au->regex_valid != 0 || au->expr != NULL)
-		goto err_out;
-
-	// Compile expression now to make sure the expression is correct
-	rc = regcomp(&au->regex, expr, REG_EXTENDED|REG_NOSUB);
-	if (rc) {
-		goto err_out;
-	}
-	au->regex_valid = 1;
-
-	return 0; 
+		return -1;
+	if (add_expr(au, expr, AUSEARCH_RULE_AND) != 0)
+		return -1; /* expr is freed by add_expr() */
+	return 0;
 
 err_out:
 	errno = EINVAL;
@@ -508,20 +516,20 @@ int ausearch_set_stop(auparse_state_t *au, austop_t where)
 
 void ausearch_clear(auparse_state_t *au)
 {
-	if (au->regex_valid != 0) {
-		regfree(&au->regex);
-		au->regex_valid = 0;
-	}
 	if (au->expr != NULL) {
 		expr_free(au->expr);
 		au->expr = NULL;
 	}
 	au->search_where = AUSEARCH_STOP_EVENT;
 }
-hidden_def(ausearch_clear)
 
 void auparse_destroy(auparse_state_t *au)
 {
+	aulookup_destroy_uid_list();
+	aulookup_destroy_gid_list();
+	if (au == NULL)
+		return;
+
 	if (au->source_list) {
 		int n = 0;
 		while (au->source_list[n]) 
@@ -543,8 +551,6 @@ void auparse_destroy(auparse_state_t *au)
 		(*au->callback_user_data_destroy)(au->callback_user_data);
 		au->callback_user_data = NULL;
 	}
-	aulookup_destroy_uid_list();
-	aulookup_destroy_gid_list();
 	if (au->in) {
 		fclose(au->in);
 		au->in = NULL;
@@ -702,13 +708,16 @@ static int extract_timestamp(const char *b, au_event_t *e)
 	int rc = 1;
 
         e->host = NULL;
-	tmp = strndupa(b, 80);
+	if (*b == 'n')
+		tmp = strndupa(b, 340);
+	else
+		tmp = strndupa(b, 80);
 	ptr = strtok(tmp, " ");
 	if (ptr) {
 		// Optionally grab the node - may or may not be included
 		if (*ptr == 'n') {
 			e->host = strdup(ptr+5);
-			ptr = strtok(NULL, " "); // Bump along to the next one
+			(void)strtok(NULL, " "); // Bump along to the next one
 		}
 		// at this point we have type=
 		ptr = strtok(NULL, " ");
@@ -803,14 +812,15 @@ static int retrieve_next_line(auparse_state_t *au)
 		case AUSOURCE_FILE:
 		case AUSOURCE_FILE_ARRAY:
 			// if the first time through, open file
-			if (au->list_idx == 0 && au->in == NULL) {
+			if (au->list_idx == 0 && au->in == NULL &&
+						au->source_list != NULL) {
 				if (au->source_list[au->list_idx] == NULL) {
 					errno = 0;
 					return -2;
 				}
 				au->line_number = 0;
 				au->in = fopen(au->source_list[au->list_idx],
-									"r");
+									"rm");
 				if (au->in == NULL)
 					return -1;
 				__fsetlocking(au->in, FSETLOCKING_BYCALLER);
@@ -828,7 +838,7 @@ static int retrieve_next_line(auparse_state_t *au)
 					if (au->source_list[au->list_idx]) {
 						au->in = fopen(
 						  au->source_list[au->list_idx],
-						  "r");
+						  "rm");
 						if (au->in == NULL)
 							return -1;
 						__fsetlocking(au->in,
@@ -901,16 +911,6 @@ static int ausearch_compare(auparse_state_t *au)
 {
 	rnode *r;
 
-	if (au->regex_valid != 0) {
-		int rc;
-
-		r = aup_list_get_cur(&au->le);
-		rc = regexec(&au->regex, r->record, 0, NULL, 0);
-		if (rc == 0)
-			return 1;
-		else
-			return 0;
-	}
 	r = aup_list_get_cur(&au->le);
 	if (r)
 		return expr_eval(au, r, au->expr);
@@ -923,7 +923,7 @@ int ausearch_next_event(auparse_state_t *au)
 {
 	int rc;
 
-	if (au->expr == NULL && au->regex_valid == 0) {
+	if (au->expr == NULL) {
 		errno = EINVAL;
 		return -1;
 	}
@@ -1038,7 +1038,6 @@ int auparse_next_event(auparse_state_t *au)
 		}
 	}	
 }
-hidden_def(auparse_next_event)
 
 /* Accessors to event data */
 const au_event_t *auparse_get_timestamp(auparse_state_t *au)
@@ -1144,7 +1143,6 @@ int auparse_first_record(auparse_state_t *au)
 	
 	return 1;
 }
-hidden_def(auparse_first_record)
 
 
 int auparse_next_record(auparse_state_t *au)
@@ -1159,7 +1157,6 @@ int auparse_next_record(auparse_state_t *au)
 	else
 		return 0;
 }
-hidden_def(auparse_next_record)
 
 
 int auparse_goto_record_num(auparse_state_t *au, unsigned int num)
@@ -1183,6 +1180,16 @@ int auparse_get_type(auparse_state_t *au)
 		return r->type;
 	else
 		return 0;
+}
+
+
+const char *auparse_get_type_name(auparse_state_t *au)
+{
+	rnode *r = aup_list_get_cur(&au->le);
+	if (r)
+		return audit_msg_type_to_name(r->type);
+	else
+		return NULL;
 }
 
 
@@ -1303,7 +1310,6 @@ const char *auparse_find_field_next(auparse_state_t *au)
 	}
 	return NULL;
 }
-hidden_def(auparse_find_field_next)
 
 
 /* Accessors to field data */
@@ -1327,7 +1333,6 @@ const char *auparse_get_field_str(auparse_state_t *au)
 	}
 	return NULL;
 }
-hidden_def(auparse_get_field_str)
 
 int auparse_get_field_type(auparse_state_t *au)
 {

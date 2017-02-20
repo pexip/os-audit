@@ -1,6 +1,6 @@
 /*
  * aulast.c - A last program based on audit logs 
- * Copyright (c) 2008-2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2008-2009,2011 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
@@ -21,12 +21,14 @@
  *   Steve Grubb <sgrubb@redhat.com>
  */
 
+#include "config.h"
 #include <stdio.h>
 #include <locale.h>
 #include <string.h>
+#include <unistd.h>
 #include <errno.h>
 #include <pwd.h>
-#include <sys/utsname.h>
+#include <stdlib.h>
 #include "libaudit.h"
 #include "auparse.h"
 #include "aulast-llist.h"
@@ -34,6 +36,7 @@
 
 static	llist l;
 static FILE *f = NULL;
+static char *kernel = NULL;
 
 /* command line params */
 static int cuid = -1, bad = 0, proof = 0, debug = 0;
@@ -66,7 +69,10 @@ static void report_session(lnode* cur)
 		}
 	} else {
 		struct passwd *p = getpwuid(cur->auid);
-		printf("%-8.8s ", p->pw_name);
+		if (p)
+			printf("%-8.8s ", p->pw_name);
+		else
+			printf("%-8.u ", cur->auid);
 	}
 	if (strncmp("/dev/", cur->term, 5) == 0)
 		printf("%-12.12s ", cur->term+5);
@@ -113,9 +119,13 @@ static void report_session(lnode* cur)
 		char start[32], end[32];
 		struct tm *btm;
 
-		printf("    audit event proof serial numbers: %lu, %lu, %lu\n",
-			cur->loginuid_proof, cur->user_login_proof,
-			cur->user_end_proof);
+		if (cur->loginuid_proof == 0 && cur->result == 1) // Bad login
+			printf("    audit event proof serial number:"
+			       " %lu\n", cur->user_login_proof);
+		else
+			printf("    audit event proof serial numbers:"
+			       " %lu, %lu, %lu\n", cur->loginuid_proof,
+				cur->user_login_proof, cur->user_end_proof);
 		printf("    Session data can be found with this search:\n");
 		btm = localtime(&cur->start);
 		strftime(start, sizeof(start), "%x %T", btm);
@@ -128,9 +138,10 @@ static void report_session(lnode* cur)
 		    printf("    ausearch --start %s", start);
 		}
 		if (cur->name == NULL)
-			printf(" --session %d\n\n", cur->session);
-		else
-			printf("\n\n");
+			printf(" --session %d", cur->session);
+		if (cur->loginuid_proof == 0 && cur->result == 1) // Bad login
+			printf(" -a %lu", cur->user_login_proof);
+		printf("\n\n");
 	}
 }
 
@@ -154,16 +165,28 @@ static void create_new_session(auparse_state_t *au)
 		pid = auparse_get_field_int(au);
 
 	// Get second auid field
-	auparse_find_field(au, "auid");
-	auparse_next_field(au);
-	tauid = auparse_find_field(au, "auid");
+	tauid = auparse_find_field(au, "old-auid");
+	if (tauid)
+		tauid = auparse_find_field(au, "auid");
+	else {	// kernel 3.13 or older
+		auparse_first_record(au);
+		auparse_find_field(au, "auid");
+		auparse_next_field(au);
+		tauid = auparse_find_field(au, "auid");
+	}
 	if (tauid)
 		auid = auparse_get_field_int(au);
 
 	// Get second ses field
-	auparse_find_field(au, "ses"); 
-	auparse_next_field(au);
-	tses = auparse_find_field(au, "ses");
+	tses = auparse_find_field(au, "old-ses");
+	if (tses)
+		tses = auparse_find_field(au, "ses");
+	else {	// kernel 3.13 or older
+		auparse_first_record(au);
+		auparse_find_field(au, "ses"); 
+		auparse_next_field(au);
+		tses = auparse_find_field(au, "ses");
+	}
 	if (tses)
 		ses = auparse_get_field_int(au);
 
@@ -201,7 +224,7 @@ static void create_new_session(auparse_state_t *au)
 
 static void update_session_login(auparse_state_t *au)
 {
-	const char *tpid, *tses, *tuid, *tacct, *host, *term, *tres;
+	const char *tpid, *tses, *tuid, *tacct=NULL, *host, *term, *tres;
 	int pid = -1, uid = -1, ses = -1, result = -1;
 	time_t start;
 	lnode *cur;
@@ -211,7 +234,7 @@ static void update_session_login(auparse_state_t *au)
 	if (tpid)
 		pid = auparse_get_field_int(au);
 
-	// Get ses field
+	// Get ses field - skipping first uid
 	tses = auparse_find_field(au, "ses");
 	if (tses)
 		ses = auparse_get_field_int(au);
@@ -246,6 +269,8 @@ static void update_session_login(auparse_state_t *au)
 		host = auparse_find_field(au, "addr");
 
 	term = auparse_find_field(au, "terminal");
+	if (term == NULL)
+		term = "?";
 	tres = auparse_find_field(au, "res");
 	if (tres)
 		tres = auparse_interpret_field(au);
@@ -295,26 +320,30 @@ static void update_session_login(auparse_state_t *au)
 				auparse_get_serial(au));
 
 		// If the results were failed, we can close it out
+		/* FIXME: result cannot be true. This is dead code.
 		if (result) {
 			report_session(cur);
 			list_delete_cur(&l);
-		} 
+		} */
 	} else if (bad == 1 && result == 1) {
 		// If it were a bad login and we are wanting bad logins
 		// create the record and report it.
 		lnode n;
 
-		n.auid = uid;
 		n.start = start;
 		n.end = start;
+		n.auid = uid;
 		n.name = tacct;
-		n.host = host;
 		n.term = term;
+		n.host = host;
 		n.result = result;
-		n.status = SESSION_START;
-		n.loginuid_proof = auparse_get_serial(au);
+		n.status = LOG_OUT;
+		n.loginuid_proof = 0;
+		n.user_login_proof = auparse_get_serial(au);
+		n.user_end_proof = 0;
 		report_session(&n); 
-	}
+	} else if (debug)
+		printf("Session not found or updated\n");
 }
 
 static void update_session_logout(auparse_state_t *au)
@@ -367,12 +396,11 @@ static void process_bootup(auparse_state_t *au)
 {
 	lnode *cur;
 	int start;
-	struct utsname ubuf;
 
 	// See if we have unclosed boot up and make into CRASH record
 	list_first(&l);
 	cur = list_get_cur(&l);
-	while(cur) {
+	while (cur) {
 		if (cur->name) {
 			cur->user_end_proof = auparse_get_serial(au);
 			cur->status = CRASH;
@@ -385,7 +413,7 @@ static void process_bootup(auparse_state_t *au)
 	// Logout and process anyone still left in the machine
 	list_first(&l);
 	cur = list_get_cur(&l);
-	while(cur) {
+	while (cur) {
 		if (cur->status != CRASH) {
 			cur->user_end_proof = auparse_get_serial(au);
 			cur->status = DOWN;
@@ -394,19 +422,31 @@ static void process_bootup(auparse_state_t *au)
 		}
 		cur = list_next(&l);
 	}
+
+	// Since this is a boot message, all old entries should be gone
 	list_clear(&l);
 	list_create(&l);
 
-	// make reboot record - user:reboot, tty:system boot, host: uname -r 
-	uname(&ubuf);
+	// make reboot record - user:reboot, tty:system boot, host: kernel 
 	start = auparse_get_time(au);
 	list_create_session(&l, 0, 0, 0, auparse_get_serial(au));
 	cur = list_get_cur(&l);
 	cur->start = start;
 	cur->name = strdup("reboot");
 	cur->term = strdup("system boot");
-	cur->host = strdup(ubuf.release);
+	if (kernel)
+		cur->host = strdup(kernel);
 	cur->result = 0;
+}
+
+static void process_kernel(auparse_state_t *au)
+{
+	const char *kernel_str = auparse_find_field(au, "kernel");
+	if (kernel_str == NULL)
+		return;
+
+	free(kernel);
+	kernel = strdup(kernel_str);
 }
 
 static void process_shutdown(auparse_state_t *au)
@@ -416,7 +456,7 @@ static void process_shutdown(auparse_state_t *au)
 	// Find reboot record
 	list_first(&l);
 	cur = list_get_cur(&l);
-	while(cur) {
+	while (cur) {
 		if (cur->name) {
 			// Found it - close it out and display it
 			time_t end = auparse_get_time(au);
@@ -492,10 +532,14 @@ int main(int argc, char *argv[])
 		au = auparse_init(AUSOURCE_FILE, file);
 	else if (use_stdin)
 		au = auparse_init(AUSOURCE_FILE_POINTER, stdin);
-	else
+	else {
+		if (getuid()) {
+			fprintf(stderr, "You probably need to be root for this to work\n");
+		}
 		au = auparse_init(AUSOURCE_LOGS, NULL);
+	}
 	if (au == NULL) {
-		printf("Error - %s\n", strerror(errno));
+		fprintf(stderr, "Error - %s\n", strerror(errno));
 		goto error_exit_1;
 	}
 
@@ -536,6 +580,10 @@ int main(int argc, char *argv[])
 				process_shutdown(au);
 				extract_record(au);
 				break;
+			case AUDIT_DAEMON_START:
+				process_kernel(au);
+				extract_record(au);
+				break;
 		}
 	}
 	auparse_destroy(au);
@@ -547,6 +595,7 @@ int main(int argc, char *argv[])
 		report_session(cur);
 	} while (list_next(&l));
 
+	free(kernel);
 	list_clear(&l);
 	if (f)
 		fclose(f);

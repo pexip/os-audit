@@ -21,12 +21,12 @@ Report on the bad logins.
 Write raw audit records used to create the displayed report into a file aulast.log in the current working directory.
 
 .TP
-.B \-f file
+.BI \-f file
 Use the file instead of the audit logs for input.
 
 .TP
 .B \-\-proof
-Print out the audit event serial numbers used to determine the preceeding line of the report. A Serial number of 0 is a place holder and not an actual event serial number. The serial numbers can be used to examine the actual audit records in more detail. Also an ausearch query is printed that will let you find the audit records associated with that session.
+Print out the audit event serial numbers used to determine the preceding line of the report. A Serial number of 0 is a place holder and not an actual event serial number. The serial numbers can be used to examine the actual audit records in more detail. Also an ausearch query is printed that will let you find the audit records associated with that session.
 
 .TP
 .B \-\-stdin
@@ -35,7 +35,7 @@ Take audit records from stdin.
 .SH "EXAMPLES"
 .nf
 To see this month's logins
-.B ausearch --start this-month --raw | aulast --stdin
+.B ausearch \-\-start this-month \-\-raw | aulast \-\-stdin
 
 .SH "SEE ALSO"
 .BR last (1),
