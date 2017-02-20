@@ -1,5 +1,5 @@
 /* audisp-prelude.c --
- * Copyright 2008 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2008-09,2011-12 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -29,8 +29,13 @@
 #include <ctype.h>
 #include <pwd.h>
 #include <sys/stat.h>
+#include <sys/select.h>
+#include <errno.h>
 #include <libprelude/prelude.h>
 #include <libprelude/idmef-message-print.h>
+#ifdef HAVE_LIBCAP_NG
+#include <cap-ng.h>
+#endif
 #include "libaudit.h"
 #include "auparse.h"
 #include "prelude-config.h"
@@ -44,7 +49,7 @@
 typedef enum { AS_LOGIN, AS_MAX_LOGIN_FAIL, AS_MAX_LOGIN_SESS, AS_ABEND,
 	AS_PROM, AS_MAC_STAT, AS_LOGIN_LOCATION, AS_LOGIN_TIME, AS_MAC,
 	AS_AUTH, AS_WATCHED_LOGIN, AS_WATCHED_FILE, AS_WATCHED_EXEC, AS_MK_EXE,
-	AS_MMAP0, AS_WATCHED_SYSCALL, AS_TOTAL } as_description_t;
+	AS_MMAP0, AS_WATCHED_SYSCALL, AS_TTY, AS_TOTAL } as_description_t;
 const char *assessment_description[AS_TOTAL] = {
  "A user has attempted to login",
  "The maximum allowed login failures for this account has been reached. This could be an attempt to gain access to the account by someone other than the real account holder.",
@@ -61,7 +66,8 @@ const char *assessment_description[AS_TOTAL] = {
  "A user has attempted to execute a program that is being watched.",
  "A user has attempted to create an executable program",
  "A program has attempted mmap a fixed memory page at an address sometimes used as part of a kernel exploit",
- "A user has run a command that issued a watched syscall"
+ "A user has run a command that issued a watched syscall",
+ "A user has typed keystrokes on a terminal"
 };
 typedef enum { M_NORMAL, M_TEST } output_t;
 typedef enum { W_NO, W_FILE, W_EXEC, W_MK_EXE } watched_t;
@@ -222,6 +228,7 @@ int main(int argc, char *argv[])
 	if (au == NULL) {
 		syslog(LOG_ERR,
 		    "audisp-prelude is exiting due to auparse init errors");
+		free_config(&config);
 		return -1;
 	}
 	auparse_add_callback(au, handle_event, NULL, NULL);
@@ -231,23 +238,45 @@ int main(int argc, char *argv[])
 		else
 			syslog(LOG_ERR,
 		    "audisp-prelude is exiting due to init_prelude failure");
+		free_config(&config);
+		auparse_destroy(au);
 		return -1;
 	}
-
+#ifdef HAVE_LIBCAP_NG
+	// Drop all capabilities
+	capng_clear(CAPNG_SELECT_BOTH);
+	capng_apply(CAPNG_SELECT_BOTH);
+#endif
 	if (mode != M_TEST)
 		syslog(LOG_INFO, "audisp-prelude is ready for events");
 	do {
+		fd_set read_mask;
+		struct timeval tv;
+		int retval;
+
 		/* Load configuration */
 		if (hup) {
 			reload_config();
 		}
+		do {
+			tv.tv_sec = 5;
+			tv.tv_usec = 0;
+			FD_ZERO(&read_mask);
+			FD_SET(0, &read_mask);
+			if (auparse_feed_has_data(au))
+				retval= select(1, &read_mask, NULL, NULL, &tv);
+			else
+				retval= select(1, &read_mask, NULL, NULL, NULL);		} while (retval == -1 && errno == EINTR && !hup && !stop);
 
 		/* Now the event loop */
-		while (fgets_unlocked(tmp, MAX_AUDIT_MESSAGE_LENGTH, stdin) &&
-							hup==0 && stop==0) {
-			auparse_feed(au, tmp, strnlen(tmp,
+		if (!stop && !hup && retval > 0) {
+			if (fgets_unlocked(tmp, MAX_AUDIT_MESSAGE_LENGTH,
+				stdin)){
+				auparse_feed(au, tmp, strnlen(tmp,
 						MAX_AUDIT_MESSAGE_LENGTH));
-		}
+			}
+		} else if (retval == 0)
+			auparse_flush_feed(au);
 		if (feof(stdin))
 			break;
 	} while (stop == 0);
@@ -938,7 +967,9 @@ static int add_execve_data(auparse_state_t *au, idmef_alert_t *alert)
 			int len2;
 			len2 = asprintf(&ptr, "%s=%s ", var,
 					auparse_interpret_field(au));
-			if (len2 > 0 && (len2 + len) < sizeof(msg)) {
+			if (len2 < 0) {
+				ptr = NULL;
+			} else if (len2 > 0 && (len2 + len + 1) < sizeof(msg)) {
 				strcat(msg, ptr);
 				len += len2;
 			}
@@ -1026,7 +1057,9 @@ static int do_assessment(idmef_alert_t *alert, auparse_state_t *au,
 	if (descr) {
 		prelude_string_t *str;
 		ret = idmef_impact_new_description(impact, &str);
-		prelude_string_set_ref(str, descr);
+		PRELUDE_FAIL_CHECK;
+		ret = prelude_string_set_ref(str, descr);
+		PRELUDE_FAIL_CHECK;
 	}
 
 	// FIXME: I think this is wrong. sb a way to express indeterminate
@@ -1981,10 +2014,86 @@ static void handle_watched_syscalls(auparse_state_t *au,
 	}
 }
 
+static int tty_alert(auparse_state_t *au, idmef_message_t *idmef,
+		idmef_alert_t *alert)
+{
+	int ret;
+
+	idmef_source_t *source;
+	idmef_user_t *suser;
+	idmef_user_id_t *user_id;
+	idmef_impact_type_t impact_type;
+	idmef_assessment_t *assessment;
+	idmef_impact_t *impact;
+	idmef_impact_severity_t severity;
+	prelude_string_t *str;
+	idmef_impact_completion_t completion = IDMEF_IMPACT_COMPLETION_ERROR;
+
+	/* Fill in information about the event's source */
+	ret = idmef_alert_new_source(alert, &source, -1);
+	PRELUDE_FAIL_CHECK;
+
+	ret = idmef_source_new_user(source, &suser);
+	PRELUDE_FAIL_CHECK;
+	idmef_user_set_category(suser, IDMEF_USER_CATEGORY_APPLICATION);
+	ret = idmef_user_new_user_id(suser, &user_id, 0);	
+	PRELUDE_FAIL_CHECK;
+	idmef_user_id_set_type(user_id, IDMEF_USER_ID_TYPE_ORIGINAL_USER);
+	ret = get_loginuid_info(au, user_id);
+	PRELUDE_FAIL_CHECK;
+
+	ret = get_tty_info(au, user_id);
+	PRELUDE_FAIL_CHECK;
+
+	ret = get_comm_info(au, source, NULL);
+	PRELUDE_FAIL_CHECK;
+
+	ret = add_execve_data(au, alert);
+	PRELUDE_FAIL_CHECK;
+
+	ret = add_serial_number_data(au, alert);
+	PRELUDE_FAIL_CHECK;
+
+	/* Describe event */
+	ret = set_classification(alert, "Keylogger");
+	PRELUDE_FAIL_CHECK;
+
+	/* Assess impact */
+	if (get_loginuid(au) == 0)
+		impact_type = IDMEF_IMPACT_TYPE_ADMIN;
+	else
+		impact_type = IDMEF_IMPACT_TYPE_USER;
+	completion = IDMEF_IMPACT_COMPLETION_SUCCEEDED;
+	severity = IDMEF_IMPACT_SEVERITY_LOW;
+	
+	ret = idmef_alert_new_assessment(alert, &assessment);
+	PRELUDE_FAIL_CHECK;
+	ret = idmef_assessment_new_impact(assessment, &impact);
+	PRELUDE_FAIL_CHECK;
+	idmef_impact_set_severity(impact, severity);
+	PRELUDE_FAIL_CHECK;
+	idmef_impact_set_type(impact, impact_type);
+	PRELUDE_FAIL_CHECK;
+	ret = idmef_impact_new_description(impact, &str);
+	PRELUDE_FAIL_CHECK;
+	ret = prelude_string_set_ref(str, assessment_description[AS_TTY]);
+	PRELUDE_FAIL_CHECK;
+
+	send_idmef(client, idmef);
+	idmef_message_destroy(idmef);
+
+	return 0;
+
+ err:
+	syslog(LOG_ERR, "tty_alert: IDMEF error: %s.\n", 
+		prelude_strerror(ret));
+	idmef_message_destroy(idmef);
+	return -1;
+}
 static void handle_event(auparse_state_t *au,
 		auparse_cb_event_t cb_event_type, void *user_data)
 {
-	int type, rc, num=0;
+	int type, num=0;
 	idmef_message_t *idmef;
 	idmef_alert_t *alert;
 
@@ -1996,7 +2105,6 @@ static void handle_event(auparse_state_t *au,
 	// move the cursor accidentally skipping a record.
 	while (auparse_goto_record_num(au, num) > 0) {
 		type = auparse_get_type(au);
-		rc = 0;
 		switch (type) {
 			case AUDIT_AVC:
 //			case AUDIT_USER_AVC: ignore USER_AVC for now
@@ -2004,9 +2112,8 @@ static void handle_event(auparse_state_t *au,
 					break;
 				if (config.avcs_act != A_IDMEF)
 					break;
-				if (new_alert_common(au, &idmef, &alert) >= 0){
+				if (new_alert_common(au, &idmef, &alert) >= 0)
 					avc_alert(au, idmef, alert);
-				}
 				break;
 			case AUDIT_USER_LOGIN:
 				// Do normal login alert
@@ -2082,27 +2189,24 @@ static void handle_event(auparse_state_t *au,
 					break;
 				if (config.abends_act != A_IDMEF)
 					break;
-				if (new_alert_common(au, &idmef, &alert) >= 0){
+				if (new_alert_common(au, &idmef, &alert) >= 0)
 					app_term_alert(au, idmef, alert);
-				}
 				break;
 			case AUDIT_ANOM_PROMISCUOUS:
 				if (config.promiscuous == E_NO)
 					break;
 				if (config.promiscuous_act != A_IDMEF)
 					break;
-				if (new_alert_common(au, &idmef, &alert) >= 0){
+				if (new_alert_common(au, &idmef, &alert) >= 0)
 					promiscuous_alert(au, idmef, alert);
-				}
 				break;
 			case AUDIT_MAC_STATUS:
 				if (config.mac_status == E_NO)
 					break;
 				if (config.mac_status_act != A_IDMEF)
 					break;
-				if (new_alert_common(au, &idmef, &alert) >= 0){
+				if (new_alert_common(au, &idmef, &alert) >= 0)
 					mac_status_alert(au, idmef, alert);
-				}
 				break;
 			case AUDIT_GRP_AUTH:
 				if (config.group_auth == E_NO)
@@ -2128,6 +2232,14 @@ static void handle_event(auparse_state_t *au,
 				handle_watched_syscalls(au, &idmef, &alert);
 				// The previous call moves the current record
 				auparse_goto_record_num(au, num);
+				break;
+			case AUDIT_TTY:
+				if (config.tty == E_NO)
+					break;
+				if (config.tty_act != A_IDMEF)
+					break;
+				if (new_alert_common(au, &idmef, &alert) >= 0)
+					tty_alert(au, idmef, alert);
 				break;
 			default:
 				break;

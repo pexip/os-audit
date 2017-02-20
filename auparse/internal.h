@@ -1,5 +1,5 @@
 /* internal.h -- 
- * Copyright 2006-07 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-07,2013-14 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -26,31 +26,11 @@
 #include "ellist.h"
 #include "auditd-config.h"
 #include "data_buf.h"
+#include "dso.h"
 #include <stdio.h>
-#include <regex.h>
 
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-/* Some prototypes to remove functions from public api */
-#ifdef PIC
-# define hidden __attribute__ ((visibility ("hidden")))
-# define hidden_proto(fct) __hidden_proto (fct, fct##_internal)
-# define __hidden_proto(fct, internal)  \
-     extern __typeof (fct) internal;    \
-     extern __typeof (fct) fct __asm (#internal) hidden;
-# if defined(__alpha__) || defined(__mips__)
-#  define hidden_def(fct) \
-     asm (".globl " #fct "\n" #fct " = " #fct "_internal");
-# else
-#  define hidden_def(fct) \
-     asm (".globl " #fct "\n.set " #fct ", " #fct "_internal");
-#endif
-#else
-# define hidden
-# define hidden_proto(fct)
-# define hidden_def(fct)
 #endif
 
 /* This is what state the parser is in */
@@ -82,8 +62,6 @@ struct opaque
 					//	 searching
 	austop_t search_where;		// Where to put the cursors on a match
 	auparser_state_t parse_state;	// parsing state
-	regex_t regex;			// compiled regex if regex_valid != 0
-	int regex_valid;
 	DataBuf databuf;		// input data
 
 	// function to call to notify user of parsing changes
@@ -96,6 +74,7 @@ struct opaque
 };
 
 // auditd-config.c
+void clear_config(struct daemon_conf *config) hidden;
 int load_config(struct daemon_conf *config, log_test_t lt) hidden;
 void free_config(struct daemon_conf *config) hidden;
 

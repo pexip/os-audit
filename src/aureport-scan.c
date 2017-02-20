@@ -1,6 +1,6 @@
 /*
 * aureport-scan.c - Extract interesting fields and check for match
-* Copyright (c) 2005-06, 2008 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-06,2008,2011,2014 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -118,10 +118,14 @@ int classify_success(const llist *l)
 int classify_conf(const llist *l)
 {
 	int rc = 1;
+	extern int no_config;
 
 	switch (l->head->type)
 	{
 		case AUDIT_CONFIG_CHANGE:
+			if (no_config)
+				rc = 0;
+			break;
 		case AUDIT_USYS_CONFIG:
 			break;
 		case AUDIT_ADD_USER:
@@ -298,7 +302,7 @@ static int per_event_summary(llist *l)
 			break;
 		case RPT_AUTH:
 			if (list_find_msg(l, AUDIT_USER_AUTH)) {
-				if (l->s.loginuid == -1 && l->s.acct != NULL)
+				if (l->s.loginuid == -2 && l->s.acct != NULL)
 					slist_add_if_uniq(&sd.users, l->s.acct);
 				else {
 					char name[64];
@@ -312,7 +316,7 @@ static int per_event_summary(llist *l)
 			} else if (list_find_msg(l, AUDIT_USER_ACCT)) {
 				// Only count the failures
 				if (l->s.success == S_FAILED) {
-					if (l->s.loginuid == -1 && 
+					if (l->s.loginuid == -2 && 
 						l->s.acct != NULL)
 					slist_add_if_uniq(&sd.users, l->s.acct);
 					else {
@@ -330,7 +334,7 @@ static int per_event_summary(llist *l)
 			break;
 		case RPT_LOGIN:
 			if (list_find_msg(l, AUDIT_USER_LOGIN)) {
-				if (l->s.loginuid == -1 && l->s.acct != NULL)
+				if (l->s.loginuid == -2 && l->s.acct != NULL)
 					slist_add_if_uniq(&sd.users, l->s.acct);
 				else {
 					char name[64];
@@ -386,7 +390,7 @@ static int per_event_summary(llist *l)
 				slist_add_if_uniq(&sd.terms, l->s.terminal);
 			break;
 		case RPT_USER:
-			if (l->s.loginuid != -1) {
+			if (l->s.loginuid != -2) {
 				char tmp[32];
 				snprintf(tmp, sizeof(tmp), "%d", l->s.loginuid);
 				slist_add_if_uniq(&sd.users, tmp);
@@ -767,7 +771,7 @@ static void do_summary_total(llist *l)
 	}
 
 	// add users
-	if (l->s.loginuid != -1) {
+	if (l->s.loginuid != -2) {
 		char tmp[32];
 		snprintf(tmp, sizeof(tmp), "%d", l->s.loginuid);
 		slist_add_if_uniq(&sd.users, tmp);

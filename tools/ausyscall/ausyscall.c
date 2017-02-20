@@ -44,7 +44,8 @@ int main(int argc, char *argv[])
 	if (argc > 4) {
 		fputs("Too many arguments\n", stderr);
 		usage();
-	}
+	} else if (argc < 2)
+		usage();
  
 	for (i=1; i<argc; i++) {
 		if (isdigit(argv[i][0])) {
@@ -67,6 +68,18 @@ int main(int argc, char *argv[])
 #ifndef WITH_ALPHA
 		} else if (strcmp("alpha", argv[i]) == 0) {
 			fputs("Alpha processor support is not enabled\n",
+					stderr);
+			exit(1);
+#endif
+#ifndef WITH_ARM
+		} else if (strcmp("arm", argv[i]) == 0) {
+			fputs("Arm eabi processor support is not enabled\n",
+					stderr);
+			exit(1);
+#endif
+#ifndef WITH_AARCH64
+		} else if (strcmp("aarch64", argv[i]) == 0) {
+			fputs("Aarch64 processor support is not enabled\n",
 					stderr);
 			exit(1);
 #endif

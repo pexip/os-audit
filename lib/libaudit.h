@@ -1,5 +1,5 @@
 /* libaudit.h -- 
- * Copyright 2004-2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-2014 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -27,7 +27,7 @@
 extern "C" {
 #endif
 
-#include <unistd.h>
+
 #include <asm/types.h>
 #include <stdint.h>
 #include <sys/socket.h>
@@ -37,7 +37,7 @@ extern "C" {
 #include <syslog.h>
 
 
-/* Audit message types:
+/* Audit message types as of 2.6.29 kernel:
  * 1000 - 1099 are for commanding the audit system
  * 1100 - 1199 user space trusted application messages
  * 1200 - 1299 messages internal to the audit daemon
@@ -46,7 +46,8 @@ extern "C" {
  * 1500 - 1599 AppArmor events
  * 1600 - 1699 kernel crypto events
  * 1700 - 1799 kernel anomaly records
- * 1800 - 1999 future kernel use (maybe integrity labels and related events)
+ * 1800 - 1899 kernel integrity labels and related events
+ * 1800 - 1999 future kernel use
  * 2001 - 2099 unused (kernel)
  * 2100 - 2199 user space anomaly records
  * 2200 - 2299 user space actions taken in response to anomalies
@@ -88,6 +89,8 @@ extern "C" {
 #define AUDIT_SYSTEM_BOOT	1127	/* System boot */
 #define AUDIT_SYSTEM_SHUTDOWN	1128	/* System shutdown */
 #define AUDIT_SYSTEM_RUNLEVEL	1129	/* System runlevel change */
+#define AUDIT_SERVICE_START	1130	/* Service (daemon) start */
+#define AUDIT_SERVICE_STOP	1131	/* Service (daemon) stop */
 
 #define AUDIT_FIRST_DAEMON	1200
 #define AUDIT_LAST_DAEMON	1299
@@ -99,59 +102,10 @@ extern "C" {
 
 #define AUDIT_FIRST_EVENT	1300
 #define AUDIT_LAST_EVENT	1399
-#ifndef AUDIT_KERNEL_OTHER
-#define AUDIT_CWD               1307    /* Current working directory */
-#define AUDIT_EXECVE            1309    /* execve arguments */
-#define AUDIT_IPC_SET_PERM      1311    /* IPC new permissions record type */
-#define AUDIT_MQ_OPEN           1312    /* POSIX MQ open record type */
-#define AUDIT_MQ_SENDRECV       1313    /* POSIX MQ send/receive record type */
-#define AUDIT_MQ_NOTIFY         1314    /* POSIX MQ notify record type */
-#define AUDIT_MQ_GETSETATTR     1315    /* POSIX MQ get/set attribute record type */
-#define AUDIT_KERNEL_OTHER      1316    /* For use by 3rd party modules */
-#endif
-#ifndef AUDIT_FD_PAIR
-#define AUDIT_FD_PAIR		1317	/* audit record for pipe/socketpair */
-#endif
-#ifndef AUDIT_OBJ_PID
-#define AUDIT_OBJ_PID		1318	/* signal or ptrace target */
-#endif
-#ifndef AUDIT_TTY
-#define AUDIT_TTY		1319	/* Input on an administrative TTY */
-#endif
-#ifndef AUDIT_EOE
-#define AUDIT_EOE		1320	/* End of event */
-#endif
-
-#ifndef AUDIT_BPRM_FCAPS
-#define AUDIT_BPRM_FCAPS	1321	/* file caps increasing perms */
-#endif
-
-#ifndef AUDIT_CAPSET
-#define AUDIT_CAPSET		1322	/* Capability syscall structures */
-#endif
 
 #define AUDIT_FIRST_SELINUX	1400
 #define AUDIT_LAST_SELINUX	1499
 
-/* For new kernel messages */
-#ifndef AUDIT_MAC_POLICY_LOAD
-#define AUDIT_MAC_POLICY_LOAD	1403    /* Policy file load */
-#define AUDIT_MAC_STATUS	1404    /* Changed enforcing,permissive,off */
-#define AUDIT_MAC_CONFIG_CHANGE	1405    /* Changes to booleans */
-#endif
-#ifndef AUDIT_MAC_UNLBL_ALLOW
-#define AUDIT_MAC_UNLBL_ALLOW	1406    /* NetLabel: allow unlabeled traffic */
-#define AUDIT_MAC_CIPSOV4_ADD	1407    /* NetLabel: add CIPSOv4 DOI entry */
-#define AUDIT_MAC_CIPSOV4_DEL	1408    /* NetLabel: del CIPSOv4 DOI entry */
-#define AUDIT_MAC_MAP_ADD	1409    /* NetLabel: add LSM domain mapping */
-#define AUDIT_MAC_MAP_DEL	1410    /* NetLabel: del LSM domain mapping */
-#endif
-#ifndef AUDIT_MAC_IPSEC_ADDSA
-#define AUDIT_MAC_IPSEC_ADDSA	1411    /* Add a XFRM state */
-#define AUDIT_MAC_IPSEC_DELSA	1412    /* Delete a XFRM state */
-#define AUDIT_MAC_IPSEC_ADDSPD	1413    /* Add a XFRM policy */
-#define AUDIT_MAC_IPSEC_DELSPD	1414    /* Delete a XFRM policy */
-#endif
 #define AUDIT_FIRST_APPARMOR		1500
 #define AUDIT_LAST_APPARMOR		1599
 #ifndef AUDIT_AA
@@ -167,14 +121,9 @@ extern "C" {
 #define AUDIT_FIRST_KERN_CRYPTO_MSG	1600
 #define AUDIT_LAST_KERN_CRYPTO_MSG	1699
 
-#ifndef AUDIT_ANOM_PROMISCUOUS
 #define AUDIT_FIRST_KERN_ANOM_MSG	1700
 #define AUDIT_LAST_KERN_ANOM_MSG	1799
-#define AUDIT_ANOM_PROMISCUOUS		1700 // Device changed promiscuous mode
-#endif
-#ifndef AUDIT_ANOM_ABEND
-#define AUDIT_ANOM_ABEND		1701 /* Process ended abnormally */
-#endif
+
 #define AUDIT_INTEGRITY_FIRST_MSG	1800
 #define AUDIT_INTEGRITY_LAST_MSG	1899
 #ifndef AUDIT_INTEGRITY_DATA
@@ -185,6 +134,7 @@ extern "C" {
 #define AUDIT_INTEGRITY_PCR		1804 /* PCR invalidation msgs */
 #define AUDIT_INTEGRITY_RULE		1805 /* Policy rule */
 #endif
+
 #define AUDIT_FIRST_ANOM_MSG		2100
 #define AUDIT_LAST_ANOM_MSG		2199
 #define AUDIT_ANOM_LOGIN_FAILURES	2100 // Failed login limit reached
@@ -235,6 +185,8 @@ extern "C" {
 #define AUDIT_DEV_DEALLOC		2308 /* Device was deallocated */
 #define AUDIT_FS_RELABEL		2309 /* Filesystem relabeled */
 #define AUDIT_USER_MAC_POLICY_LOAD	2310 /* Userspc daemon loaded policy */
+#define AUDIT_ROLE_MODIFY		2311 /* Admin modified a role */
+#define AUDIT_USER_MAC_CONFIG_CHANGE	2312 /* Change made to MAC policy */
 
 #define AUDIT_FIRST_CRYPTO_MSG		2400
 #define AUDIT_CRYPTO_TEST_USER		2400 /* Crypto test results */
@@ -261,163 +213,149 @@ extern "C" {
 #define AUDIT_LAST_USER_MSG2   2999
 #endif
 
-/* These are from the watching subtrees patch */
-#ifndef AUDIT_TRIM
-#define AUDIT_TRIM              1014    /* Trim junk from watched tree */
-#define AUDIT_MAKE_EQUIV        1015    /* Append to watched tree */
+/* New kernel event definitions since 2.6.30 */
+#ifndef AUDIT_SET_FEATURE
+#define AUDIT_SET_FEATURE       1018    /* Turn an audit feature on or off */
 #endif
 
-/* These are from the audit by tty patch */
-#ifndef AUDIT_TTY_GET
-#define AUDIT_TTY_GET		1016	/* Get TTY auditing status */
-#define AUDIT_TTY_SET		1017	/* Set TTY audit status */
+#ifndef AUDIT_GET_FEATURE
+#define AUDIT_GET_FEATURE       1019    /* Get which features are enabled */
 #endif
 
-#ifndef AUDIT_MAC_IPSEC_EVENT
-#define AUDIT_MAC_IPSEC_EVENT   1415    /* Audit an IPSec event */
-#endif
-#ifndef AUDIT_MAC_UNLBL_STCADD
-#define AUDIT_MAC_UNLBL_STCADD  1416    /* NetLabel: add a static label */
-#define AUDIT_MAC_UNLBL_STCDEL  1417    /* NetLabel: del a static label */
+#ifndef AUDIT_MMAP
+#define AUDIT_MMAP		1323 /* Descriptor and flags in mmap */
 #endif
 
-
-/* This is for the new operator patch */
-#ifndef AUDIT_BIT_MASK
-#define AUDIT_BIT_MASK			0x08000000
+#ifndef AUDIT_NETFILTER_PKT
+#define AUDIT_NETFILTER_PKT	1324 /* Packets traversing netfilter chains */
 #endif
-#ifndef AUDIT_LESS_THAN 
-#define AUDIT_LESS_THAN			0x10000000
-#define AUDIT_GREATER_THAN		0x20000000
-#define AUDIT_NOT_EQUAL			0x30000000
-#define AUDIT_EQUAL			0x40000000
-#define AUDIT_LESS_THAN_OR_EQUAL	(AUDIT_LESS_THAN|AUDIT_EQUAL)
-#define AUDIT_GREATER_THAN_OR_EQUAL	(AUDIT_GREATER_THAN|AUDIT_EQUAL)
-#define AUDIT_OPERATORS			(AUDIT_EQUAL|AUDIT_NOT_EQUAL)
-#endif
-#ifndef AUDIT_BIT_TEST
-#define AUDIT_BIT_TEST		(AUDIT_BIT_MASK|AUDIT_EQUAL)
-#undef  AUDIT_OPERATORS
-#define AUDIT_OPERATORS		(AUDIT_EQUAL|AUDIT_NOT_EQUAL|AUDIT_BIT_MASK)
+#ifndef AUDIT_NETFILTER_CFG
+#define AUDIT_NETFILTER_CFG	1325 /* Netfilter chain modifications */
 #endif
 
-/* This is for the new rule field definitions */
-#ifndef AUDIT_MSGTYPE
-#define AUDIT_MSGTYPE 12
+#ifndef AUDIT_SECCOMP
+#define AUDIT_SECCOMP		1326 /* Secure Computing event */
 #endif
 
-/* This is from the audit by role patch */
-#ifndef AUDIT_SUBJ_USER
-#define AUDIT_SUBJ_USER     13
-#define AUDIT_SUBJ_ROLE     14
-#define AUDIT_SUBJ_TYPE     15
-#define AUDIT_SUBJ_SEN      16
-#define AUDIT_SUBJ_CLR      17
-#define AUDIT_OBJ_USER      19
-#define AUDIT_OBJ_ROLE      20
-#define AUDIT_OBJ_TYPE      21
-#define AUDIT_OBJ_LEV_LOW   22
-#define AUDIT_OBJ_LEV_HIGH  23
+#ifndef AUDIT_PROCTITLE
+#define AUDIT_PROCTITLE		1327 /* Process Title info */
 #endif
 
-#ifndef AUDIT_PPID
-#define AUDIT_PPID          18
+#undef AUDIT_FEATURE_CHANGE
+#ifndef AUDIT_FEATURE_CHANGE
+#define AUDIT_FEATURE_CHANGE	1328 /* Audit feature changed value */
 #endif
 
-/* This is from the file system auditing patch */
-#ifndef AUDIT_WATCH
-#define AUDIT_WATCH         105	/* This is a field in syscall rule */
+#ifndef AUDIT_ANOM_LINK
+#define AUDIT_ANOM_LINK		1702 /* Suspicious use of file links */
 #endif
 
-/* Defines for syscall classes - watch permissions */
-#ifndef AUDIT_PERM
-#define AUDIT_PERM		106	/* This is a field in syscall rule */
-#define AUDIT_PERM_EXEC		1
-#define AUDIT_PERM_WRITE	2
-#define AUDIT_PERM_READ		4
-#define AUDIT_PERM_ATTR		8
-#endif
-
-/* This is from the directory auditing patch */
-#ifndef AUDIT_DIR
-#define AUDIT_DIR           107
-#endif
-
-/* This is from the filetype patch */
-#ifndef AUDIT_FILETYPE
-#define AUDIT_FILETYPE      108
-#endif
-
-/* This is from filterkey patch */
-#ifndef AUDIT_FILTERKEY
-#define AUDIT_FILTERKEY     210
-#define AUDIT_MAX_KEY_LEN   32
-#endif
+/* This is related to the filterkey patch */
 #define AUDIT_KEY_SEPARATOR 0x01
 
-/* This is new list defines from audit.h */
-#ifndef AUDIT_FILTER_USER
-#define AUDIT_FILTER_USER       0x00    /* Apply rule to user-generated messages */
-#endif
-#ifndef AUDIT_FILTER_TASK
-#define AUDIT_FILTER_TASK       0x01    /* Apply rule at task creation (not syscall) */
-#endif
-#ifndef AUDIT_FILTER_ENTRY
-#define AUDIT_FILTER_ENTRY      0x02    /* Apply rule at syscall entry */
-#endif
-#ifndef AUDIT_FILTER_EXIT
-#define AUDIT_FILTER_EXIT       0x04    /* Apply rule at syscall exit */
-#endif
-#ifndef AUDIT_FILTER_EXCLUDE
-#define AUDIT_FILTER_EXCLUDE    0x05    /* Remove event type before sending */
-#endif
+/* These are used in filter control */
+#define AUDIT_FILTER_EXCLUDE	AUDIT_FILTER_TYPE
 #define AUDIT_FILTER_MASK	0x07	/* Mask to get actual filter */
-#ifndef AUDIT_FILTER_PREPEND
-#define AUDIT_FILTER_PREPEND    0x10    /* Prepend to front of list */
-#endif
 #define AUDIT_FILTER_UNSET	0x80	/* This value means filter is unset */
 
-/* This is the machine type list */
-typedef enum {
-	MACH_X86=0,
-	MACH_86_64,
-	MACH_IA64,
-	MACH_PPC64,
-	MACH_PPC,
-	MACH_S390X,
-	MACH_S390,
-        MACH_ALPHA
-} machine_t;
-
-/* These are the valid audit failure tunable enum values */
-typedef enum {
-	FAIL_IGNORE=0,
-	FAIL_LOG,
-	FAIL_TERMINATE
-} auditfail_t;
-
-/*
- * audit_rule_data supports filter rules with both integer and string
- * fields. It corresponds with AUDIT_ADD_RULE, AUDIT_DEL_RULE and
- * AUDIT_LIST_RULES requests.
- */
-#ifndef AUDIT_ADD_RULE
-#define AUDIT_ADD_RULE		1011    /* Add syscall filtering rule */
-#define AUDIT_DEL_RULE		1012    /* Delete syscall filtering rule */
-#define AUDIT_LIST_RULES	1013    /* List syscall filtering rules */
-
-struct audit_rule_data {
-	uint32_t	flags;  /* AUDIT_PER_{TASK,CALL}, AUDIT_PREPEND */
-	uint32_t	action; /* AUDIT_NEVER, AUDIT_POSSIBLE, AUDIT_ALWAYS */
-	uint32_t	field_count;
-	uint32_t	mask[AUDIT_BITMASK_SIZE];
-	uint32_t	fields[AUDIT_MAX_FIELDS];
-	uint32_t	values[AUDIT_MAX_FIELDS];
-	uint32_t	fieldflags[AUDIT_MAX_FIELDS];
-	uint32_t	buflen; /* total length of string fields */
-	char		buf[0]; /* string fields buffer */
-};
+/* Defines for interfield comparison update */
+#ifndef AUDIT_OBJ_UID
+#define AUDIT_OBJ_UID  109
 #endif
+#ifndef AUDIT_OBJ_GID
+#define AUDIT_OBJ_GID  110
+#endif
+#ifndef AUDIT_FIELD_COMPARE
+#define AUDIT_FIELD_COMPARE 111
+#endif
+
+#ifndef AUDIT_COMPARE_UID_TO_OBJ_UID
+#define AUDIT_COMPARE_UID_TO_OBJ_UID   1
+#endif
+#ifndef AUDIT_COMPARE_GID_TO_OBJ_GID
+#define AUDIT_COMPARE_GID_TO_OBJ_GID   2
+#endif
+#ifndef AUDIT_COMPARE_EUID_TO_OBJ_UID
+#define AUDIT_COMPARE_EUID_TO_OBJ_UID  3
+#endif
+#ifndef AUDIT_COMPARE_EGID_TO_OBJ_GID
+#define AUDIT_COMPARE_EGID_TO_OBJ_GID  4
+#endif
+#ifndef AUDIT_COMPARE_AUID_TO_OBJ_UID
+#define AUDIT_COMPARE_AUID_TO_OBJ_UID  5
+#endif
+#ifndef AUDIT_COMPARE_SUID_TO_OBJ_UID
+#define AUDIT_COMPARE_SUID_TO_OBJ_UID  6
+#endif
+#ifndef AUDIT_COMPARE_SGID_TO_OBJ_GID
+#define AUDIT_COMPARE_SGID_TO_OBJ_GID  7
+#endif
+#ifndef AUDIT_COMPARE_FSUID_TO_OBJ_UID
+#define AUDIT_COMPARE_FSUID_TO_OBJ_UID 8
+#endif
+#ifndef AUDIT_COMPARE_FSGID_TO_OBJ_GID
+#define AUDIT_COMPARE_FSGID_TO_OBJ_GID 9
+#endif
+#ifndef AUDIT_COMPARE_UID_TO_AUID
+#define AUDIT_COMPARE_UID_TO_AUID      10
+#endif
+#ifndef AUDIT_COMPARE_UID_TO_EUID
+#define AUDIT_COMPARE_UID_TO_EUID      11
+#endif
+#ifndef AUDIT_COMPARE_UID_TO_FSUID
+#define AUDIT_COMPARE_UID_TO_FSUID     12
+#endif
+#ifndef AUDIT_COMPARE_UID_TO_SUID
+#define AUDIT_COMPARE_UID_TO_SUID      13
+#endif
+#ifndef AUDIT_COMPARE_AUID_TO_FSUID
+#define AUDIT_COMPARE_AUID_TO_FSUID    14
+#endif
+#ifndef AUDIT_COMPARE_AUID_TO_SUID
+#define AUDIT_COMPARE_AUID_TO_SUID     15
+#endif
+#ifndef AUDIT_COMPARE_AUID_TO_EUID
+#define AUDIT_COMPARE_AUID_TO_EUID     16
+#endif
+#ifndef AUDIT_COMPARE_EUID_TO_SUID
+#define AUDIT_COMPARE_EUID_TO_SUID     17
+#endif
+#ifndef AUDIT_COMPARE_EUID_TO_FSUID
+#define AUDIT_COMPARE_EUID_TO_FSUID    18
+#endif
+#ifndef AUDIT_COMPARE_SUID_TO_FSUID
+#define AUDIT_COMPARE_SUID_TO_FSUID    19
+#endif
+#ifndef AUDIT_COMPARE_GID_TO_EGID
+#define AUDIT_COMPARE_GID_TO_EGID      20
+#endif
+#ifndef AUDIT_COMPARE_GID_TO_FSGID
+#define AUDIT_COMPARE_GID_TO_FSGID     21
+#endif
+#ifndef AUDIT_COMPARE_GID_TO_SGID
+#define AUDIT_COMPARE_GID_TO_SGID      22
+#endif
+#ifndef AUDIT_COMPARE_EGID_TO_FSGID
+#define AUDIT_COMPARE_EGID_TO_FSGID    23
+#endif
+#ifndef AUDIT_COMPARE_EGID_TO_SGID
+#define AUDIT_COMPARE_EGID_TO_SGID     24
+#endif
+#ifndef AUDIT_COMPARE_SGID_TO_FSGID
+#define AUDIT_COMPARE_SGID_TO_FSGID    25
+#endif
+
+#ifndef EM_ARM
+#define EM_ARM  40
+#endif
+#ifndef EM_AARCH64
+#define EM_AARCH64 183
+#endif
+
+#ifndef AUDIT_ARCH_AARCH64
+#define AUDIT_ARCH_AARCH64	(EM_AARCH64|__AUDIT_ARCH_64BIT|__AUDIT_ARCH_LE)
+#endif
+
 
 //////////////////////////////////////////////////////
 // This is an external ABI. Any changes in here will
@@ -452,13 +390,15 @@ struct audit_reply {
 	 * the following should be valid for any packet. */
 	union {
 	struct audit_status     *status;
-	struct audit_rule       *rule;
 	struct audit_rule_data  *ruledata;
 	struct audit_login      *login;
 	const char              *message;
 	struct nlmsgerr         *error;
 	struct audit_sig_info   *signal_info;
 	struct daemon_conf      *conf;
+#if HAVE_DECL_AUDIT_FEATURE_VERSION
+	struct audit_features	*features;
+#endif
 	};
 };
 
@@ -486,6 +426,28 @@ struct audit_dispatcher_header {
 ///////////////////////////////////////////////////
 // Libaudit API
 //
+
+/* This is the machine type list */
+typedef enum {
+	MACH_X86=0,
+	MACH_86_64,
+	MACH_IA64,
+	MACH_PPC64,
+	MACH_PPC,
+	MACH_S390X,
+	MACH_S390,
+	MACH_ALPHA,
+	MACH_ARM,
+	MACH_AARCH64
+} machine_t;
+
+/* These are the valid audit failure tunable enum values */
+typedef enum {
+	FAIL_IGNORE=0,
+	FAIL_LOG,
+	FAIL_TERMINATE
+} auditfail_t;
+
 /* Messages */
 typedef enum { MSG_STDERR, MSG_SYSLOG, MSG_QUIET } message_t;
 typedef enum { DBG_NO, DBG_YES } debug_message_t;
@@ -500,6 +462,7 @@ extern int  audit_get_reply(int fd, struct audit_reply *rep, reply_t block,
 extern uid_t audit_getloginuid(void);
 extern int  audit_setloginuid(uid_t uid);
 extern int  audit_detect_machine(void);
+extern int audit_determine_machine(const char *arch);
 
 /* Translation functions */
 extern int        audit_name_to_field(const char *field);
@@ -527,6 +490,7 @@ extern void audit_number_to_errmsg(int errnumber, const char *opt);
 extern int audit_request_status(int fd);
 extern int audit_is_enabled(int fd);
 extern int get_auditfail_action(auditfail_t *failmode);
+extern int audit_request_features(int fd);
 
 /* AUDIT_SET */
 typedef enum { WAIT_NO, WAIT_YES } rep_wait_t;
@@ -535,8 +499,10 @@ extern int  audit_set_enabled(int fd, uint32_t enabled);
 extern int  audit_set_failure(int fd, uint32_t failure);
 extern int  audit_set_rate_limit(int fd, uint32_t limit);
 extern int  audit_set_backlog_limit(int fd, uint32_t limit);
+extern int  audit_set_feature(int fd, unsigned feature, unsigned value, unsigned lock);
+extern int  audit_set_loginuid_immutable(int fd);
 
-/* AUDIT_LIST */
+/* AUDIT_LIST_RULES */
 extern int  audit_request_rules_list_data(int fd);
 
 /* SIGNAL_INFO */
@@ -552,11 +518,11 @@ extern int audit_trim_subtrees(int fd);
 extern int audit_make_equivalent(int fd, const char *mount_point,
 				const char *subtree);
 
-/* AUDIT_ADD */
+/* AUDIT_ADD_RULE */
 extern int  audit_add_rule_data(int fd, struct audit_rule_data *rule,
                                 int flags, int action);
 
-/* AUDIT_DEL */
+/* AUDIT_DEL_RULE */
 extern int  audit_delete_rule_data(int fd, struct audit_rule_data *rule,
                                    int flags, int action);
 
@@ -594,6 +560,8 @@ extern int  audit_rule_syscallbyname_data(struct audit_rule_data *rule,
  * adding new fields */
 extern int  audit_rule_fieldpair_data(struct audit_rule_data **rulep,
                                       const char *pair, int flags);
+extern int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
+					 const char *pair, int flags);
 extern void audit_rule_free_data(struct audit_rule_data *rule);
 
 #ifdef __cplusplus

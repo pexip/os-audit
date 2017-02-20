@@ -1,5 +1,5 @@
 # Makefile.am -- 
-# Copyright 2004-2008 Red Hat Inc., Durham, North Carolina.
+# Copyright 2004-2009,2013-14 Red Hat Inc., Durham, North Carolina.
 # All Rights Reserved.
 #
 # This library is free software; you can redistribute it and/or
@@ -24,16 +24,22 @@ SUBDIRS = test
 CLEANFILES = $(BUILT_SOURCES)
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
 EXTRA_DIST = syscall-update.txt
+VERSION_INFO = 1:0
 AM_CFLAGS = -fPIC -DPIC -D_GNU_SOURCE
 INCLUDES = -I. -I${top_srcdir} -I${top_srcdir}/auparse
+
+pkgconfigdir = $(libdir)/pkgconfig
+pkgconfig_DATA = audit.pc
+DISTCLEANFILES = $(pkgconfig_DATA)
+
 lib_LTLIBRARIES = libaudit.la
 include_HEADERS = libaudit.h
 libaudit_la_SOURCES = libaudit.c message.c netlink.c \
 	lookup_table.c audit_logging.c deprecated.c \
-	private.h errormsg.h
+	dso.h private.h errormsg.h
 libaudit_la_LIBADD =
 libaudit_la_DEPENDENCIES = $(libaudit_la_SOURCES) ../config.h
-libaudit_la_LDFLAGS = -Wl,-z,relro
+libaudit_la_LDFLAGS = -Wl,-z,relro -version-info $(VERSION_INFO)
 nodist_libaudit_la_SOURCES = $(BUILT_SOURCES)
 
 BUILT_SOURCES = actiontabs.h errtabs.h fieldtabs.h flagtabs.h \
@@ -43,6 +49,12 @@ BUILT_SOURCES = actiontabs.h errtabs.h fieldtabs.h flagtabs.h \
 if USE_ALPHA
 BUILT_SOURCES += alpha_tables.h
 endif
+if USE_ARM
+BUILT_SOURCES += arm_tables.h
+endif
+if USE_AARCH64
+BUILT_SOURCES += aarch64_tables.h
+endif
 noinst_PROGRAMS = gen_actiontabs_h gen_errtabs_h gen_fieldtabs_h \
 	gen_flagtabs_h gen_ftypetabs_h gen_i386_tables_h \
 	gen_ia64_tables_h gen_machinetabs_h gen_msg_typetabs_h \
@@ -50,6 +62,12 @@ noinst_PROGRAMS = gen_actiontabs_h gen_errtabs_h gen_fieldtabs_h \
 	gen_s390x_tables_h gen_x86_64_tables_h
 if USE_ALPHA
 noinst_PROGRAMS += gen_alpha_tables_h
+endif
+if USE_ARM
+noinst_PROGRAMS += gen_arm_tables_h
+endif
+if USE_AARCH64
+noinst_PROGRAMS += gen_aarch64_tables_h
 endif
 gen_actiontabs_h_SOURCES = gen_tables.c gen_tables.h actiontab.h
 gen_actiontabs_h_CFLAGS = $(AM_CFLAGS) '-DTABLE_H="actiontab.h"'
@@ -61,6 +79,20 @@ gen_alpha_tables_h_SOURCES = gen_tables.c gen_tables.h alpha_table.h
 gen_alpha_tables_h_CFLAGS = $(AM_CFLAGS) '-DTABLE_H="alpha_table.h"'
 alpha_tables.h: gen_alpha_tables_h Makefile
 	./gen_alpha_tables_h --lowercase --i2s --s2i alpha_syscall > $@
+endif
+
+if USE_ARM
+gen_arm_tables_h_SOURCES = gen_tables.c gen_tables.h arm_table.h
+gen_arm_tables_h_CFLAGS = $(AM_CFLAGS) '-DTABLE_H="arm_table.h"'
+arm_tables.h: gen_arm_tables_h Makefile
+	./gen_arm_tables_h --lowercase --i2s --s2i arm_syscall > $@
+endif
+
+if USE_AARCH64
+gen_aarch64_tables_h_SOURCES = gen_tables.c gen_tables.h aarch64_table.h
+gen_aarch64_tables_h_CFLAGS = $(AM_CFLAGS) '-DTABLE_H="aarch64_table.h"'
+aarch64_tables.h: gen_aarch64_tables_h Makefile
+	./gen_aarch64_tables_h --lowercase --i2s --s2i aarch64_syscall > $@
 endif
 
 gen_errtabs_h_SOURCES = gen_tables.c gen_tables.h errtab.h

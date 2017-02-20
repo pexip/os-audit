@@ -1,6 +1,6 @@
 /*
 * ausearch-lol.c - linked list of linked lists library
-* Copyright (c) 2008 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2008,2010 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -58,14 +58,15 @@ void lol_clear(lol *lo)
 
 static void lol_append(lol *lo, llist *l)
 {
-	int i, new_size;
+	int i;
+	size_t new_size;
 	lolnode *ptr;
 
 	for(i=0; i<lo->limit; i++) {
 		lolnode *cur = &lo->array[i];
-		if (cur->status == 0) {
+		if (cur->status == L_EMPTY) {
 			cur->l = l;
-			cur->status = 1;
+			cur->status = L_BUILDING;
 			if (i > lo->maxi)
 				lo->maxi = i;
 			return;
@@ -78,7 +79,7 @@ static void lol_append(lol *lo, llist *l)
 		lo->array = ptr;
 		memset(&lo->array[lo->limit], 0, sizeof(lolnode) * ARRAY_LIMIT);
 		lo->array[i].l = l;
-		lo->array[i].status = 1;
+		lo->array[i].status = L_BUILDING;
 		lo->maxi = i;
 		lo->limit += ARRAY_LIMIT;
 	}
@@ -127,22 +128,26 @@ static int inline events_are_equal(event *e1, event *e2)
 /*
  * This function will look at the line and pick out pieces of it.
  */
-static void extract_timestamp(const char *b, event *e)
+static int extract_timestamp(const char *b, event *e)
 {
-	char *ptr, *tmp;
+	char *ptr, *tmp, *tnode, *ttype;
 
 	e->node = NULL;
-	tmp = strndupa(b, 120);
+	if (*b == 'n')
+		tmp = strndupa(b, 340);
+	else
+		tmp = strndupa(b, 80);
 	ptr = strtok(tmp, " ");
 	if (ptr) {
 		// Check to see if this is the node info
 		if (*ptr == 'n') {
-			e->node = strdup(ptr+5);
+			tnode = ptr+5;
 			ptr = strtok(NULL, " ");
-		}
+		} else
+			tnode = NULL;
 
 		// at this point we have type=
-		e->type = audit_name_to_msg_type(ptr+5);
+		ttype = ptr+5;
 
 		// Now should be pointing to msg=
 		ptr = strtok(NULL, " ");
@@ -162,31 +167,42 @@ static void extract_timestamp(const char *b, event *e)
 					fprintf(stderr,
 					  "Error extracting time stamp (%s)\n",
 						ptr);
+					return 0;
+				} else if ((start_time && e->sec < start_time)
+					|| (end_time && e->sec > end_time))
+					return 0;
+				else {
+					if (tnode)
+						e->node = strdup(tnode);
+					e->type = audit_name_to_msg_type(ttype);
 				}
+				return 1;
 			}
 			// else we have a bad line
 		}
 		// else we have a bad line
 	}
 	// else we have a bad line
+	return 0;
 }
 
 // This function will check events to see if they are complete 
+// FIXME: Can we think of other ways to determine if the event is done?
 static void check_events(lol *lo, time_t sec)
 {
 	int i;
 
 	for(i=0;i<=lo->maxi; i++) {
 		lolnode *cur = &lo->array[i];
-		if (cur->status == 1) {
+		if (cur->status == L_BUILDING) {
 			// If 2 seconds have elapsed, we are done
 			if (cur->l->e.sec + 2 < sec) { 
-				cur->status = 2;
+				cur->status = L_COMPLETE;
 				ready++;
 			} else if (cur->l->e.type < AUDIT_FIRST_EVENT ||
 				    cur->l->e.type >= AUDIT_FIRST_ANOM_MSG) {
 				// If known to be 1 record event, we are done
-				cur->status = 2;
+				cur->status = L_COMPLETE;
 				ready++;
 			} 
 		}
@@ -203,24 +219,19 @@ int lol_add_record(lol *lo, char *buff)
 	char *ptr;
 	llist *l;
 
+	// Short circuit if event is not of interest
+	if (extract_timestamp(buff, &e) == 0)
+		return 0;
+
 	ptr = strrchr(buff, 0x0a);
 	if (ptr)
 		*ptr = 0;
-	extract_timestamp(buff, &e);
-
-	// Short circuit if event is not of interest
-        if ((start_time && e.sec < start_time) ||
-			(end_time && e.sec > end_time)) {
-		free((char *)e.node);
-		return 0;
-	} else {
-		n.message=strdup(buff);
-		n.type = e.type;
-	}
+	n.message=strdup(buff);
+	n.type = e.type;
 
 	// Now see where this belongs
 	for (i=0; i<=lo->maxi; i++) {
-		if (lo->array[i].status == 1) {
+		if (lo->array[i].status == L_BUILDING) {
 			l = lo->array[i].l;
 			if (events_are_equal(&l->e, &e)) {
 				free((char *)e.node);
@@ -250,11 +261,12 @@ void terminate_all_events(lol *lo)
 
 	for (i=0; i<=lo->maxi; i++) {
 		lolnode *cur = &lo->array[i];
-		if (cur->status == 1) {
-			cur->status = 2;
+		if (cur->status == L_BUILDING) {
+			cur->status = L_COMPLETE;
 			ready++;
 		}
 	}
+//printf("maxi = %d\n",lo->maxi);
 }
 
 /* Search the list for any event that is ready to go. The caller
@@ -268,8 +280,8 @@ llist* get_ready_event(lol *lo)
 
 	for (i=0; i<=lo->maxi; i++) {
 		lolnode *cur = &lo->array[i];
-		if (cur->status == 2) {
-			cur->status = 0;
+		if (cur->status == L_COMPLETE) {
+			cur->status = L_EMPTY;
 			ready--;
 			return cur->l;
 		}

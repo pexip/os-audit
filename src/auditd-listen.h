@@ -25,9 +25,31 @@
 #define AUDITD_LISTEN_H
 
 #include "ev.h"
-void auditd_set_ports(int minp, int maxp, int max_p_addr);
+
+#ifdef USE_LISTENER
 int auditd_tcp_listen_init ( struct ev_loop *loop, struct daemon_conf *config );
-void auditd_tcp_listen_uninit ( struct ev_loop *loop );
-void auditd_tcp_listen_check_idle ( struct ev_loop *loop );
+void auditd_tcp_listen_uninit ( struct ev_loop *loop,
+				struct daemon_conf *config );
+void auditd_tcp_listen_reconfigure ( struct daemon_conf *nconf,
+				     struct daemon_conf *oconf );
+#else
+static inline int auditd_tcp_listen_init ( struct ev_loop *loop,
+					   struct daemon_conf *config )
+{
+	return 0;
+}
+
+static inline void auditd_tcp_listen_uninit ( struct ev_loop *loop,
+					      struct daemon_conf *config )
+{
+	return;
+}
+
+static inline void auditd_tcp_listen_reconfigure ( struct daemon_conf *nconf,
+						   struct daemon_conf *oconf )
+{
+	return;
+}
+#endif /* USE_LISTENER */
 
 #endif

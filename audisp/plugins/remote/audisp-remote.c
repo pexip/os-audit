@@ -1,5 +1,5 @@
 /* audisp-remote.c --
- * Copyright 2008,2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2008-2012 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -45,13 +45,21 @@
 #include <gssapi/gssapi_generic.h>
 #include <krb5.h>
 #endif
+#ifdef HAVE_LIBCAP_NG
+#include <cap-ng.h>
+#endif
 #include "libaudit.h"
 #include "private.h"
 #include "remote-config.h"
 #include "queue.h"
+#include "remote-fgets.h"
 
 #define CONFIG_FILE "/etc/audisp/audisp-remote.conf"
 #define BUF_SIZE 32
+
+/* MAX_AUDIT_MESSAGE_LENGTH, aligned to 4 KB so that an average q_append() only
+   writes to two disk disk blocks (1 aligned data block, 1 header block). */
+#define QUEUE_ENTRY_SIZE (3*4096)
 
 /* Error types */
 #define ET_SUCCESS	 0
@@ -62,22 +70,24 @@
 static volatile int stop = 0;
 static volatile int hup = 0;
 static volatile int suspend = 0;
+static volatile int dump = 0;
 static volatile int transport_ok = 0;
 static volatile int sock=-1;
 static volatile int remote_ended = 0, quiet = 0;
 static int ifd;
-static FILE *in;
+remote_conf_t config;
 
+/* Constants */
 static const char *SINGLE = "1";
 static const char *HALT = "0";
-static remote_conf_t config;
+static const char *INIT_PGM = "/sbin/init";
+static const char *SPOOL_FILE = "/var/spool/audit/remote.log";
 
 /* Local function declarations */
 static int check_message(void);
 static int relay_event(const char *s, size_t len);
 static int init_transport(void);
 static int stop_transport(void);
-
 static int ar_read (int, void *, int);
 static int ar_write (int, const void *, int);
 
@@ -89,6 +99,12 @@ gss_ctx_id_t my_context;
 #define REQ_FLAGS GSS_C_MUTUAL_FLAG | GSS_C_REPLAY_FLAG | GSS_C_INTEG_FLAG | GSS_C_CONF_FLAG
 #define USE_GSS (config.enable_krb5)
 #endif
+
+/* Compile-time expression verification */
+#define verify(E) do {				\
+		char verify__[(E) ? 1 : -1];	\
+		(void)verify__;			\
+	} while (0)
 
 /*
  * SIGTERM handler
@@ -113,6 +129,23 @@ static void reload_config(void)
 }
 
 /*
+ * SIGSUR1 handler: dump stats
+ */
+static void user1_handler( int sig )
+{
+        dump = 1;
+}
+
+static void dump_stats(struct queue *queue)
+{
+	syslog(LOG_INFO, "suspend=%s, transport_ok=%s, queue_size=%zu",
+		suspend ? "yes" : "no",
+		transport_ok ? "yes" : "no",
+		q_queue_length(queue));
+	dump = 0;
+}
+
+/*
  * SIGSUR2 handler: resume logging
  */
 static void user2_handler( int sig )
@@ -128,6 +161,7 @@ static void child_handler(int sig)
 	while (waitpid(-1, NULL, WNOHANG) > 0)
 		; /* empty */
 }
+
 /*
  * Handlers for various events coming back from the remote server.
  * Return -1 if the remote dispatcher should exit.
@@ -140,8 +174,7 @@ static int sync_error_handler (const char *why)
 	   be losing) sync.  Sync errors are transient - if a retry
 	   doesn't fix it, we eventually call network_failure_handler
 	   which has all the user-tweakable actions.  */
-	if (config.network_failure_action == FA_SYSLOG)
-		syslog (LOG_ERR, "lost/losing sync, %s", why);
+	syslog (LOG_ERR, "lost/losing sync, %s", why);
 	return 0;
 }
 
@@ -149,7 +182,6 @@ static void change_runlevel(const char *level)
 {
 	char *argv[3];
 	int pid;
-	static const char *init_pgm = "/sbin/init";
 
 	pid = fork();
 	if (pid < 0) {
@@ -161,11 +193,11 @@ static void change_runlevel(const char *level)
 		return;
 
 	/* Child */
-	argv[0] = (char *)init_pgm;
+	argv[0] = (char *)INIT_PGM;
 	argv[1] = (char *)level;
 	argv[2] = NULL;
-	execve(init_pgm, argv, NULL);
-	syslog(LOG_ALERT, "audisp-remote failed to exec %s", init_pgm);
+	execve(INIT_PGM, argv, NULL);
+	syslog(LOG_ALERT, "audisp-remote failed to exec %s", INIT_PGM);
 	exit(1);
 }
 
@@ -173,6 +205,12 @@ static void safe_exec(const char *exe, const char *message)
 {
 	char *argv[3];
 	int pid;
+
+	if (exe == NULL) {
+		syslog(LOG_ALERT,  
+			"Safe_exec passed NULL for program to execute");
+		return;
+	}
 
 	pid = fork();
 	if (pid < 0) {
@@ -247,21 +285,21 @@ static int network_failure_handler (const char *message)
 
 static int remote_disk_low_handler (const char *message)
 {
-	return do_action ("remote disk low", message,
+	return do_action ("remote server is low on disk space", message,
 			  LOG_WARNING,
 			  config.disk_low_action, config.disk_low_exe);
 }
 
 static int remote_disk_full_handler (const char *message)
 {
-	return do_action ("remote disk full", message,
+	return do_action ("remote server's disk is full", message,
 			  LOG_ERR,
 			  config.disk_full_action, config.disk_full_exe);
 }
 
 static int remote_disk_error_handler (const char *message)
 {
-	return do_action ("remote disk error", message,
+	return do_action ("remote server has a disk error", message,
 			  LOG_ERR,
 			  config.disk_error_action, config.disk_error_exe);
 }
@@ -270,7 +308,7 @@ static int remote_server_ending_handler (const char *message)
 {
 	stop_transport();
 	remote_ended = 1;
-	return do_action ("remote server ending", message,
+	return do_action ("remote server is going down", message,
 			  LOG_NOTICE,
 			  config.remote_ending_action,
 			  config.remote_ending_exe);
@@ -291,16 +329,101 @@ static int generic_remote_warning_handler (const char *message)
 			  config.generic_warning_exe);
 }
 
+/* Report and handle a queue error, using errno. */
+static void queue_error(void)
+{
+	char *errno_str;
+
+	errno_str = strerror(errno);
+	do_action("queue error", errno_str, LOG_ERR, config.queue_error_action,
+		  config.queue_error_exe);
+}
+
 static void send_heartbeat (void)
 {
 	relay_event (NULL, 0);
 }
 
+static void do_overflow_action(void)
+{
+        switch (config.overflow_action)
+        {
+                case OA_IGNORE:
+			break;
+                case OA_SYSLOG:
+			syslog(LOG_ERR, "queue is full - dropping event");
+                        break;
+                case OA_SUSPEND:
+                        syslog(LOG_ALERT,
+                            "Audisp-remote is suspending event processing due to overflowing its queue.");
+			suspend = 1;
+                        break;
+                case OA_SINGLE:
+                        syslog(LOG_ALERT,
+                                "Audisp-remote is now changing the system to single user mode due to overflowing its queue");
+                        change_runlevel(SINGLE);
+                        break;
+                case OA_HALT:
+                        syslog(LOG_ALERT,
+                                "Audisp-remote is now halting the system due to overflowing its queue");
+                        change_runlevel(HALT);
+                        break;
+                default:
+                        syslog(LOG_ALERT, "Unknown overflow action requested");
+                        break;
+        }
+}
+
+/* Initialize and return a queue depending on user's configuration.
+   On error return NULL and set errno. */
+static struct queue *init_queue(void)
+{
+	const char *path;
+	int q_flags;
+
+	if (config.queue_file != NULL)
+		path = config.queue_file;
+	else
+		path = SPOOL_FILE;
+	q_flags = Q_IN_MEMORY;
+	if (config.mode == M_STORE_AND_FORWARD)
+		/* FIXME: let user control Q_SYNC? */
+		q_flags |= Q_IN_FILE | Q_CREAT | Q_RESIZE;
+	verify(QUEUE_ENTRY_SIZE >= MAX_AUDIT_MESSAGE_LENGTH);
+	return q_open(q_flags, path, config.queue_depth, QUEUE_ENTRY_SIZE);
+}
+
+/* Send a record from QUEUE to the remote system */
+static void send_one(struct queue *queue)
+{
+	char event[MAX_AUDIT_MESSAGE_LENGTH];
+	int len;
+
+	if (suspend || !transport_ok)
+		return;
+
+	len = q_peek(queue, event, sizeof(event));
+	if (len == 0)
+		return;
+	if (len < 0) {
+		queue_error();
+		return;
+	}
+
+	/* We send len -1 to remove trailing \n */
+	if (relay_event(event, len-1) < 0)
+		return;
+
+	if (q_drop_head(queue) != 0)
+		queue_error();
+}
+
 int main(int argc, char *argv[])
 {
-	event_t *e;
 	struct sigaction sa;
-	int rc, q_len;
+	struct queue *queue;
+	int rc;
+	size_t q_len;
 
 	/* Register sighandlers */
 	sa.sa_flags = 0;
@@ -310,6 +433,8 @@ int main(int argc, char *argv[])
 	sigaction(SIGTERM, &sa, NULL);
 	sa.sa_handler = hup_handler;
 	sigaction(SIGHUP, &sa, NULL);
+	sa.sa_handler = user1_handler;
+	sigaction(SIGUSR1, &sa, NULL);
 	sa.sa_handler = user2_handler;
 	sigaction(SIGUSR2, &sa, NULL);
 	sa.sa_handler = child_handler;
@@ -318,42 +443,67 @@ int main(int argc, char *argv[])
 		return 6;
 
 	// ifd = open("test.log", O_RDONLY);
-	// in = fdopen(ifd, "r");
 	ifd = 0;
-	in = stdin;
+	fcntl(ifd, F_SETFL, O_NONBLOCK);
 
 	/* We fail here if the transport can't be initialized because of some
-	 * permenent (i.e. operator) problem, such as misspelled host name. */
+	 * permanent (i.e. operator) problem, such as misspelled host name. */
 	rc = init_transport();
 	if (rc == ET_PERMANENT)
 		return 1;
-	init_queue(config.queue_depth);
+	queue = init_queue();
+	if (queue == NULL) {
+		syslog(LOG_ERR, "Error initializing audit record queue: %m");
+		return 1;
+	}
 
-	do {
-		fd_set rfd;
+#ifdef HAVE_LIBCAP_NG
+	// Drop capabilities
+	capng_clear(CAPNG_SELECT_BOTH);
+	if (config.local_port && config.local_port < 1024)
+		capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
+			CAP_NET_BIND_SERVICE);
+	capng_apply(CAPNG_SELECT_BOTH);
+#endif
+	syslog(LOG_NOTICE, "Audisp-remote started with queue_size: %zu",
+		q_queue_length(queue));
+
+	while (stop == 0) { //FIXME break out when socket is closed
+		fd_set rfd, wfd;
 		struct timeval tv;
+		char event[MAX_AUDIT_MESSAGE_LENGTH];
 		int n, fds = ifd + 1;
 
 		/* Load configuration */
 		if (hup) 
 			reload_config();
 
+		if (dump)
+			dump_stats(queue);
+
+		/* Setup select flags */
 		FD_ZERO(&rfd);
 		FD_SET(ifd, &rfd);	// input fd
+		FD_ZERO(&wfd);
 		if (sock > 0) {
+			// Setup socket to read acks from server
 			FD_SET(sock, &rfd); // remote socket
 			if (sock > ifd)
 				fds = sock + 1;
+			// If we have anything in the queue,
+			// find out if we can send it
+			if (q_queue_length(queue) && !suspend && transport_ok)
+				FD_SET(sock, &wfd);
 		}
+
 		if (config.heartbeat_timeout > 0) {
 			tv.tv_sec = config.heartbeat_timeout;
 			tv.tv_usec = 0;
-			n = select(fds, &rfd, NULL, NULL, &tv);
+			n = select(fds, &rfd, &wfd, NULL, &tv);
 		} else
-			n = select(fds, &rfd, NULL, NULL, NULL);
+			n = select(fds, &rfd, &wfd, NULL, NULL);
 		if (n < 0)
-			// If we are here, we had some kind of problem
-			continue;
+			continue; // If here, we had some kind of problem
 
 		if ((config.heartbeat_timeout > 0) && n == 0 && !remote_ended) {
 			/* We attempt a hearbeat if select fails, which
@@ -366,51 +516,69 @@ int main(int argc, char *argv[])
 		}
 
 		// See if we got a shutdown message from the server
-		if (sock > 0 && FD_ISSET(sock, &rfd)) {
+		if (sock > 0 && FD_ISSET(sock, &rfd))
 			check_message();
-		}
 
-		// See if input fd is also set, otherwise we are done
-		if (!FD_ISSET(ifd, &rfd))
+		// If we broke out due to one of these, cycle to start
+		if (hup != 0 || stop != 0)
 			continue;
 
-		e = (event_t *)malloc(sizeof(event_t));
-		if (fgets_unlocked(e->data, MAX_AUDIT_MESSAGE_LENGTH, in) &&
-							hup==0 && stop==0) {
-			if (!transport_ok && remote_ended && 
-				config.remote_ending_action == FA_RECONNECT) {
-				quiet = 1;
-				if (init_transport() == ET_SUCCESS)
-					remote_ended = 0;
-				quiet = 0;
-			}
-			/* Strip out EOE records */
-			if (strstr(e->data,"type=EOE msg=audit(")) {
-				free(e);
-				continue;
-			}
-			enqueue(e);
-			rc = 0;
-			while (!suspend && rc >= 0 && transport_ok &&
-							(e = dequeue(1))) {
-				rc = relay_event(e->data, 
-					strnlen(e->data,
-					MAX_AUDIT_MESSAGE_LENGTH));
-				if (rc >= 0) {
-					dequeue(0); // delete it
-					free(e);
-				}
-			}
+		// See if input fd is also set
+		if (FD_ISSET(ifd, &rfd)) {
+			do {
+				if (remote_fgets(event, sizeof(event), ifd)) {
+					if (!transport_ok && remote_ended && 
+						config.remote_ending_action ==
+								 FA_RECONNECT) {
+						quiet = 1;
+						if (init_transport() ==
+								ET_SUCCESS)
+							remote_ended = 0;
+						quiet = 0;
+					}
+					/* Strip out EOE records */
+					if (*event == 't') {
+						if (strncmp(event,
+							"type=EOE", 8) == 0)
+							continue;
+					} else {
+						char *ptr = strchr(event, ' ');
+						if (ptr) {
+							ptr++;
+							if (strncmp(ptr,
+								"type=EOE",
+									8) == 0)
+								continue;
+						} else
+							continue; //malformed
+					}
+					if (q_append(queue, event) != 0) {
+						if (errno == ENOSPC)
+							do_overflow_action();
+						else
+							queue_error();
+					}
+				} else if (remote_fgets_eof())
+					stop = 1;
+			} while (remote_fgets_more(sizeof(event)));
 		}
-		if (feof(in))
-			break;
-	} while (stop == 0);
-	close(sock);
+		// See if output fd is also set
+		if (sock > 0 && FD_ISSET(sock, &wfd)) {
+			// If so, try to drain backlog
+			while (q_queue_length(queue) && !suspend &&
+					!stop && transport_ok)
+				send_one(queue);
+		}
+	}
+	if (sock >= 0) {
+		shutdown(sock, SHUT_RDWR);
+		close(sock);
+	}
 	free_config(&config);
-	q_len = queue_length();
-	destroy_queue();
+	q_len = q_queue_length(queue);
+	q_close(queue);
 	if (stop)
-		syslog(LOG_NOTICE, "audisp-remote is exiting on stop request");
+		syslog(LOG_NOTICE, "audisp-remote is exiting on stop request, queue_size: %zu", q_len);
 
 	return q_len ? 1 : 0;
 }
@@ -443,9 +611,10 @@ static int recv_token(int s, gss_buffer_t tok)
 		| ((uint32_t)(lenbuf[1] & 0xFF) << 16)
 		| ((uint32_t)(lenbuf[2] & 0xFF) << 8)
 		|  (uint32_t)(lenbuf[3] & 0xFF));
+
 	if (len > MAX_AUDIT_MESSAGE_LENGTH) {
 		syslog(LOG_ERR,
-			"GSS-API error: event length exceeds MAX_AUDIT_LENGTH");
+			"GSS-API error: event length excedes MAX_AUDIT_LENGTH");
 		return -1;
 	}
 	tok->length = len;
@@ -578,6 +747,7 @@ static int negotiate_credentials (void)
 
 	token_ptr = GSS_C_NO_BUFFER;
 	*gss_context = GSS_C_NO_CONTEXT;
+	recv_tok.value = NULL;
 
 	krberr = krb5_init_context (&kcontext);
 	KCHECK (krberr, "krb5_init_context");
@@ -770,7 +940,10 @@ static int negotiate_credentials (void)
 
 static int stop_sock(void)
 {
-	close(sock);
+	if (sock >= 0) {
+		shutdown(sock, SHUT_RDWR);
+		close(sock);
+	}
 	sock = -1;
 	transport_ok = 0;
 
@@ -810,13 +983,16 @@ static int init_sock(void)
 	hints.ai_flags = AI_ADDRCONFIG|AI_NUMERICSERV;
 	hints.ai_socktype = SOCK_STREAM;
 	snprintf(remote, BUF_SIZE, "%u", config.port);
-	rc=getaddrinfo(config.remote_server, remote, &hints, &ai);
+	rc = getaddrinfo(config.remote_server, remote, &hints, &ai);
 	if (rc) {
 		if (!quiet)
 			syslog(LOG_ERR,
 				"Error looking up remote host: %s - exiting",
 				gai_strerror(rc));
-		return ET_PERMANENT;
+		if (rc == EAI_NONAME || rc == EAI_NODATA)
+			return ET_PERMANENT;
+		else
+			return ET_TEMPORARY;
 	}
 	sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 	if (sock < 0) {
@@ -833,7 +1009,7 @@ static int init_sock(void)
 		struct sockaddr_in address;
 		
 		memset (&address, 0, sizeof(address));
-		address.sin_family = htons(AF_INET);
+		address.sin_family = AF_INET;
 		address.sin_port = htons(config.local_port);
 		address.sin_addr.s_addr = htonl(INADDR_ANY);
 
@@ -887,6 +1063,9 @@ static int init_transport(void)
 	{
 		case T_TCP:
 			rc = init_sock();
+			// We set this so that it will retry the connection
+			if (rc == ET_TEMPORARY)
+				remote_ended = 1;
 			break;
 		default:
 			rc = ET_PERMANENT;
@@ -983,7 +1162,9 @@ static int send_msg_gss (unsigned char *header, const char *msg, uint32_t mlen)
 	utok.value = malloc (utok.length);
 
 	memcpy (utok.value, header, AUDIT_RMW_HEADER_SIZE);
-	memcpy (utok.value+AUDIT_RMW_HEADER_SIZE, msg, mlen);
+	
+	if (msg != NULL && mlen > 0)
+		memcpy (utok.value+AUDIT_RMW_HEADER_SIZE, msg, mlen);
 
 	major_status = gss_wrap (&minor_status,
 				 my_context,
@@ -1056,19 +1237,15 @@ static int send_msg_tcp (unsigned char *header, const char *msg, uint32_t mlen)
 
 	rc = ar_write(sock, header, AUDIT_RMW_HEADER_SIZE);
 	if (rc <= 0) {
-		if (config.network_failure_action == FA_SYSLOG)
-			syslog(LOG_ERR, "connection to %s closed unexpectedly",
-			       config.remote_server);
+		syslog(LOG_ERR, "send to %s failed", config.remote_server);
 		return 1;
 	}
 
 	if (msg != NULL && mlen > 0) {
 		rc = ar_write(sock, msg, mlen);
 		if (rc <= 0) {
-			if (config.network_failure_action == FA_SYSLOG)
-				syslog(LOG_ERR,
-				       "connection to %s closed unexpectedly",
-				       config.remote_server);
+			syslog(LOG_ERR, "send to %s failed",
+				config.remote_server);
 			return 1;
 		}
 	}
@@ -1082,9 +1259,7 @@ static int recv_msg_tcp (unsigned char *header, char *msg, uint32_t *mlen)
 
 	rc = ar_read (sock, header, AUDIT_RMW_HEADER_SIZE);
 	if (rc < 16) {
-		if (config.network_failure_action == FA_SYSLOG)
-			syslog(LOG_ERR, "connection to %s closed unexpectedly",
-			       config.remote_server);
+		syslog(LOG_ERR, "read from %s failed", config.remote_server);
 		return -1;
 	}
 

@@ -1,26 +1,33 @@
-%define audit_version 1.7.18
-%define audit_release 1
-%define sca_version 0.4.10
-%define sca_release 1
 %{!?python_sitearch: %define python_sitearch %(%{__python} -c "from distutils.sysconfig import get_python_lib; print get_python_lib(1)")}
+
+# Do we want systemd?
+%if 0%{?!nosystemd:1}
+%define WITH_SYSTEMD 1
+%else
+%define WITH_SYSTEMD 0
+%endif
 
 Summary: User space tools for 2.6 kernel auditing
 Name: audit
-Version: %{audit_version}
-Release: %{audit_release}
+Version: 2.4
+Release: 1
 License: GPLv2+
 Group: System Environment/Daemons
 URL: http://people.redhat.com/sgrubb/audit/
 Source0: http://people.redhat.com/sgrubb/audit/%{name}-%{version}.tar.gz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
-BuildRequires: gettext-devel intltool libtool swig python-devel
-BuildRequires: tcp_wrappers-devel krb5-devel
-BuildRequires: kernel-headers >= 2.6.18
-BuildRequires: automake >= 1.9
-BuildRequires: autoconf >= 2.59
+BuildRequires: swig python-devel golang
+BuildRequires: tcp_wrappers-devel krb5-devel libcap-ng-devel
+BuildRequires: kernel-headers >= 2.6.29
 Requires: %{name}-libs = %{version}-%{release}
+%if %{WITH_SYSTEMD}
+BuildRequires: systemd-units
+Requires(post): systemd-units systemd-sysv chkconfig coreutils
+Requires(preun): systemd-units
+Requires(postun): systemd-units coreutils
+%else
 Requires: chkconfig
-Requires(pre): coreutils
+%endif
 
 %description
 The audit package contains the user space utilities for
@@ -37,16 +44,26 @@ The audit-libs package contains the dynamic libraries needed for
 applications to use the audit framework.
 
 %package libs-devel
-Summary: Header files and static library for libaudit
+Summary: Header files for libaudit
 License: LGPLv2+
 Group: Development/Libraries
 Requires: %{name}-libs = %{version}-%{release}
-Requires: kernel-headers >= 2.6.18
+Requires: kernel-headers >= 2.6.29
 
 %description libs-devel
-The audit-libs-devel package contains the static libraries and header 
-files needed for developing applications that need to use the audit 
-framework libraries.
+The audit-libs-devel package contains the header files needed for
+developing applications that need to use the audit framework libraries.
+
+%package libs-static
+Summary: Static version of libaudit library
+License: LGPLv2+
+Group: Development/Libraries
+Requires: kernel-headers >= 2.6.29
+
+%description libs-static
+The audit-libs-static package contains the static libraries
+needed for developing applications that need to use static audit
+framework libraries
 
 %package libs-python
 Summary: Python bindings for libaudit
@@ -63,7 +80,6 @@ Summary: Plugins for the audit event dispatcher
 License: GPLv2+
 Group: System Environment/Daemons
 BuildRequires: openldap-devel
-BuildRequires: libprelude-devel >= 0.9.16
 Requires: %{name} = %{version}-%{release}
 Requires: %{name}-libs = %{version}-%{release}
 Requires: openldap
@@ -74,35 +90,29 @@ interface to the audit system, audispd. These plugins can do things
 like relay events to remote machines or analyze events for suspicious
 behavior.
 
-%package -n system-config-audit
-Summary: Utility for editing audit configuration
-Version: %{sca_version}
-Release: %{sca_release}
-License: GPLv2+
-Group: Applications/System
-BuildRequires: desktop-file-utils
-Requires: pygtk2-libglade usermode usermode-gtk
-Requires: %{name}-libs = %{audit_version}-%{audit_release}
-
-%description -n system-config-audit
-A graphical utility for editing audit configuration.
-
 %prep
 %setup -q
 
 %build
-%configure --sbindir=/sbin --libdir=/%{_lib} --with-prelude --with-libwrap --enable-gssapi-krb5=yes
+%configure --sbindir=/sbin --libdir=/%{_lib} --with-python=yes --with-golang --with-libwrap --enable-gssapi-krb5=yes --with-libcap-ng=yes \
+%if %{WITH_SYSTEMD}
+	--enable-systemd
+%endif
+
 make %{?_smp_mflags}
 
 %install
 rm -rf $RPM_BUILD_ROOT
-mkdir -p $RPM_BUILD_ROOT/{sbin,etc/{sysconfig,audispd/plugins.d,rc.d/init.d}}
+mkdir -p $RPM_BUILD_ROOT/{sbin,etc/audispd/plugins.d}
+%if !%{WITH_SYSTEMD}
+mkdir -p $RPM_BUILD_ROOT/{etc/{sysconfig,rc.d/init.d}}
+%endif
 mkdir -p $RPM_BUILD_ROOT/%{_mandir}/{man5,man8}
 mkdir -p $RPM_BUILD_ROOT/%{_lib}
 mkdir -p $RPM_BUILD_ROOT/%{_libdir}/audit
 mkdir -p $RPM_BUILD_ROOT/%{_var}/log/audit
+mkdir -p $RPM_BUILD_ROOT/%{_var}/spool/audit
 make DESTDIR=$RPM_BUILD_ROOT install
-make -C system-config-audit DESTDIR=$RPM_BUILD_ROOT install-fedora
 
 mkdir -p $RPM_BUILD_ROOT/%{_libdir}
 # This winds up in the wrong place when libtool is involved
@@ -127,15 +137,12 @@ rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/_auparse.la
 rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/auparse.a
 rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/auparse.la
 
+# Move the pkgconfig file
+mv $RPM_BUILD_ROOT/%{_lib}/pkgconfig $RPM_BUILD_ROOT%{_libdir}
+
 # On platforms with 32 & 64 bit libs, we need to coordinate the timestamp
 touch -r ./audit.spec $RPM_BUILD_ROOT/etc/libaudit.conf
-
-%find_lang system-config-audit
-
-desktop-file-install					\
-	--dir $RPM_BUILD_ROOT/%{_datadir}/applications	\
-	--delete-original				\
-	system-config-audit/system-config-audit.desktop
+touch -r ./audit.spec $RPM_BUILD_ROOT/usr/share/man/man5/libaudit.conf.5.gz
 
 %check
 make check
@@ -146,13 +153,25 @@ rm -rf $RPM_BUILD_ROOT
 %post libs -p /sbin/ldconfig
 
 %post
+# Copy default rules into place on new installation
+if [ ! -e /etc/audit/audit.rules ] ; then
+	cp /etc/audit/rules.d/audit.rules /etc/audit/audit.rules
+fi
+%if %{WITH_SYSTEMD}
+%systemd_post auditd.service
+%else
 /sbin/chkconfig --add auditd
+%endif
 
 %preun
+%if %{WITH_SYSTEMD}
+%systemd_preun auditd.service
+%else
 if [ $1 -eq 0 ]; then
    /sbin/service auditd stop > /dev/null 2>&1
    /sbin/chkconfig --del auditd
 fi
+%endif
 
 %postun libs -p /sbin/ldconfig
 
@@ -162,25 +181,32 @@ if [ $1 -ge 1 ]; then
 fi
 
 %files libs
-%defattr(-,root,root)
-%attr(755,root,root) /%{_lib}/libaudit.so.1*
-%attr(755,root,root) /%{_lib}/libauparse.*
+%defattr(-,root,root,-)
+/%{_lib}/libaudit.so.1*
+/%{_lib}/libauparse.*
 %config(noreplace) %attr(640,root,root) /etc/libaudit.conf
+%{_mandir}/man5/libaudit.conf.5.gz
 
 %files libs-devel
-%defattr(-,root,root)
+%defattr(-,root,root,-)
 %doc contrib/skeleton.c contrib/plugin
-%{_libdir}/libaudit.a
-%{_libdir}/libauparse.a
 %{_libdir}/libaudit.so
 %{_libdir}/libauparse.so
+%dir %{_prefix}/lib/golang/src/pkg/redhat.com/audit
+%{_prefix}/lib/golang/src/pkg/redhat.com/audit/audit.go
 %{_includedir}/libaudit.h
 %{_includedir}/auparse.h
 %{_includedir}/auparse-defs.h
+%{_libdir}/pkgconfig/audit.pc
 %{_mandir}/man3/*
 
+%files libs-static
+%defattr(-,root,root,-)
+%{_libdir}/libaudit.a
+%{_libdir}/libauparse.a
+
 %files libs-python
-%defattr(-,root,root)
+%defattr(-,root,root,-)
 %attr(755,root,root) %{python_sitearch}/_audit.so
 %attr(755,root,root) %{python_sitearch}/auparse.so
 %{python_sitearch}/audit.py*
@@ -196,6 +222,8 @@ fi
 %attr(644,root,root) %{_mandir}/man8/autrace.8.gz
 %attr(644,root,root) %{_mandir}/man8/aulast.8.gz
 %attr(644,root,root) %{_mandir}/man8/aulastlog.8.gz
+%attr(644,root,root) %{_mandir}/man8/auvirt.8.gz
+%attr(644,root,root) %{_mandir}/man8/augenrules.8.gz
 %attr(644,root,root) %{_mandir}/man8/ausyscall.8.gz
 %attr(644,root,root) %{_mandir}/man7/audit.rules.7.gz
 %attr(644,root,root) %{_mandir}/man5/auditd.conf.5.gz
@@ -207,18 +235,31 @@ fi
 %attr(755,root,root) /sbin/aureport
 %attr(750,root,root) /sbin/autrace
 %attr(750,root,root) /sbin/audispd
+%attr(750,root,root) /sbin/augenrules
 %attr(755,root,root) %{_bindir}/aulast
 %attr(755,root,root) %{_bindir}/aulastlog
 %attr(755,root,root) %{_bindir}/ausyscall
+%attr(755,root,root) %{_bindir}/auvirt
+%if %{WITH_SYSTEMD}
+%attr(640,root,root) %{_unitdir}/auditd.service
+%attr(750,root,root) %dir %{_libexecdir}/initscripts/legacy-actions/auditd
+%attr(750,root,root) %{_libexecdir}/initscripts/legacy-actions/auditd/resume
+%attr(750,root,root) %{_libexecdir}/initscripts/legacy-actions/auditd/rotate
+%attr(750,root,root) %{_libexecdir}/initscripts/legacy-actions/auditd/stop
+%attr(750,root,root) %{_libexecdir}/initscripts/legacy-actions/auditd/restart
+%attr(750,root,root) %{_libexecdir}/initscripts/legacy-actions/auditd/condrestart
+%else
 %attr(755,root,root) /etc/rc.d/init.d/auditd
-%attr(750,root,root) %{_var}/log/audit
+%config(noreplace) %attr(640,root,root) /etc/sysconfig/auditd
+%endif
+%attr(750,root,root) %dir %{_var}/log/audit
 %attr(750,root,root) %dir /etc/audit
+%attr(750,root,root) %dir /etc/audit/rules.d
 %attr(750,root,root) %dir /etc/audisp
 %attr(750,root,root) %dir /etc/audisp/plugins.d
-%attr(750,root,root) %dir %{_libdir}/audit
 %config(noreplace) %attr(640,root,root) /etc/audit/auditd.conf
-%config(noreplace) %attr(640,root,root) /etc/audit/audit.rules
-%config(noreplace) %attr(640,root,root) /etc/sysconfig/auditd
+%config(noreplace) %attr(640,root,root) /etc/audit/rules.d/audit.rules
+%ghost %config(noreplace) %attr(640,root,root) /etc/audit/audit.rules
 %config(noreplace) %attr(640,root,root) /etc/audisp/audispd.conf
 %config(noreplace) %attr(640,root,root) /etc/audisp/plugins.d/af_unix.conf
 %config(noreplace) %attr(640,root,root) /etc/audisp/plugins.d/syslog.conf
@@ -230,33 +271,15 @@ fi
 %config(noreplace) %attr(640,root,root) /etc/audisp/plugins.d/audispd-zos-remote.conf
 %config(noreplace) %attr(640,root,root) /etc/audisp/zos-remote.conf
 %attr(750,root,root) /sbin/audispd-zos-remote
-%config(noreplace) %attr(640,root,root) /etc/audisp/plugins.d/au-prelude.conf
-%config(noreplace) %attr(640,root,root) /etc/audisp/audisp-prelude.conf
-%attr(750,root,root) /sbin/audisp-prelude
-%attr(644,root,root) %{_mandir}/man5/audisp-prelude.conf.5.gz
-%attr(644,root,root) %{_mandir}/man8/audisp-prelude.8.gz
 %config(noreplace) %attr(640,root,root) /etc/audisp/audisp-remote.conf
 %config(noreplace) %attr(640,root,root) /etc/audisp/plugins.d/au-remote.conf
 %attr(750,root,root) /sbin/audisp-remote
+%attr(700,root,root) %dir %{_var}/spool/audit
 %attr(644,root,root) %{_mandir}/man5/audisp-remote.conf.5.gz
 %attr(644,root,root) %{_mandir}/man8/audisp-remote.8.gz
 
-%files -n system-config-audit -f system-config-audit.lang
-%defattr(-,root,root,-)
-%doc system-config-audit/AUTHORS
-%doc system-config-audit/COPYING
-%doc system-config-audit/ChangeLog
-%doc system-config-audit/NEWS
-%doc system-config-audit/README
-%{_bindir}/system-config-audit
-%{_datadir}/applications/system-config-audit.desktop
-%{_datadir}/system-config-audit
-%{_libexecdir}/system-config-audit-server-real
-%{_libexecdir}/system-config-audit-server
-%config(noreplace) %{_sysconfdir}/pam.d/system-config-audit-server
-%config(noreplace) %{_sysconfdir}/security/console.apps/system-config-audit-server
 
 %changelog
-* Sun Sep 19 2010 Steve Grubb <sgrubb@redhat.com> 1.7.18-1
--New upstream release
+* Sun Aug 24 2014 Steve Grubb <sgrubb@redhat.com> 2.4-1
+- New upstream release
 

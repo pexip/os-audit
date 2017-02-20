@@ -1,5 +1,5 @@
 /* libaudit.c -- 
- * Copyright 2004-2007 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-2009,2012,2014 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -34,8 +34,11 @@
 #include <errno.h>
 #include <sys/poll.h>
 #include <sys/utsname.h>
+#include <sys/stat.h>
 #include <fcntl.h>	/* O_NOFOLLOW needs gnu defined */
 #include <limits.h>	/* for PATH_MAX */
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include "libaudit.h"
 #include "private.h"
@@ -76,10 +79,10 @@ static const struct nv_list failure_actions[] =
   { NULL,		0 }
 };
 
-int audit_permadded hidden = 0;
-int audit_archadded hidden = 0;
-int audit_syscalladded hidden = 0;
-unsigned int audit_elf hidden = 0U;
+int _audit_permadded = 0;
+int _audit_archadded = 0;
+int _audit_syscalladded = 0;
+unsigned int _audit_elf = 0U;
 static struct libaudit_conf config;
 
 static int audit_failure_parser(const char *val, int line);
@@ -92,8 +95,7 @@ static const struct kw_pair keywords[] =
   { NULL,		NULL }
 };
 
-/* FIXME: Make this static again after deprecated functions no longer need it */
-int hidden audit_priority(int xerrno)
+static int audit_priority(int xerrno)
 {
 	/* If they've compiled their own kernel and did not include
 	 * the audit susbsystem, they will get ECONNREFUSED. We'll
@@ -228,26 +230,31 @@ static int load_libaudit_config(const char *path)
 	if (fstat(fd, &st) < 0) {
 		audit_msg(LOG_ERR, "Error fstat'ing %s (%s)",
 			path, strerror(errno));
+		close(fd);
 		return 1;
 	}
 	if (st.st_uid != 0) {
 		audit_msg(LOG_ERR, "Error - %s isn't owned by root", path);
+		close(fd);
 		return 1;
 	}
 	if ((st.st_mode & S_IWOTH) == S_IWOTH) {
 		audit_msg(LOG_ERR, "Error - %s is world writable", path);
+		close(fd);
 		return 1;
 	}
 	if (!S_ISREG(st.st_mode)) {
 		audit_msg(LOG_ERR, "Error - %s is not a regular file", path);
+		close(fd);
 		return 1;
 	}
 
 	/* it's ok, read line by line */
-	f = fdopen(fd, "r");
+	f = fdopen(fd, "rm");
 	if (f == NULL) {
 		audit_msg(LOG_ERR, "Error - fdopen failed (%s)",
 			strerror(errno));
+		close(fd);
 		return 1;
 	}
 
@@ -279,8 +286,10 @@ static int load_libaudit_config(const char *path)
 			lineno++;
 			continue;
 		}
-		if (nv.value == NULL)
-			return 1; 
+		if (nv.value == NULL) {
+			fclose(f);
+			return 1;
+		}
 
 		/* identify keyword or error */
 		kw = kw_lookup(nv.name);
@@ -484,6 +493,61 @@ int audit_set_backlog_limit(int fd, uint32_t limit)
 	return rc;
 }
 
+int audit_set_feature(int fd, unsigned feature, unsigned value, unsigned lock)
+{
+#if HAVE_DECL_AUDIT_FEATURE_VERSION
+	int rc;
+	struct audit_features f;
+
+	memset(&f, 0, sizeof(f));
+	f.mask = AUDIT_FEATURE_TO_MASK(feature);
+	if (value)
+		f.features = AUDIT_FEATURE_TO_MASK(feature);
+	if (lock)
+		f.lock = AUDIT_FEATURE_TO_MASK(feature);
+	rc = audit_send(fd, AUDIT_SET_FEATURE, &f, sizeof(f));
+	if (rc < 0)
+		audit_msg(audit_priority(errno),
+			"Error setting feature (%s)", 
+			strerror(-rc));
+	return rc;
+#else
+	errno = EINVAL;
+	return -1;
+#endif
+}
+hidden_def(audit_set_feature)
+
+int audit_request_features(int fd)
+{
+#if HAVE_DECL_AUDIT_FEATURE_VERSION
+	int rc;
+	struct audit_features f;
+
+	memset(&f, 0, sizeof(f));
+	rc = audit_send(fd, AUDIT_GET_FEATURE, &f, sizeof(f));
+	if (rc < 0)
+		audit_msg(audit_priority(errno),
+			"Error getting feature (%s)", 
+			strerror(-rc));
+	return rc;
+#else
+	errno = EINVAL;
+	return -1;
+#endif
+}
+hidden_def(audit_request_features)
+
+extern int  audit_set_loginuid_immutable(int fd)
+{
+#if HAVE_DECL_AUDIT_FEATURE_VERSION
+	return audit_set_feature(fd, AUDIT_FEATURE_LOGINUID_IMMUTABLE, 1, 1);
+#else
+	errno = EINVAL;
+	return -1;
+#endif
+}
+
 int audit_request_rules_list_data(int fd)
 {
 	int rc = audit_send(fd, AUDIT_LIST_RULES, NULL, 0);
@@ -582,7 +646,7 @@ int audit_add_watch_dir(int type, struct audit_rule_data **rulep,
 	rule->values[1] = AUDIT_PERM_READ | AUDIT_PERM_WRITE |
 				AUDIT_PERM_EXEC | AUDIT_PERM_ATTR;
 	
-	audit_permadded = 1;
+	_audit_permadded = 1;
 
 	return  0;
 }
@@ -593,6 +657,10 @@ int audit_add_rule_data(int fd, struct audit_rule_data *rule,
 {
 	int rc;
 
+	if (flags == AUDIT_FILTER_ENTRY) {
+		audit_msg(LOG_WARNING, "Use of entry filter is deprecated");
+		return -2;
+	}
 	rule->flags  = flags;
 	rule->action = action;
 	rc = audit_send(fd, AUDIT_ADD_RULE, rule, 
@@ -610,6 +678,10 @@ int audit_delete_rule_data(int fd, struct audit_rule_data *rule,
 {
 	int rc;
 
+	if (flags == AUDIT_FILTER_ENTRY) {
+		audit_msg(LOG_WARNING, "Use of entry filter is deprecated");
+		return -2;
+	}
 	rule->flags  = flags;
 	rule->action = action;
 	rc = audit_send(fd, AUDIT_DEL_RULE, rule, 
@@ -756,10 +828,10 @@ int audit_rule_syscallbyname_data(struct audit_rule_data *rule,
 			rule->mask[i] = ~0;
 		return 0;
 	}
-	if (!audit_elf)
+	if (!_audit_elf)
 		machine = audit_detect_machine();
 	else
-		machine = audit_elf_to_machine(audit_elf);
+		machine = audit_elf_to_machine(_audit_elf);
 	if (machine < 0)
 		return -2;
 	nr = audit_name_to_syscall(scall, machine);
@@ -772,6 +844,366 @@ int audit_rule_syscallbyname_data(struct audit_rule_data *rule,
 	return -1;
 }
 hidden_def(audit_rule_syscallbyname_data)
+
+int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
+					 const char *pair,
+					 int flags) {
+	const char *f = pair;
+	char       *v;
+	int        op;
+	int        field1, field2;
+	struct audit_rule_data *rule = *rulep;
+
+	if (f == NULL)
+		return -1;
+
+	if (rule->field_count >= (AUDIT_MAX_FIELDS - 1))
+		return -28;
+
+	/* look for 2-char operators first
+	   then look for 1-char operators afterwards
+	   when found, null out the bytes under the operators to split
+	   and set value pointer just past operator bytes
+	*/
+	if ( (v = strstr(pair, "!=")) ) {
+		*v++ = '\0';
+		*v++ = '\0';
+		op = AUDIT_NOT_EQUAL;
+	} else if ( (v = strstr(pair, "=")) ) {
+		*v++ = '\0';
+		op = AUDIT_EQUAL;
+	} else {
+		return -13;
+	}
+
+	if (*f == 0)
+		return -24;
+
+	if (*v == 0)
+		return -25;
+
+	if ((field1 = audit_name_to_field(f)) < 0)
+		return -26;
+
+	if ((field2 = audit_name_to_field(v)) < 0)
+		return -27;
+
+	/* Interfield comparison can only be in exit filter */
+	if (flags != AUDIT_FILTER_EXIT)
+		return -7;
+
+	// It should always be AUDIT_FIELD_COMPARE
+	rule->fields[rule->field_count] = AUDIT_FIELD_COMPARE;
+	rule->fieldflags[rule->field_count] = op;
+	/* oh god, so many permutations */
+	switch (field1)
+	{
+		/* UID comparison */
+		case AUDIT_EUID:
+			switch(field2) {
+			case AUDIT_LOGINUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_EUID;
+				break;
+			case AUDIT_FSUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_FSUID;
+				break;
+			case AUDIT_OBJ_UID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_OBJ_UID;
+				break;
+			case AUDIT_SUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_SUID;
+				break;
+			case AUDIT_UID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_EUID;
+				break;
+			default:
+				return -1;
+			}
+			break;
+		case AUDIT_FSUID:
+			switch(field2) {
+			case AUDIT_LOGINUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_FSUID;
+				break;
+			case AUDIT_EUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_FSUID;
+				break;
+			case AUDIT_OBJ_UID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_FSUID_TO_OBJ_UID;
+				break;
+			case AUDIT_SUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_SUID_TO_FSUID;
+				break;
+			case AUDIT_UID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_FSUID;
+				break;
+			default:
+				return -1;
+			}
+			break;
+		case AUDIT_LOGINUID:
+			switch(field2) {
+			case AUDIT_EUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_EUID;
+				break;
+			case AUDIT_FSUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_FSUID;
+				break;
+			case AUDIT_OBJ_UID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_OBJ_UID;
+				break;
+			case AUDIT_SUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_SUID;
+				break;
+			case AUDIT_UID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_AUID;
+				break;
+			default:
+				return -1;
+			}
+			break;
+		case AUDIT_SUID:
+			switch(field2) {
+			case AUDIT_LOGINUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_SUID;
+				break;
+			case AUDIT_EUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_SUID;
+				break;
+			case AUDIT_FSUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_SUID_TO_FSUID;
+				break;
+			case AUDIT_OBJ_UID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_SUID_TO_OBJ_UID;
+				break;
+			case AUDIT_UID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_SUID;
+				break;
+			default:
+				return -1;
+			}
+			break;
+		case AUDIT_OBJ_UID:
+			switch(field2) {
+			case AUDIT_LOGINUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_OBJ_UID;
+				break;
+			case AUDIT_EUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_OBJ_UID;
+				break;
+			case AUDIT_FSUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_FSUID_TO_OBJ_UID;
+				break;
+			case AUDIT_UID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_OBJ_UID;
+				break;
+			case AUDIT_SUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_SUID_TO_OBJ_UID;
+				break;
+			default:
+				return -1;
+			}
+			break;
+		case AUDIT_UID:
+			switch(field2) {
+			case AUDIT_LOGINUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_AUID;
+				break;
+			case AUDIT_EUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_EUID;
+				break;
+			case AUDIT_FSUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_FSUID;
+				break;
+			case AUDIT_OBJ_UID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_OBJ_UID;
+				break;
+			case AUDIT_SUID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_SUID;
+				break;
+			default:
+				return -1;
+			}
+			break;
+
+		/* GID comparisons */
+		case AUDIT_EGID:
+			switch(field2) {
+			case AUDIT_FSGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_FSGID;
+				break;
+			case AUDIT_GID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_EGID;
+				break;
+			case AUDIT_OBJ_GID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_OBJ_GID;
+				break;
+			case AUDIT_SGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_SGID;
+				break;
+			default:
+				return -1;
+			}
+			break;
+		case AUDIT_FSGID:
+			switch(field2) {
+			case AUDIT_SGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_SGID_TO_FSGID;
+				break;
+			case AUDIT_GID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_FSGID;
+				break;
+			case AUDIT_OBJ_GID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_FSGID_TO_OBJ_GID;
+				break;
+			case AUDIT_EGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_FSGID;
+				break;
+			default:
+				return -1;
+			}
+			break;
+		case AUDIT_GID:
+			switch(field2) {
+			case AUDIT_EGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_EGID;
+				break;
+			case AUDIT_FSGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_FSGID;
+				break;
+			case AUDIT_OBJ_GID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_OBJ_GID;
+				break;
+			case AUDIT_SGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_SGID;
+				break;
+			default:
+				return -1;
+			}
+			break;
+		case AUDIT_OBJ_GID:
+			switch(field2) {
+			case AUDIT_EGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_OBJ_GID;
+				break;
+			case AUDIT_FSGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_FSGID_TO_OBJ_GID;
+				break;
+			case AUDIT_GID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_OBJ_GID;
+				break;
+			case AUDIT_SGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_SGID_TO_OBJ_GID;
+				break;
+			default:
+				return -1;
+			}
+			break;
+		case AUDIT_SGID:
+			switch(field2) {
+			case AUDIT_FSGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_SGID_TO_FSGID;
+				break;
+			case AUDIT_GID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_SGID;
+				break;
+			case AUDIT_OBJ_GID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_SGID_TO_OBJ_GID;
+				break;
+			case AUDIT_EGID:
+				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_SGID;
+				break;
+			default:
+				return -1;
+			}
+			break;
+		default:
+			return -1;
+			break;
+	}
+	rule->field_count++;
+	return 0;
+}
+
+int audit_determine_machine(const char *arch)
+{	// What do we want? i686, x86_64, ia64 or b64, b32
+	int machine;
+	unsigned int bits = 0;
+
+	if (strcasecmp("b64", arch) == 0) {
+		bits = __AUDIT_ARCH_64BIT;
+		machine = audit_detect_machine();
+	} else if (strcasecmp("b32", arch) == 0) {
+		bits = ~__AUDIT_ARCH_64BIT;
+		machine = audit_detect_machine();
+	} else { 
+		machine = audit_name_to_machine(arch);
+		if (machine < 0) {
+			// See if its numeric
+			unsigned int ival;
+			errno = 0;
+			ival = strtoul(arch, NULL, 16);
+			if (errno)
+				return -4;
+			machine = audit_elf_to_machine(ival);
+		}
+	}
+
+	if (machine < 0) 
+		return -4;
+
+	/* Here's where we fixup the machine. For example, they give
+	 * x86_64 & want 32 bits we translate that to i686. */
+	if (bits == ~__AUDIT_ARCH_64BIT && machine == MACH_86_64)
+		machine = MACH_X86;
+	else if (bits == ~__AUDIT_ARCH_64BIT && machine == MACH_PPC64)
+		machine = MACH_PPC;
+	else if (bits == ~__AUDIT_ARCH_64BIT && machine == MACH_S390X)
+		machine = MACH_S390;
+	else if (bits == ~__AUDIT_ARCH_64BIT && machine == MACH_AARCH64)
+		machine = MACH_ARM;
+
+	/* Check for errors - return -6 
+	 * We don't allow 32 bit machines to specify 64 bit. */
+	switch (machine)
+	{
+		case MACH_X86:
+			if (bits == __AUDIT_ARCH_64BIT)
+				return -6;
+			break;
+		case MACH_IA64:
+			if (bits == ~__AUDIT_ARCH_64BIT)
+				return -6;
+			break;
+		case MACH_PPC:
+			if (bits == __AUDIT_ARCH_64BIT)
+				return -6;
+			break;
+		case MACH_S390:
+			if (bits == __AUDIT_ARCH_64BIT)
+				return -6;
+			break;
+#ifdef WITH_ARM
+		case MACH_ARM:
+			if (bits == __AUDIT_ARCH_64BIT)
+				return -6;
+			break;
+#endif
+#ifdef WITH_AARCH64
+		case MACH_AARCH64:
+			if (bits != __AUDIT_ARCH_64BIT)
+				return -6;
+			break;
+#endif
+		case MACH_86_64: /* fallthrough */
+		case MACH_PPC64: /* fallthrough */
+		case MACH_S390X: /* fallthrough */
+			break;
+		default:
+			return -6;
+	}
+	return machine;
+}
 
 int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
                               int flags)
@@ -786,6 +1218,9 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 
 	if (f == NULL)
 		return -1;
+
+	if (rule->field_count >= (AUDIT_MAX_FIELDS - 1))
+		return -28;
 
 	/* look for 2-char operators first
 	   then look for 1-char operators afterwards
@@ -847,6 +1282,8 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 		case AUDIT_SUID:
 		case AUDIT_FSUID:
 		case AUDIT_LOGINUID:
+		case AUDIT_OBJ_UID:
+		case AUDIT_OBJ_GID:
 			// Do positive & negative separate for 32 bit systems
 			vlen = strlen(v);
 			if (isdigit((char)*(v))) 
@@ -857,7 +1294,10 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 				rule->values[rule->field_count] =
 					strtol(v, NULL, 0);
 			else {
-				if (audit_name_to_uid(v, 
+				if (strcmp(v, "unset") == 0)
+					rule->values[rule->field_count] =
+								4294967295;
+				else if (audit_name_to_uid(v, 
 					&rule->values[rule->field_count])) {
 					audit_msg(LOG_ERR, "Unknown user: %s",
 						v);
@@ -900,7 +1340,8 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 			}
 			break;
 		case AUDIT_MSGTYPE:
-			if (flags != AUDIT_FILTER_EXCLUDE)
+			if (flags != AUDIT_FILTER_EXCLUDE &&
+					flags != AUDIT_FILTER_USER)
 				return -9;
 
 			if (isdigit((char)*(v)))
@@ -926,7 +1367,7 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 			if (flags != AUDIT_FILTER_EXIT)
 				return -7;
 			if (field == AUDIT_WATCH || field == AUDIT_DIR)
-				audit_permadded = 1;
+				_audit_permadded = 1;
 
 			/* fallthrough */
 		case AUDIT_SUBJ_USER:
@@ -935,7 +1376,7 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 		case AUDIT_SUBJ_SEN:
 		case AUDIT_SUBJ_CLR:
 		case AUDIT_FILTERKEY:
-			if (field == AUDIT_FILTERKEY && !(audit_syscalladded || audit_permadded))
+			if (field == AUDIT_FILTERKEY && !(_audit_syscalladded || _audit_permadded))
                                 return -19;
 			vlen = strlen(v);
 			if (field == AUDIT_FILTERKEY &&
@@ -958,7 +1399,7 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 
 			break;
 		case AUDIT_ARCH:
-			if (audit_syscalladded) 
+			if (_audit_syscalladded) 
 				return -3;
 			if (!(op == AUDIT_NOT_EQUAL || op == AUDIT_EQUAL))
 				return -13;
@@ -966,86 +1407,29 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 				int machine;
 
 				errno = 0;
-				audit_elf = strtoul(v, NULL, 0);
+				_audit_elf = strtoul(v, NULL, 0);
 				if (errno) 
 					return -5;
 
 				// Make sure we have a valid mapping
-				machine = audit_elf_to_machine(audit_elf);
+				machine = audit_elf_to_machine(_audit_elf);
 				if (machine < 0)
 					return -5;
 			}
 			else {
-				// what do we want? i686, x86_64, ia64
-				// or b64, b32
-				int machine;
-				unsigned int bits=0, elf;
 				const char *arch=v;
-				if (strcasecmp("b64", arch) == 0) {
-					bits = __AUDIT_ARCH_64BIT;
-					machine = audit_detect_machine();
-				} else if (strcasecmp("b32", arch) == 0) {
-					bits = ~__AUDIT_ARCH_64BIT;
-					machine = audit_detect_machine();
-				} 
-				else 
-					machine = audit_name_to_machine(arch);
-
-				if (machine < 0) 
-					return -4;
-
-				/* Here's where we fixup the machine.
-				 * for example, they give x86_64 & want 32 bits.
-				 * we translate that to i686. */
-				if (bits == ~__AUDIT_ARCH_64BIT &&
-					machine == MACH_86_64)
-						machine = MACH_X86;
-				else if (bits == ~__AUDIT_ARCH_64BIT &&
-					machine == MACH_PPC64)
-						machine = MACH_PPC;
-				else if (bits == ~__AUDIT_ARCH_64BIT &&
-					machine == MACH_S390X)
-						machine = MACH_S390;
-
-				/* Check for errors - return -6 
-				 * We don't allow 32 bit machines to specify 
-				 * 64 bit. */
-				switch (machine)
-				{
-					case MACH_X86:
-						if (bits == __AUDIT_ARCH_64BIT)
-							return -6;
-						break;
-					case MACH_IA64:
-						if (bits == ~__AUDIT_ARCH_64BIT)
-							return -6;
-						break;
-					case MACH_PPC:
-						if (bits == __AUDIT_ARCH_64BIT)
-							return -6;
-						break;
-					case MACH_S390:
-						if (bits == __AUDIT_ARCH_64BIT)
-							return -6;
-						break;
-					case MACH_86_64: /* fallthrough */
-					case MACH_PPC64: /* fallthrough */
-					case MACH_S390X: /* fallthrough */
-						break;
-					default:
-						return -6;
-				}
-
+				unsigned int machine, elf;
+				machine = audit_determine_machine(arch);
 				/* OK, we have the machine type, now convert
 				   to elf. */
 				elf = audit_machine_to_elf(machine);
 				if (elf == 0)
 					return -5;
 
-				audit_elf = elf;
+				_audit_elf = elf;
 			}
-			rule->values[rule->field_count] = audit_elf; 
-			audit_archadded = 1;
+			rule->values[rule->field_count] = _audit_elf; 
+			_audit_archadded = 1;
 			break;
 		case AUDIT_PERM:
 			if (flags != AUDIT_FILTER_EXIT)
@@ -1081,7 +1465,7 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 			}
 			break;
 		case AUDIT_FILETYPE:
-			if (flags != AUDIT_FILTER_EXIT && flags != AUDIT_FILTER_ENTRY)
+			if (!(flags == AUDIT_FILTER_EXIT || flags == AUDIT_FILTER_ENTRY))
 				return -17;
 			rule->values[rule->field_count] = 
 				audit_name_to_ftype(v);
@@ -1113,17 +1497,19 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 					return -13;
 			}
 
-			if (field == AUDIT_PPID && flags != AUDIT_FILTER_EXIT 
-				&& flags != AUDIT_FILTER_ENTRY)
+			if (field == AUDIT_PPID && !(flags == AUDIT_FILTER_EXIT
+				|| flags == AUDIT_FILTER_ENTRY))
 				return -17;
 			
-			if (flags == AUDIT_FILTER_EXCLUDE)
-				return -18;
-
 			if (!isdigit((char)*(v)))
 				return -21;
 
-			rule->values[rule->field_count] = strtol(v, NULL, 0);
+			if (field == AUDIT_INODE)
+				rule->values[rule->field_count] =
+					strtoul(v, NULL, 0);
+			else
+				rule->values[rule->field_count] =
+					strtol(v, NULL, 0);
 			break;
 	}
 	rule->field_count++;
@@ -1170,6 +1556,7 @@ int audit_detect_machine(void)
 }
 hidden_def(audit_detect_machine)
 
+#ifndef NO_TABLES
 void audit_number_to_errmsg(int errnumber, const char *opt)
 {
 	unsigned int i;
@@ -1197,3 +1584,4 @@ void audit_number_to_errmsg(int errnumber, const char *opt)
 		}
 	}
 }
+#endif

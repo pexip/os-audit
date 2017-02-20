@@ -1,5 +1,5 @@
 /* s390x_table.h --
- * Copyright 2005,2006,2008-09 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-06,2008-14 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -292,5 +292,20 @@ _S(327, "epoll_create1")
 _S(328, "preadv")
 _S(329, "pwritev")
 _S(330, "rt_tgsigqueueinfo")
-_S(331, "perf_counter_open")
-
+_S(331, "perf_event_open")
+_S(332, "fanotify_init")
+_S(333, "fanotify_mark")
+_S(334, "prlimit64")
+_S(335, "name_to_handle_at")
+_S(336, "open_by_handle_at")
+_S(337, "clock_adjtime")
+_S(338, "syncfs") 
+_S(339, "setns")
+_S(340, "process_vm_readv")
+_S(341, "process_vm_writev")
+_S(342, "s390_runtime_instr")
+_S(343, "kcmp")
+_S(344, "finit_module")
+_S(345, "sched_setattr")
+_S(346, "sched_getattr")
+_S(347, "renameat2")

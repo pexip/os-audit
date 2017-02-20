@@ -1,6 +1,7 @@
 /*
 * ausearch-parse.c - Extract interesting fields and check for match
-* Copyright (c) 2005-08 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-08,2011,2013-14 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2011 IBM Corp. 
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -19,6 +20,7 @@
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
+*   Marcelo Henrique Cerri <mhcerri@br.ibm.com>
 */
 
 #include "config.h"
@@ -45,13 +47,17 @@ static int common_path_parser(search_items *s, char *path);
 static int avc_parse_path(const lnode *n, search_items *s);
 static int parse_path(const lnode *n, search_items *s);
 static int parse_user(const lnode *n, search_items *s);
+static int parse_obj(const lnode *n, search_items *s);
 static int parse_login(const lnode *n, search_items *s);
-static int parse_daemon(const lnode *n, search_items *s);
+static int parse_daemon1(const lnode *n, search_items *s);
+static int parse_daemon2(const lnode *n, search_items *s);
 static int parse_sockaddr(const lnode *n, search_items *s);
 static int parse_avc(const lnode *n, search_items *s);
+static int parse_integrity(const lnode *n, search_items *s);
 static int parse_kernel_anom(const lnode *n, search_items *s);
 static int parse_simple_message(const lnode *n, search_items *s);
 static int parse_tty(const lnode *n, search_items *s);
+static int parse_pkt(const lnode *n, search_items *s);
 
 
 static int audit_avc_init(search_items *s)
@@ -103,19 +109,36 @@ int extract_search_items(llist *l)
 			case AUDIT_LOGIN:
 				ret = parse_login(n, s);
 				break;
+			case AUDIT_IPC:
+			case AUDIT_OBJ_PID:
+				ret = parse_obj(n, s);
+				break;
 			case AUDIT_DAEMON_START:
 			case AUDIT_DAEMON_END:
 			case AUDIT_DAEMON_ABORT:
 			case AUDIT_DAEMON_CONFIG:
 			case AUDIT_DAEMON_ROTATE:
-				ret = parse_daemon(n, s);
+			case AUDIT_DAEMON_RESUME:
+				ret = parse_daemon1(n, s);
+				break;
+			case AUDIT_DAEMON_ACCEPT:
+			case AUDIT_DAEMON_CLOSE:
+				ret = parse_daemon2(n, s);
 				break;
 			case AUDIT_CONFIG_CHANGE:
 				ret = parse_simple_message(n, s);
+				// We use AVC parser because it just looks for
+				// the one field. We don't care about return
+				// code since older events don't have path=
+				avc_parse_path(n, s);
 				break;
 			case AUDIT_AVC:
 				ret = parse_avc(n, s);
 				break;
+			case AUDIT_NETFILTER_PKT:
+				ret = parse_pkt(n, s);
+				break;
+			case AUDIT_SECCOMP:
 			case
 			   AUDIT_FIRST_KERN_ANOM_MSG...AUDIT_LAST_KERN_ANOM_MSG:
 				ret = parse_kernel_anom(n, s);
@@ -123,19 +146,39 @@ int extract_search_items(llist *l)
 			case AUDIT_MAC_POLICY_LOAD...AUDIT_MAC_UNLBL_STCDEL:
 				ret = parse_simple_message(n, s);
 				break;
+			case AUDIT_INTEGRITY_DATA...AUDIT_INTEGRITY_RULE:
+				ret = parse_integrity(n, s);
+				break;
 			case AUDIT_KERNEL:
-			case AUDIT_IPC:
 			case AUDIT_SELINUX_ERR:
+			case AUDIT_EXECVE:
+			case AUDIT_IPC_SET_PERM:
+			case AUDIT_MQ_OPEN:
+			case AUDIT_MQ_SENDRECV:
+			case AUDIT_MQ_NOTIFY:
+			case AUDIT_MQ_GETSETATTR:
+			case AUDIT_FD_PAIR:
+			case AUDIT_BPRM_FCAPS:
+			case AUDIT_CAPSET:
+			case AUDIT_MMAP:
+			case AUDIT_NETFILTER_CFG:
 				// Nothing to parse
 				break;
 			case AUDIT_TTY:
 				ret = parse_tty(n, s);
 				break;
 			default:
+				if (event_debug)
+					fprintf(stderr,
+						"Unparsed type:%d\n - skipped",
+						n->type);
 				break;
 			}
-			// if (ret) printf("type:%d ret:%d\n", n->type, ret);
-		} while ((n=list_next(l)) && ret==0);
+			if (event_debug && ret)
+				fprintf(stderr,
+					"Malformed event skipped, rc=%d. %s\n",
+					 ret, n->message);
+		} while ((n=list_next(l)) && ret == 0);
 	}
 	return ret;
 }
@@ -143,9 +186,10 @@ int extract_search_items(llist *l)
 static int parse_syscall(lnode *n, search_items *s)
 {
 	char *ptr, *str, *term;
+	extern int event_machine;
 
 	term = n->message;
-	if (report_format > RPT_DEFAULT) {
+	if (report_format > RPT_DEFAULT || event_machine != -1) {
 		// get arch
 		str = strstr(term, "arch=");
 		if (str == NULL) 
@@ -202,7 +246,7 @@ static int parse_syscall(lnode *n, search_items *s)
 			return 9;
 		*term = 0;
 		errno = 0;
-		s->exit = strtoul(ptr, NULL, 0);
+		s->exit = strtoll(ptr, NULL, 0);
 		if (errno)
 			return 10;
 		s->exit_is_set = 1;
@@ -220,6 +264,21 @@ static int parse_syscall(lnode *n, search_items *s)
 	errno = 0;
 	// 64 bit dump on 32 bit machine looks bad here - need long long
 	n->a0 = strtoull(ptr, NULL, 16); // Hex
+	if (errno)
+		return 13;
+	*term = ' ';
+	// get a1
+	str = strstr(term, "a1=");
+	if (str == NULL)
+		return 11;
+	ptr = str + 3;
+	term = strchr(ptr, ' ');
+	if (term == NULL)
+		return 12;
+	*term = 0;
+	errno = 0;
+	// 64 bit dump on 32 bit machine looks bad here - need long long
+	n->a1 = strtoull(ptr, NULL, 16); // Hex
 	if (errno)
 		return 13;
 	*term = ' ';
@@ -255,80 +314,93 @@ static int parse_syscall(lnode *n, search_items *s)
 			return 18;
 		*term = ' ';
 	}
-	// loginuid
-	str = strstr(term, "auid=");
-	if (str == NULL) {
-		str = strstr(term, "loginuid=");
+	// optionally get loginuid
+	if (event_loginuid != -2) {
+		str = strstr(term, "auid=");
+		if (str == NULL) {
+			str = strstr(term, "loginuid=");
+			if (str == NULL)
+				return 19;
+			ptr = str + 9;
+		} else
+			ptr = str + 5;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 20;
+		*term = 0;
+		errno = 0;
+		s->loginuid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 21;
+		*term = ' ';
+	}
+	// optionally get uid
+	if (event_uid != -1) {
+		str = strstr(term, "uid=");
 		if (str == NULL)
-			return 19;
-		ptr = str + 9;
-	} else
-		ptr = str + 5;
-	term = strchr(ptr, ' ');
-	if (term == NULL)
-		return 20;
-	*term = 0;
-	errno = 0;
-	s->loginuid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 21;
-	// uid
-	*term = ' ';
-	str = strstr(term, "uid=");
-	if (str == NULL)
-		return 22;
-	ptr = str + 4;
-	term = strchr(ptr, ' ');
-	if (term == NULL)
-		return 23;
-	*term = 0;
-	errno = 0;
-	s->uid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 24;
-	// gid
-	*term = ' ';
-	str = strstr(term, "gid=");
-	if (str == NULL)
-		return 25;
-	ptr = str + 4;
-	term = strchr(ptr, ' ');
-	if (term == NULL)
-		return 26;
-	*term = 0;
-	errno = 0;
-	s->gid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 27;
+			return 22;
+		ptr = str + 4;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 23;
+		*term = 0;
+		errno = 0;
+		s->uid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 24;
+		*term = ' ';
+	}
+
+	// optionally get gid
+	if (event_gid != -1) {
+		str = strstr(term, "gid=");
+		if (str == NULL)
+			return 25;
+		ptr = str + 4;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 26;
+		*term = 0;
+		errno = 0;
+		s->gid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 27;
+		*term = ' ';
+	}
+
 	// euid
-	*term = ' ';
-	str = strstr(term, "euid=");
-	if (str == NULL)
-		return 28;
-	ptr = str + 5;
-	term = strchr(ptr, ' ');
-	if (term == NULL)
-		return 29;
-	*term = 0;
-	errno = 0;
-	s->euid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 30;
+	if (event_euid != -1) {
+		str = strstr(term, "euid=");
+		if (str == NULL)
+			return 28;
+		ptr = str + 5;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 29;
+		*term = 0;
+		errno = 0;
+		s->euid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 30;
+		*term = ' ';
+	}
+
 	// egid
-	*term = ' ';
-	str = strstr(term, "egid=");
-	if (str == NULL)
-		return 31;
-	ptr = str + 5;
-	term = strchr(ptr, ' ');
-	if (term == NULL)
-		return 32;
-	*term = 0;
-	errno = 0;
-	s->egid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 33;
-	*term = ' ';
+	if (event_egid != -1) {
+		str = strstr(term, "egid=");
+		if (str == NULL)
+			return 31;
+		ptr = str + 5;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 32;
+		*term = 0;
+		errno = 0;
+		s->egid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 33;
+		*term = ' ';
+	}
 
 	if (event_terminal) {
 		// dont do this search unless needed
@@ -344,7 +416,7 @@ static int parse_syscall(lnode *n, search_items *s)
 		}
 	}
 	// ses
-	if (event_session_id != -1 ) {
+	if (event_session_id != -2 ) {
 		str = strstr(term, "ses=");
 		if (str) {
 			ptr = str + 4;
@@ -503,7 +575,7 @@ static int common_path_parser(search_items *s, char *path)
 		//create
 		s->filename = malloc(sizeof(slist));
 		if (s->filename == NULL)
-			return 4;
+			return 1;
 		slist_create(s->filename);
 	}
 	if (*path == '"') {
@@ -511,7 +583,7 @@ static int common_path_parser(search_items *s, char *path)
 		path++;
 		term = strchr(path, '"');
 		if (term == NULL)
-			return 1;
+			return 2;
 		*term = 0;
 		if (s->filename) {
 			// append
@@ -523,8 +595,10 @@ static int common_path_parser(search_items *s, char *path)
 			if ((sn.str[0] == '.') && ((sn.str[1] == '.') ||
 				(sn.str[1] == '/')) && s->cwd) {
 				char *tmp = malloc(PATH_MAX);
-				if (tmp == NULL)
+				if (tmp == NULL) {
+					free(sn.str);
 					return 3;
+				}
 				snprintf(tmp, PATH_MAX,
 					"%s/%s", s->cwd, sn.str);
 				free(sn.str);
@@ -539,16 +613,22 @@ static int common_path_parser(search_items *s, char *path)
 			snode sn;
 			sn.key = NULL;
 			sn.hits = 1;
-			if (strcmp(path, "(null)")) {
-				sn.str = strdup(path);
+			if (strncmp(path, "(null)", 6) == 0) {
+				sn.str = strdup("(null)");
 				goto append;
 			}
 			if (!isxdigit(path[0]))
-				return 5;
+				return 4;
 			if (path[0] == '0' && path[1] == '0')
 				sn.str = unescape(&path[2]); // Abstract name
-			else
+			else {
+				term = strchr(path, ' ');
+				if (term == NULL)
+					return 5;
+				*term = 0;
 				sn.str = unescape(path);
+				*term = ' ';
+			}
 			// Attempt to rebuild path if relative
 			if ((sn.str[0] == '.') && ((sn.str[1] == '.') ||
 				(sn.str[1] == '/')) && s->cwd) {
@@ -624,6 +704,34 @@ static int parse_path(const lnode *n, search_items *s)
 	return 0;
 }
 
+static int parse_obj(const lnode *n, search_items *s)
+{
+	char *str, *term;
+
+	term = n->message;
+	if (event_object) {
+		// obj context
+		str = strstr(term, "obj=");
+		if (str != NULL) {
+			str += 4;
+			term = strchr(str, ' ');
+			if (term)
+				*term = 0;
+			if (audit_avc_init(s) == 0) {
+				anode an;
+
+				anode_init(&an);
+				an.tcontext = strdup(str);
+				alist_append(s->avc, &an);
+				if (term)
+					*term = ' ';
+			} else
+				return 1;
+		}
+	}
+	return 0;
+}
+
 static int parse_user(const lnode *n, search_items *s)
 {
 	char *ptr, *str, *term, saved, *mptr;
@@ -646,41 +754,45 @@ static int parse_user(const lnode *n, search_items *s)
 			return 3;
 		*term = ' ';
 	}
-	// get uid
-	str = strstr(term, "uid=");
-	if (str == NULL)
-		return 4;
-	ptr = str + 4;
-	term = strchr(ptr, ' ');
-	if (term == NULL)
-		return 5;
-	*term = 0;
-	errno = 0;
-	s->uid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 6;
-	*term = ' ';
-	// get loginuid
-	*term = ' ';
-	str = strstr(term, "auid=");
-	if (str == NULL) { // Try the older one
-		str = strstr(term, "loginuid=");
-		if (str == NULL) 
-			return 7;
-		ptr = str + 9;
-	} else
-		ptr = str + 5;
-	term = strchr(ptr, ' ');
-	if (term == NULL)
-		return 8;
-	*term = 0;
-	errno = 0;
-	s->loginuid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 9;
-	*term = ' ';
+	// optionally get uid
+	if (event_uid != -1) {
+		str = strstr(term, "uid=");
+		if (str == NULL)
+			return 4;
+		ptr = str + 4;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 5;
+		*term = 0;
+		errno = 0;
+		s->uid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 6;
+		*term = ' ';
+	}
+	// optionally get loginuid
+	if (event_loginuid != -2) {
+		*term = ' ';
+		str = strstr(term, "auid=");
+		if (str == NULL) { // Try the older one
+			str = strstr(term, "loginuid=");
+			if (str == NULL)
+				return 7;
+			ptr = str + 9;
+		} else
+			ptr = str + 5;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 8;
+		*term = 0;
+		errno = 0;
+		s->loginuid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 9;
+		*term = ' ';
+	}
 	// ses
-	if (event_session_id != -1 ) {
+	if (event_session_id != -2 ) {
 		str = strstr(term, "ses=");
 		if (str) {
 			ptr = str + 4;
@@ -702,7 +814,7 @@ static int parse_user(const lnode *n, search_items *s)
 			str += 5;
 			term = strchr(str, ' ');
 			if (term == NULL)
-				return 10;
+				return 12;
 			*term = 0;
 			if (audit_avc_init(s) == 0) {
 				anode an;
@@ -712,28 +824,124 @@ static int parse_user(const lnode *n, search_items *s)
 				alist_append(s->avc, &an);
 				*term = ' ';
 			} else
-				return 11;
+				return 13;
 		}
 	}
-	// get uid - something has uid after auid ??
-	str = strstr(term, "uid=");
-	if (str != NULL) {
-		ptr = str + 4;
-		term = ptr;
-		while (isdigit(*term))
-			term++;
-		if (term == ptr)
-			return 12;
-
-		saved = *term;
-		*term = 0;
-		errno = 0;
-		s->uid = strtoul(ptr, NULL, 10);
-		if (errno)
-			return 13;
-		*term = saved;
+	if (event_vmname) {
+		str = strstr(term, "vm=");
+		if (str) {
+			str += 3;
+			if (*str == '"') {
+				str++;
+				term = strchr(str, '"');
+				if (term == NULL)
+					return 23;
+			       *term = 0;
+				s->vmname = strdup(str);
+				*term = '"';
+			} else
+				s->vmname = unescape(str);
+		}
 	}
+	if (event_uuid) {
+		str = strstr(term, "uuid=");
+		if (str) {
+			str += 5;
+			term = str;
+			while (*term != ' ' && *term != ':')
+				term++;
+			if (term == str)
+				return 24;
+			saved = *term;
+			*term = 0;
+			s->uuid = strdup(str);
+			*term = saved;
+		}
+	}
+	if (event_subject) {
+		str = strstr(term, "vm-ctx=");
+		if (str != NULL) {
+			str += 7;
+			term = strchr(str, ' ');
+			if (term == NULL)
+				return 27;
+			*term = 0;
+			if (audit_avc_init(s) == 0) {
+				anode an;
+
+				anode_init(&an);
+				an.scontext = strdup(str);
+				alist_append(s->avc, &an);
+				*term = ' ';
+			} else
+				return 28;
+		}
+	}
+	if (event_object) {
+		str = strstr(term, "img-ctx=");
+		if (str != NULL) {
+			str += 8;
+			term = strchr(str, ' ');
+			if (term == NULL)
+				return 29;
+			*term = 0;
+			if (audit_avc_init(s) == 0) {
+				anode an;
+
+				anode_init(&an);
+				an.tcontext = strdup(str);
+				alist_append(s->avc, &an);
+				*term = ' ';
+			} else
+				return 30;
+		}
+	}
+	// optionally get uid - some records the second uid is what we want.
+	// USER_LOGIN for example.
+	if (event_uid != -1) {
+		str = strstr(term, "uid=");
+		if (str) {
+			if (*(str - 1) == 'a' || *(str - 1) == 's' ||
+					*(str - 1) == 'u')
+				goto skip;
+			if (!(*(str - 1) == '\'' || *(str - 1) == ' '))
+				return 25;
+			ptr = str + 4;
+			term = ptr;
+			while (isdigit(*term))
+				term++;
+			if (term == ptr)
+				return 14;
+
+			saved = *term;
+			*term = 0;
+			errno = 0;
+			s->uid = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 15;
+			*term = saved;
+		}
+	}
+skip:
 	mptr = term + 1;
+
+	if (event_comm) {
+		// dont do this search unless needed
+		str = strstr(mptr, "comm=");
+		if (str) {
+			str += 5;
+			if (*str == '"') {
+				str++;
+				term = strchr(str, '"');
+				if (term == NULL)
+					return 16;
+				*term = 0;
+				s->comm = strdup(str);
+				*term = '"';
+			} else 
+				s->comm = unescape(str);
+		}
+	}
 
 	// Get acct for user/group add/del
 	str = strstr(mptr, "acct=");
@@ -778,11 +986,15 @@ static int parse_user(const lnode *n, search_items *s)
 		if (str) {
 			str += 9;
 			term = strchr(str, ',');
-			if (term == NULL)
-				return 15;
+			if (term == NULL) {
+				term = strchr(str, ' ');
+				if (term == NULL)
+					return 17;
+			}
+			saved = *term;
 			*term = 0;
 			s->hostname = strdup(str);
-			*term = ',';
+			*term = saved;
 
 			// Lets see if there is something more
 			// meaningful in addr
@@ -792,12 +1004,51 @@ static int parse_user(const lnode *n, search_items *s)
 				if (str) {
 					str += 5;
 					term = strchr(str, ',');
-					if (term == NULL)
-						return 16;
+					if (term == NULL) {
+						term = strchr(str, ' ');
+						if (term == NULL)
+							return 18;
+					}
+					saved = *term;
 					*term = 0;
 					free(s->hostname);
 					s->hostname = strdup(str);
-					*term = ',';
+					*term = saved;
+				}
+			}
+		}
+	}
+	if (event_filename) {
+		// dont do this search unless needed
+		str = strstr(mptr, "cwd=");
+		if (str) {
+			str += 4;
+			if (*str == '"') {
+				str++;
+				term = strchr(str, '"');
+				if (term == NULL)
+					return 20;
+				*term = 0;
+				s->cwd = strdup(str);
+				*term = '"';
+			} else {
+				char *end = str;
+				int legacy = 0;
+
+				while (*end != ' ') {
+					if (!isxdigit(*end)) {
+						legacy = 1;
+					}
+					end++;
+				}
+				term = end;
+				if (!legacy)
+					s->cwd = unescape(str);
+				else {
+					saved = *term;
+					*term = 0;
+					s->cwd = strdup(str);
+					*term = saved;
 				}
 			}
 		}
@@ -811,7 +1062,7 @@ static int parse_user(const lnode *n, search_items *s)
 			if (term == NULL) {
 				term = strchr(str, ')');
 				if (term == NULL)
-					return 17;
+					return 19;
 			}
 			*term = 0;
 			s->terminal = strdup(str);
@@ -827,7 +1078,7 @@ static int parse_user(const lnode *n, search_items *s)
 				str++;
 				term = strchr(str, '"');
 				if (term == NULL)
-					return 18;
+					return 26;
 				*term = 0;
 				s->exe = strdup(str);
 				*term = '"';
@@ -861,7 +1112,7 @@ static int parse_user(const lnode *n, search_items *s)
 			ptr = str + 4;
 			term = strchr(ptr, '\'');
 			if (term == NULL)
-				return 19;
+				return 21;
 			*term = 0;
 			if (strncmp(ptr, "failed", 6) == 0)
 				s->success = S_FAILED;
@@ -872,7 +1123,7 @@ static int parse_user(const lnode *n, search_items *s)
 			ptr = str + 7;
 			term = strchr(ptr, ')');
 			if (term == NULL)
-				return 20;
+				return 22;
 			*term = 0;
 			if (strcasecmp(ptr, "success") == 0)
 				s->success = S_SUCCESS;
@@ -881,6 +1132,7 @@ static int parse_user(const lnode *n, search_items *s)
 			*term = ')';
 		}
 	}
+	/* last return code used = 24 */
 	return 0;
 }
 
@@ -904,42 +1156,72 @@ static int parse_login(const lnode *n, search_items *s)
 			return 3;
 		*term = ' ';
 	}
-	// get uid
-	str = strstr(term, "uid=");
-	if (str == NULL)
-		return 4;
-	ptr = str + 4;
-	term = strchr(ptr, ' ');
-	if (term == NULL)
-		return 5;
-	*term = 0;
-	errno = 0;
-	s->uid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 6;
-	// get loginuid
-	*term = ' ';
-	str = strstr(term, "new auid=");
-	if (str == NULL) {
-		str = strstr(term, "new loginuid=");
+	// optionally get uid
+	if (event_uid != -1) {
+		str = strstr(term, "uid=");
 		if (str == NULL)
-			return 7;
-		ptr = str + 13;
-	} else
-		ptr = str + 9;
-	term = strchr(ptr, ' ');
-	if (term)
+			return 4;
+		ptr = str + 4;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 5;
 		*term = 0;
-	errno = 0;
-	s->loginuid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 8;
-	if (term)
+		errno = 0;
+		s->uid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 6;
 		*term = ' ';
+	}
+	// optionally get subj
+	if (event_subject) {
+		str = strstr(term, "subj=");
+		if (str) {
+			ptr = str + 5;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 12;
+			*term = 0;
+			if (audit_avc_init(s) == 0) {
+				anode an;
+
+				anode_init(&an);
+				an.scontext = strdup(str);
+				alist_append(s->avc, &an);
+				*term = ' ';
+			} else
+				return 13;
+			*term = ' ';
+		}
+	}
+	// optionally get loginuid
+	if (event_loginuid != -2) {
+		str = strstr(term, "new auid=");
+		if (str == NULL) {
+			// 3.14 kernel changed it to the next line
+			str = strstr(term, " auid=");
+			if (str == NULL) {
+				str = strstr(term, "new loginuid=");
+				if (str == NULL)
+					return 7;
+				ptr = str + 13;
+			} else
+				ptr = str + 6;
+		} else
+			ptr = str + 9;
+		term = strchr(ptr, ' ');
+		if (term)
+			*term = 0;
+		errno = 0;
+		s->loginuid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 8;
+		if (term)
+			*term = ' ';
+	}
 
 	// success
 	if (event_success != S_UNSET) {
-		str = strstr(ptr, "res=");
+		str = strstr(term, "res=");
 		if (str != NULL) {
 			ptr = str + 4;
 			term = strchr(ptr, ' ');
@@ -955,25 +1237,33 @@ static int parse_login(const lnode *n, search_items *s)
 			s->success = S_SUCCESS; 
 	}
 	// ses
-	if (event_session_id != -1 ) {
+	if (event_session_id != -2 ) {
+		if (term == NULL)
+			term = n->message;
 		str = strstr(term, "new ses=");
-		if (str) {
-			ptr = str + 8;
-			term = strchr(ptr, ' ');
-			if (term)
-				*term = 0;
-			errno = 0;
-			s->session_id = strtoul(ptr, NULL, 10);
-			if (errno)
-				return 11;
-			if (term)
-				*term = ' ';
+		if (str == NULL) {
+			// The 3.14 kernel changed it to the next line
+			str = strstr(term, " ses=");
+			if (str == NULL)
+				return 14;
+			ptr = str + 5;
 		}
+		else
+			ptr = str + 8;
+		term = strchr(ptr, ' ');
+		if (term)
+			*term = 0;
+		errno = 0;
+		s->session_id = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 11;
+		if (term)
+			*term = ' ';
 	}
 	return 0;
 }
 
-static int parse_daemon(const lnode *n, search_items *s)
+static int parse_daemon1(const lnode *n, search_items *s)
 {
 	char *ptr, *str, *term, saved, *mptr;
 
@@ -981,38 +1271,41 @@ static int parse_daemon(const lnode *n, search_items *s)
 	mptr = strchr(n->message, ')');
 	if (mptr == NULL)
 		mptr = n->message;
+	term = mptr;
 
-	// auid
-	str = strstr(mptr, "auid=");
-	if (str == NULL)
-		return 2;
-	ptr = str + 5;
-	term = strchr(ptr, ' ');
-	if (term == NULL)
-		return 3;
-	saved = *term;
-	*term = 0;
-	errno = 0;
-	s->loginuid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 4;
-	*term = saved;
+	// optionally get auid
+	if (event_loginuid != -2 ) {
+		str = strstr(mptr, "auid=");
+		if (str == NULL)
+			return 1;
+		ptr = str + 5;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 2;
+		saved = *term;
+		*term = 0;
+		errno = 0;
+		s->loginuid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 3;
+		*term = saved;
+	}
 
 	// pid
 	if (event_pid != -1) {
 		str = strstr(term, "pid=");
 		if (str == NULL)
-			return 5;
+			return 4;
 		ptr = str + 4;
 		term = strchr(ptr, ' ');
 		if (term == NULL) 
-			return 6;
+			return 5;
 		saved = *term;
 		*term = 0;
 		errno = 0;
 		s->pid = strtoul(ptr, NULL, 10);
 		if (errno)
-			return 7;
+			return 6;
 		*term = saved;
 	}
 
@@ -1022,18 +1315,18 @@ static int parse_daemon(const lnode *n, search_items *s)
 		if (str != NULL) {
 			str += 5;
 			term = strchr(str, ' ');
-			if (term == NULL)
-				return 8;
-			*term = 0;
+			if (term)
+				*term = 0;
 			if (audit_avc_init(s) == 0) {
 				anode an;
 
 				anode_init(&an);
 				an.scontext = strdup(str);
 				alist_append(s->avc, &an);
-				*term = ' ';
 			} else
-				return 9;
+				return 7;
+			if (term)
+				*term = ' ';
 		}
 	}
 
@@ -1045,7 +1338,52 @@ static int parse_daemon(const lnode *n, search_items *s)
 			while (isalpha(*term))
 				term++;
 			if (term == ptr)
-				return 10;
+				return 9;
+			saved = *term;
+			*term = 0;
+			if (strncmp(ptr, "failed", 6) == 0)
+				s->success = S_FAILED;
+			else
+				s->success = S_SUCCESS;
+			*term = saved;
+		}
+	}
+
+	return 0;
+}
+
+static int parse_daemon2(const lnode *n, search_items *s)
+{
+	char *str, saved, *term = n->message;
+
+	if (event_hostname) {
+		str = strstr(term, "addr=");
+		if (str) {
+			str += 5;
+			term = strchr(str, ':');
+			if (term == NULL) {
+				term = strchr(str, ' ');
+				if (term == NULL)
+					return 1;
+			}
+			saved = *term;
+			*term = 0;
+			free(s->hostname);
+			s->hostname = strdup(str);
+			*term = saved;
+		}
+	}
+
+	if (event_success != S_UNSET) {
+		char *str = strstr(term, "res=");
+		if (str) {
+			char *ptr, *term, saved;
+
+			ptr = term = str + 4;
+			while (isalpha(*term))
+				term++;
+			if (term == ptr)
+				return 2;
 			saved = *term;
 			*term = 0;
 			if (strncmp(ptr, "failed", 6) == 0)
@@ -1150,6 +1488,145 @@ static int parse_sockaddr(const lnode *n, search_items *s)
 	return 0;
 }
 
+static int parse_integrity(const lnode *n, search_items *s)
+{
+	char *ptr, *str, *term;
+
+	term = n->message;
+	// get pid
+	str = strstr(term, "pid=");
+	if (str) {
+		ptr = str + 4;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 1;
+		*term = 0;
+		errno = 0;
+		s->pid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 2;
+		*term = ' ';
+	}
+
+	// optionally get uid
+	if (event_uid != -1) {
+		str = strstr(term, " uid=");
+		if (str) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 3;
+			*term = 0;
+			errno = 0;
+			s->uid = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 4;
+			*term = ' ';
+		}
+	}
+
+	// optionally get loginuid
+	if (event_loginuid != -2) {
+		str = strstr(n->message, "auid=");
+		if (str) {
+			ptr = str + 5;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 5;
+			*term = 0;
+			errno = 0;
+			s->loginuid = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 6;
+			*term = ' ';
+		}
+	}
+
+	// ses
+	if (event_session_id != -2 ) {
+		str = strstr(term, "ses=");
+		if (str) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 10;
+			*term = 0;
+			errno = 0;
+			s->session_id = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 11;
+			*term = ' ';
+		}
+	}
+
+	if (event_subject) {
+		// scontext
+		str = strstr(term, "subj=");
+		if (str) {
+			str += 5;
+			term = strchr(str, ' ');
+			if (term == NULL)
+				return 12;
+			*term = 0;
+			if (audit_avc_init(s) == 0) {
+				anode an;
+
+				anode_init(&an);
+				an.scontext = strdup(str);
+				alist_append(s->avc, &an);
+				*term = ' ';
+			} else
+				return 13;
+		}
+	}
+
+	if (event_comm) {
+		str = strstr(term, "comm=");
+		if (str) {
+			str += 5;
+			if (*str == '"') {
+				str++;
+				term = strchr(str, '"');
+				if (term == NULL)
+					return 7;
+				*term = 0;
+				s->comm = strdup(str);
+				*term = '"';
+			} else
+				s->comm = unescape(str);
+		}
+	}
+
+	if (event_filename) {
+		str = strstr(term, " name=");
+		if (str) {
+			str += 6;
+			if (common_path_parser(s, str))
+				return 8;
+		}
+	}
+
+	// and results (usually last)
+	if (event_success != S_UNSET) {
+		str = strstr(term, "res=");
+		if (str != NULL) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term)
+				*term = 0;
+			errno = 0;
+			s->success = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 9;
+			if (term)
+				*term = ' ';
+		}
+	}
+
+	return 0;
+}
+
+
 /* FIXME: If they are in permissive mode or hit an auditallow, there can 
  * be more that 1 avc in the same syscall. For now, we pickup just the first.
  */
@@ -1203,13 +1680,17 @@ static int parse_avc(const lnode *n, search_items *s)
 		if (str) {
 			str = str + 4;
 			term = strchr(str, ' ');
-			if (term == NULL)
-				return 3;
+			if (term == NULL) {
+				rc = 3;
+				goto err;
+			}
 			*term = 0;
 			errno = 0;
 			s->pid = strtoul(str, NULL, 10);
-			if (errno)
-				return 4;
+			if (errno) {
+				rc = 4;
+				goto err;
+			}
 			*term = ' ';
 		}
 	}
@@ -1246,6 +1727,15 @@ static int parse_avc(const lnode *n, search_items *s)
 			if (rc)
 				goto err;
 			term += 7;
+		} else {
+			str = strstr(term, " name=");
+			if (str) {
+				str += 6;
+				rc = common_path_parser(s, str);
+				if (rc)
+					goto err;
+				term += 7;
+			}
 		}
 	}
 	if (event_subject) {
@@ -1309,125 +1799,13 @@ err:
 
 static int parse_kernel_anom(const lnode *n, search_items *s)
 {
-	char *str, *ptr, *term;
+	char *str, *ptr, *term = n->message;
 
-	// get loginuid
-	str = strstr(n->message, "auid=");
-	if (str == NULL)
-		return 1;
-	ptr = str + 5;
-	term = strchr(ptr, ' ');
-	if (term)
-		*term = 0;
-	errno = 0;
-	s->loginuid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 2;
-	if (term)
-		*term = ' ';
-	else
-		term = n->message;
-
-	// get uid
-	str = strstr(term, " uid="); // if promiscuous, we start over
-	if (str) {
-		ptr = str + 4;
-		term = strchr(ptr, ' ');
-		if (term == NULL)
-			return 3;
-		*term = 0;
-		errno = 0;
-		s->uid = strtoul(ptr, NULL, 10);
-		if (errno)
-			return 4;
-		*term = ' ';
-	}
-
-	// get gid
-	str = strstr(term, "gid=");
-	if (str) {
-		ptr = str + 4;
-		term = strchr(ptr, ' ');
-		if (term == NULL)
-			return 5;
-		*term = 0;
-		errno = 0;
-		s->gid = strtoul(ptr, NULL, 10);
-		if (errno)
-			return 6;
-		*term = ' ';
-	}
-
-	if (event_subject) {
-		// scontext
-		str = strstr(term, "subj=");
-		if (str) {
-			str += 5;
-			term = strchr(str, ' ');
-			if (term == NULL)
-				return 7;
-			*term = 0;
-			if (audit_avc_init(s) == 0) {
-				anode an;
-
-				anode_init(&an);
-				an.scontext = strdup(str);
-				alist_append(s->avc, &an);
-				*term = ' ';
-			} else
-				return 8;
-		}
-	}
-
-	// get pid
-	if (event_pid != -1) {
-		str = strstr(term, "pid=");
-		if (str) {
-			ptr = str + 4;
-			term = strchr(ptr, ' ');
-			if (term == NULL)
-				return 9;
-			*term = 0;
-			errno = 0;
-			s->pid = strtoul(ptr, NULL, 10);
-			if (errno)
-				return 10;
-			*term = ' ';
-		}
-	}
-
-	if (event_comm) {
-		// dont do this search unless needed
-		str = strstr(term, "comm=");
-		if (str) {
-			str += 5;
-			if (*str == '"') {
-				str++;
-				term = strchr(str, '"');
-				if (term == NULL)
-					return 11;
-				*term = 0;
-				s->comm = strdup(str);
-				*term = '"';
-			} else 
-				s->comm = unescape(str);
-		} 
-	}
-
-	return 0;
-}
-
-// This is for messages that only have the loginuid as the item
-// of interest.
-static int parse_simple_message(const lnode *n, search_items *s)
-{
-	char *str, *ptr, *term  = n->message;
-
-	// get loginuid - note some kernels don't have auid for CONFIG_CHANGE
-	str = strstr(term, "auid=");
-	if (str == NULL && n->type != AUDIT_CONFIG_CHANGE)
-		return 1;
-	if (str) {
+	// optionally get loginuid
+	if (event_loginuid != -2) {
+		str = strstr(term, "auid=");
+		if (str == NULL)
+			return 1;
 		ptr = str + 5;
 		term = strchr(ptr, ' ');
 		if (term)
@@ -1442,9 +1820,9 @@ static int parse_simple_message(const lnode *n, search_items *s)
 			term = ptr;
 	}
 
-	// ses
-	if (event_session_id != -1 ) {
-		str = strstr(term, "ses=");
+	// optionally get uid
+	if (event_uid != -1) {
+		str = strstr(term, "uid="); // if promiscuous, we start over
 		if (str) {
 			ptr = str + 4;
 			term = strchr(ptr, ' ');
@@ -1452,10 +1830,181 @@ static int parse_simple_message(const lnode *n, search_items *s)
 				return 3;
 			*term = 0;
 			errno = 0;
-			s->session_id = strtoul(ptr, NULL, 10);
+			s->uid = strtoul(ptr, NULL, 10);
 			if (errno)
 				return 4;
 			*term = ' ';
+		}
+	}
+
+	// optionally get gid
+	if (event_gid != -1) {
+		str = strstr(term, "gid=");
+		if (str) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 5;
+			*term = 0;
+			errno = 0;
+			s->gid = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 6;
+			*term = ' ';
+		}
+	}
+
+	if (event_session_id != -2) {
+		str = strstr(term, "ses=");
+		if (str) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term)
+				*term = 0;
+			errno = 0;
+			s->session_id = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 7;
+			if (term)
+				*term = ' ';
+			else
+				term = ptr;
+		}
+	}
+
+	if (event_subject) {
+		// scontext
+		str = strstr(term, "subj=");
+		if (str) {
+			str += 5;
+			term = strchr(str, ' ');
+			if (term == NULL)
+				return 8;
+			*term = 0;
+			if (audit_avc_init(s) == 0) {
+				anode an;
+
+				anode_init(&an);
+				an.scontext = strdup(str);
+				alist_append(s->avc, &an);
+				*term = ' ';
+			} else
+				return 9;
+		}
+	}
+
+	// get pid
+	if (event_pid != -1) {
+		str = strstr(term, "pid=");
+		if (str) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 10;
+			*term = 0;
+			errno = 0;
+			s->pid = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 11;
+			*term = ' ';
+		}
+	}
+
+	if (event_comm) {
+		// dont do this search unless needed
+		str = strstr(term, "comm=");
+		if (str) {
+			str += 5;
+			if (*str == '"') {
+				str++;
+				term = strchr(str, '"');
+				if (term == NULL)
+					return 12;
+				*term = 0;
+				s->comm = strdup(str);
+				*term = '"';
+			} else 
+				s->comm = unescape(str);
+		} 
+	}
+
+	if (n->type == AUDIT_SECCOMP) {
+		// get arch
+		str = strstr(term, "arch=");
+		if (str == NULL) 
+			return 0;	// A few kernel versions don't have it
+		ptr = str + 5;
+		term = strchr(ptr, ' ');
+		if (term == NULL) 
+			return 12;
+		*term = 0;
+		errno = 0;
+		s->arch = (int)strtoul(ptr, NULL, 16);
+		if (errno) 
+			return 13;
+		*term = ' ';
+		// get syscall
+		str = strstr(term, "syscall=");
+		if (str == NULL)
+			return 14;
+		ptr = str + 8;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 15;
+		*term = 0;
+		errno = 0;
+		s->syscall = (int)strtoul(ptr, NULL, 10);
+		if (errno)
+			return 16;
+		*term = ' ';
+	}
+
+	return 0;
+}
+
+// This is for messages that only have the loginuid as the item
+// of interest.
+static int parse_simple_message(const lnode *n, search_items *s)
+{
+	char *str, *ptr, *term = n->message;
+
+	// optionally get loginuid - old kernels skip auid for CONFIG_CHANGE
+	if (event_loginuid != -2) {
+		str = strstr(term, "auid=");
+		if (str == NULL && n->type != AUDIT_CONFIG_CHANGE)
+			return 1;
+		if (str) {
+			ptr = str + 5;
+			term = strchr(ptr, ' ');
+			if (term)
+				*term = 0;
+			errno = 0;
+			s->loginuid = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 2;
+			if (term)
+				*term = ' ';
+			else
+				term = ptr;
+		}
+	}
+
+	// ses
+	if (event_session_id != -2 ) {
+		str = strstr(term, "ses=");
+		if (str) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term)
+				*term = 0;
+			errno = 0;
+			s->session_id = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 3;
+			if (term)
+				*term = ' ';
+			else
+				term = ptr;
 		}
 	}
 
@@ -1479,7 +2028,7 @@ static int parse_simple_message(const lnode *n, search_items *s)
 				else	// Set it back to something sane
 					term = str;
 			} else
-				return 5;
+				return 4;
 		}
 	}
 
@@ -1490,7 +2039,7 @@ static int parse_simple_message(const lnode *n, search_items *s)
 				//create
 				s->key = malloc(sizeof(slist));
 				if (s->key == NULL)
-					return 6;
+					return 5;
 				slist_create(s->key);
 			}
 			ptr = str + 4;
@@ -1509,7 +2058,7 @@ static int parse_simple_message(const lnode *n, search_items *s)
 					}
 					*term = '"';
 				} else
-					return 7;
+					return 6;
 			} else {
 				if (s->key) {
 					char *saved=NULL;
@@ -1549,7 +2098,7 @@ static int parse_simple_message(const lnode *n, search_items *s)
 			errno = 0;
 			s->success = strtoul(ptr, NULL, 10);
 			if (errno)
-				return 8;
+				return 7;
 			if (term)
 				*term = ' ';
 		}
@@ -1579,38 +2128,44 @@ static int parse_tty(const lnode *n, search_items *s)
 		}
 	}
 
-	// get uid
-	str = strstr(term, " uid="); // if promiscuous, we start over
-	if (str) {
-		ptr = str + 4;
-		term = strchr(ptr, ' ');
-		if (term == NULL)
-			return 3;
-		*term = 0;
-		errno = 0;
-		s->uid = strtoul(ptr, NULL, 10);
-		if (errno)
-			return 4;
-		*term = ' ';
+	// optionally get uid
+	if (event_uid != -1) {
+		str = strstr(term, " uid="); // if promiscuous, we start over
+		if (str) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 3;
+			*term = 0;
+			errno = 0;
+			s->uid = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 4;
+			*term = ' ';
+		}
 	}
 
-	// get loginuid
-	str = strstr(term, "auid=");
-	if (str == NULL)
-		return 5;
-	ptr = str + 5;
-	term = strchr(ptr, ' ');
-	if (term)
-		*term = 0;
-	errno = 0;
-	s->loginuid = strtoul(ptr, NULL, 10);
-	if (errno)
-		return 6;
-	if (term)
-		*term = ' ';
+	// optionally get loginuid
+	if (event_loginuid != -2) {
+		str = strstr(term, "auid=");
+		if (str == NULL)
+			return 5;
+		ptr = str + 5;
+		term = strchr(ptr, ' ');
+		if (term)
+			*term = 0;
+		errno = 0;
+		s->loginuid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 6;
+		if (term)
+			*term = ' ';
+		else
+			term = ptr;
+	}
 
 	// ses
-	if (event_session_id != -1 ) {
+	if (event_session_id != -2 ) {
 		str = strstr(term, "ses=");
 		if (str) {
 			ptr = str + 4;
@@ -1663,6 +2218,48 @@ static int parse_tty(const lnode *n, search_items *s)
 			} else 
 				s->comm = unescape(str);
 		} 
+	}
+
+	return 0;
+}
+
+static int parse_pkt(const lnode *n, search_items *s)
+{
+	char *str, *ptr, *term=n->message;
+
+	// get hostname
+	if (event_hostname) {
+		str = strstr(n->message, "saddr=");
+		if (str) {
+			ptr = str + 6;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 1;
+			*term = 0;
+			s->hostname = strdup(ptr);
+			*term = ' ';
+		}
+	}
+
+	// obj context
+	if (event_object) {
+		str = strstr(term, "obj=");
+		if (str != NULL) {
+			str += 4;
+			term = strchr(str, ' ');
+			if (term)
+				*term = 0;
+			if (audit_avc_init(s) == 0) {
+				anode an;
+
+				anode_init(&an);
+				an.tcontext = strdup(str);
+				alist_append(s->avc, &an);
+				if (term)
+					*term = ' ';
+			} else
+				return 2;
+		}
 	}
 
 	return 0;

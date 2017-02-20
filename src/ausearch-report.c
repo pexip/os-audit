@@ -1,6 +1,6 @@
 /*
 * ausearch-report.c - Format and output events
-* Copyright (c) 2005-08 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-09,2011-13 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -25,36 +25,13 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <netdb.h>
-#include <sys/un.h>
-#include <linux/ax25.h>
-#include <linux/atm.h>
-#include <linux/x25.h>
-#include <linux/if.h>	// FIXME: remove when ipx.h is fixed
-#include <linux/ipx.h>
-#include <linux/net.h>
-#include <time.h>
 #include <stdlib.h>
-#include <ctype.h>
 #include "libaudit.h"
 #include "ausearch-options.h"
 #include "ausearch-parse.h"
 #include "ausearch-lookup.h"
-
-/* This is the name/value pair used by search tables */
-struct nv_pair {
-	int        value;
-	const char *name;
-};
-
-/* This is the list of field types that we can interpret */
-enum { T_UID, T_GID, T_SYSCALL, T_ARCH, T_EXIT, T_ESCAPED, T_PERM, T_MODE, 
-T_SOCKADDR, T_FLAGS, T_PROMISC, T_CAPABILITY, T_SIGNAL, T_KEY, T_LIST,
-T_TTY_DATA };
-
-/* Function in ausearch-parse for unescaping filenames */
-extern char *unescape(char *buf);
+#include "auparse-idata.h"
+#include "auparse-defs.h"
 
 /* Local functions */
 static void output_raw(llist *l);
@@ -64,10 +41,11 @@ static void output_interpreted_node(const lnode *n);
 static void interpret(char *name, char *val, int comma, int rtype);
 
 /* The machine based on elf type */
-static int machine = -1;
+static unsigned long machine = -1;
+static int cur_syscall = -1;
 
 /* The first syscall argument */
-static unsigned long long a0;
+static unsigned long long a0, a1;
 
 /* This function branches to the correct output format */
 void output_record(llist *l)
@@ -156,12 +134,17 @@ static void output_interpreted(llist *l)
 }
 
 /*
- * This function will cycle through a message and lookup each type that 
- * it finds. 
+ * This function will cycle through a single record and lookup each field's
+ * value that it finds. 
  */
 static void output_interpreted_node(const lnode *n)
 {
 	char *ptr, *str = n->message, *node = NULL;
+	int found, comma = 0;
+
+	// Reset these because each record could be different
+	machine = -1;
+	cur_syscall = -1;
 
 	/* Check and see if we start with a node */
 	if (str[0] == 'n') {
@@ -249,13 +232,17 @@ no_print:
 		printf(".%03d:%lu) ", milli, serial);
 	}
 
-	if (n->type == AUDIT_SYSCALL) 
+	if (n->type == AUDIT_SYSCALL) { 
 		a0 = n->a0;
+		a1 = n->a1;
+	}
 
 	// for each item.
+	found = 0;
 	while (str && *str && (ptr = strchr(str, '='))) {
 		char *name, *val;
-		int comma = 0;
+		comma = 0;
+		found = 1;
 
 		// look back to last space - this is name
 		name = ptr;
@@ -289,12 +276,32 @@ no_print:
 			str = strchr(ptr, ',');
 			val = strchr(ptr, ' ');
 			if (str && val && (str < val)) {
-				*str++ = 0;
-				comma = 1;
+			// Value side  has commas and another field exists
+			// Known: LABEL_LEVEL_CHANGE banners=none,none
+			// Known: ROLL_ASSIGN new-role=r,r
+			// Known: any MAC LABEL can potentially have commas
+				int ftype = auparse_interp_adjust_type(n->type,
+								name, val);
+				if (ftype == AUPARSE_TYPE_MAC_LABEL) {
+					str = val;
+					*str++ = 0;
+				} else {
+					*str++ = 0;
+					comma = 1;
+				}
 			} else if (str && (val == NULL)) {
-				*str++ = 0;
-				comma = 1;
+			// Goes all the way to the end. Done parsing
+			// Known: MCS context in PATH rec obj=u:r:t:s0:c2,c7
+				int ftype = auparse_interp_adjust_type(n->type,
+								name, ptr);
+				if (ftype == AUPARSE_TYPE_MAC_LABEL)
+					str = NULL;
+				else {
+					*str++ = 0;
+					comma = 1;
+				}
 			} else if (val) {
+			// There is another field, point to next (normal path)
 				str = val;
 				*str++ = 0;
 			}
@@ -305,686 +312,87 @@ no_print:
 		// print interpreted string
 		interpret(name, val, comma, n->type);
 	}
+	// If nothing found, just print out as is
+	if (!found && ptr == NULL && str)
+		printf("%s", str);
+	// If last field had comma, output the rest
+	else if (comma)
+		printf("%s", str);
 	printf("\n");
-}
-
-/*
- * This table translates field names into a type that identifies the
- * interpreter to use on it.
- */
-static struct nv_pair typetab[] = {
-	{T_UID, "auid"},
-	{T_UID, "uid"},
-	{T_UID, "euid"},
-	{T_UID, "suid"},
-	{T_UID, "fsuid"},
-	{T_UID, "ouid"},
-	{T_UID, "oauid"},
-	{T_UID, "iuid"},
-	{T_UID, "id"},
-	{T_UID, "inode_uid"},
-	{T_UID, "sauid"},
-	{T_GID, "gid"},
-	{T_GID, "egid"},
-	{T_GID, "sgid"},
-	{T_GID, "fsgid"},
-	{T_GID, "ogid"},
-	{T_GID, "igid"},
-	{T_GID, "inode_gid"},
-	{T_GID, "new_gid"},
-	{T_SYSCALL, "syscall"},
-	{T_ARCH, "arch"},
-	{T_EXIT, "exit"},
-	{T_ESCAPED, "path"},
-	{T_ESCAPED, "comm"},
-	{T_ESCAPED, "exe"},
-	{T_ESCAPED, "file"},
-	{T_ESCAPED, "name"},
-	{T_ESCAPED, "watch"},
-	{T_ESCAPED, "cwd"},
-	{T_ESCAPED, "cmd"},
-	{T_ESCAPED, "dir"},
-	{T_TTY_DATA, "data"},
-	{T_KEY, "key"},
-	{T_PERM, "perm"},
-	{T_PERM, "perm_mask"},
-	{T_MODE, "mode"},
-	{T_SOCKADDR, "saddr"},
-	{T_FLAGS, "flags"},
-	{T_PROMISC, "prom"},
-	{T_PROMISC, "old_prom"},
-	{T_CAPABILITY, "capability"},
-	{T_SIGNAL, "sig"},
-	{T_LIST, "list"},
-};
-#define TYPE_NAMES (sizeof(typetab)/sizeof(typetab[0]))
-
-
-static int audit_lookup_type(const char *name)
-{
-        int i;
-
-        for (i = 0; i < TYPE_NAMES; i++)
-                if (!strcmp(typetab[i].name, name)) {
-                        return typetab[i].value;
-		}
-        return -1;
-}
-
-static void print_uid(const char *val)
-{
-	int uid;
-	char name[64];
-
-	errno = 0;
-	uid = strtoul(val, NULL, 10);
-	if (errno) {
-		printf("conversion error(%s) ", val);
-		return;
-	}
-
-	printf("%s ", aulookup_uid(uid, name, sizeof(name)));
-}
-
-static void print_gid(const char *val)
-{
-	int gid;
-	char name[64];
-
-	errno = 0;
-	gid = strtoul(val, NULL, 10);
-	if (errno) {
-		printf("conversion error(%s) ", val);
-		return;
-	}
-
-	printf("%s ", aulookup_gid(gid, name, sizeof(name)));
-}
-
-static void print_arch(const char *val)
-{
-	unsigned int ival;
-	const char *ptr;
-
-	errno = 0;
-	ival = strtoul(val, NULL, 16);
-	if (errno) {
-		printf("conversion error(%s) ", val);
-		return;
-	}
-	machine = audit_elf_to_machine(ival);
-	if (machine < 0) {
-		printf("unknown elf type(%s) ", val);
-		return;
-	}
-	ptr = audit_machine_to_name(machine);
-	printf("%s ", ptr);
-}
-
-static void print_syscall(const char *val)
-{
-	const char *sys;
-	int ival;
-
-	if (machine < 0) 
-		machine = audit_detect_machine();
-	if (machine < 0) {
-		printf("%s ", val);
-		return;
-	}
-	errno = 0;
-	ival = strtoul(val, NULL, 10);
-	if (errno) {
-		printf("conversion error(%s) ", val);
-		return;
-	}
-	
-	sys = audit_syscall_to_name(ival, machine);
-	if (sys) {
-		const char *func = NULL;
-		if (strcmp(sys, "socketcall") == 0)
-			func = aulookup_socketcall((long)a0);
-		else if (strcmp(sys, "ipc") == 0)
-			func = aulookup_ipccall((long)a0);
-		if (func)
-			printf("%s(%s) ", sys, func);
-		else
-			printf("%s ", sys);
-	}
-	else
-		printf("unknown syscall(%s) ", val);
-}
-
-static void print_exit(const char *val)
-{
-	int ival;
-
-	errno = 0;
-	ival = strtol(val, NULL, 10);
-	if (errno) {
-		printf("conversion error(%s) ", val);
-		return;
-	}
-
-	if (ival < 0)
-		printf("%d(%s) ", ival, strerror(-ival));
-	else
-		printf("%s ", val);
-}
-
-static void print_escaped(char *val)
-{
-	char *str;
-
-	if (*val == '"') {
-		char *term;
-		val++;
-		term = strchr(val, '"');
-		if (term == NULL)
-			return;
-		*term = 0;
-		printf("%s ", val);
-// FIXME: working here...was trying to detect (null) and handle that differently
-// The other 2 should have " around the file names.
-/*	} else if (*val == '(') {
-		char *term;
-		val++;
-		term = strchr(val, ' ');
-		if (term == NULL)
-			return;
-		*term = 0;
-		printf("%s ", val); */
-	} else {
-		if (val[0] == '0' && val[1] == '0')
-			str = unescape(&val[2]); // Abstract name
-		else
-			str = unescape(val);
-		printf("%s ", str ? str: "(null)");
-		free(str);
-	}
-}
-
-static void print_perm(const char *val)
-{
-	int ival, printed=0;
-
-	errno = 0;
-	ival = strtol(val, NULL, 10);
-	if (errno) {
-		printf("conversion error(%s) ", val);
-		return;
-	}
-
-	/* The kernel treats nothing as everything */
-	if (ival == 0)
-		ival = 0x0F;
-
-	if (ival & AUDIT_PERM_READ) {
-		printf("read");
-		printed = 1;
-	}
-	if (ival & AUDIT_PERM_WRITE) {
-		if (printed)
-			printf(",write");
-		else
-			printf("write");
-		printed = 1;
-	}
-	if (ival & AUDIT_PERM_EXEC) {
-		if (printed)
-			printf(",exec");
-		else
-			printf("exec");
-		printed = 1;
-	}
-	if (ival & AUDIT_PERM_ATTR) {
-		if (printed)
-			printf(",attr");
-		else
-			printf("attr");
-	}
-	printf(" ");
-}
-
-static void print_mode(const char *val)
-{
-	const char *name;
-	unsigned int ival;
-
-	errno = 0;
-	ival = strtoul(val, NULL, 8);
-	if (errno) {
-		printf("conversion error(%s) ", val);
-		return;
-	}
-
-	// print the file type
-	name = audit_ftype_to_name(ival & S_IFMT);
-	if (name != NULL)
-		printf("%s,", name);
-	else {
-		unsigned first_ifmt_bit;
-
-		// The lowest-valued "1" bit in S_IFMT
-		first_ifmt_bit = S_IFMT & ~(S_IFMT - 1);
-		printf("%03o,", (ival & S_IFMT) / first_ifmt_bit);
-	}
-
-	// check on special bits
-	if (S_ISUID & ival)
-		printf("suid,");
-	if (S_ISGID & ival)
-		printf("sgid,");
-	if (S_ISVTX & ival)
-		printf("sticky,");
-
-	// and the read, write, execute flags in octal
-	printf("%03o ",  (S_IRWXU|S_IRWXG|S_IRWXO) & ival);
-}
-
-/*
- * This table maps socket families to their text name
- */
-static struct nv_pair famtab[] = {
-        {AF_LOCAL, "local"},
-        {AF_INET, "inet"},
-        {AF_AX25, "ax25"},
-        {AF_IPX, "ipx"},
-        {AF_APPLETALK, "appletalk"},
-        {AF_NETROM, "netrom"},
-        {AF_BRIDGE, "bridge"},
-        {AF_ATMPVC, "atmpvc"},
-        {AF_X25, "x25"},
-        {AF_INET6, "inet6"},
-        {AF_ROSE, "rose"},
-        {AF_DECnet, "decnet"},
-        {AF_NETBEUI, "netbeui"},
-        {AF_SECURITY, "security"},
-        {AF_KEY, "key"},
-        {AF_NETLINK, "netlink"},
-        {AF_PACKET, "packet"},
-        {AF_ASH, "ash"},
-        {AF_ECONET, "econet"},
-        {AF_ATMSVC, "atmsvc"},
-        {AF_SNA, "sna"},
-        {AF_IRDA, "irda"},
-        {AF_PPPOX, "pppox"},
-        {AF_WANPIPE, "wanpipe"},
-        {AF_BLUETOOTH, "bluetooth"}
-};
-#define FAM_NAMES (sizeof(famtab)/sizeof(famtab[0]))
-
-static const char *audit_lookup_fam(int fam)
-{
-        int i;
-
-        for (i = 0; i < FAM_NAMES; i++)
-                if (famtab[i].value == fam)
-                        return famtab[i].name;
-
-        return NULL;
-}
-
-static void print_sockaddr(char *val)
-{
-	int len;
-	struct sockaddr *saddr;
-	char name[NI_MAXHOST], serv[NI_MAXSERV];
-	char *host;
-	const char *str;
-
-	len = strlen(val)/2;
-	host = unescape(val);
-	saddr = (struct sockaddr *)host;
-
-	
-	str = audit_lookup_fam(saddr->sa_family);
-	if (str)
-		printf("%s ", str);
-	else
-		printf("unknown family(%d) ", saddr->sa_family);
-
-	// Now print address for some families
-	switch (saddr->sa_family) {
-		case AF_LOCAL:
-			{
-				struct sockaddr_un *un = 
-					(struct sockaddr_un *)saddr;
-				if (un->sun_path[0])
-					printf("%s ", un->sun_path);
-				else // abstract name
-					printf("%.108s", &un->sun_path[1]);
-			}
-			break;
-                case AF_INET:
-			if (len < sizeof(struct sockaddr_in)) {
-				printf("sockaddr len too short ");
-				free(host);
-				return;
-			}
-			len = sizeof(struct sockaddr_in);
-			if (getnameinfo(saddr, len, name, NI_MAXHOST, serv, 
-				NI_MAXSERV, NI_NUMERICHOST | 
-					NI_NUMERICSERV) == 0 ) {
-				printf("host:%s serv:%s ", name, serv);
-			} else
-				printf("(error resolving addr) ");
-			break;
-		case AF_AX25:
-			{
-				struct sockaddr_ax25 *x = 
-						(struct sockaddr_ax25 *)saddr;
-				printf("call:%c%c%c%c%c%c%c ", 
-					x->sax25_call.ax25_call[0],
-					x->sax25_call.ax25_call[1],
-					x->sax25_call.ax25_call[2],
-					x->sax25_call.ax25_call[3],
-					x->sax25_call.ax25_call[4],
-					x->sax25_call.ax25_call[5],
-					x->sax25_call.ax25_call[6]
-				);
-			}
-			break;
-                case AF_IPX:
-			{
-				struct sockaddr_ipx *ip = 
-						(struct sockaddr_ipx *)saddr;
-				printf("port:%d net:%u ", 
-					ip->sipx_port, ip->sipx_network);
-			}
-			break;
-		case AF_ATMPVC:
-			{
-				struct sockaddr_atmpvc* at = 
-					(struct sockaddr_atmpvc *)saddr;
-				printf("int:%d ", at->sap_addr.itf);
-			}
-			break;
-		case AF_X25:
-			{
-				struct sockaddr_x25* x = 
-					(struct sockaddr_x25 *)saddr;
-				printf("addr:%.15s ", x->sx25_addr.x25_addr);
-			}
-			break;
-                case AF_INET6:
-			if (len < sizeof(struct sockaddr_in6)) {
-				printf("sockaddr6 len too short");
-				free(host);
-				return;
-			}
-			len = sizeof(struct sockaddr_in6);
-			if (getnameinfo(saddr, len, name, NI_MAXHOST, serv,
-				NI_MAXSERV, NI_NUMERICHOST | 
-					NI_NUMERICSERV) == 0 ) {
-				printf("host:%s serv:%s ", name, serv);
-			} else
-				printf("(error resolving addr) ");
-			break;
-                case AF_NETLINK:
-			{
-				struct sockaddr_nl *n = 
-						(struct sockaddr_nl *)saddr;
-				printf("pid:%u ", n->nl_pid);
-			}
-			break;
-	}
-	free(host);
-}
-
-/*
- * This table maps file system flags to their text name
- */
-static struct nv_pair flagtab[] = {
-        {0x0001, "follow"},
-        {0x0002, "directory"},
-        {0x0004, "continue"},
-        {0x0010, "parent"},
-        {0x0020, "noalt"},
-        {0x0040, "atomic"},
-        {0x0100, "open"},
-        {0x0200, "create"},
-        {0x0400, "access"},
-};
-#define FLAG_NAMES (sizeof(flagtab)/sizeof(flagtab[0]))
-
-static void print_flags(char *val)
-{
-	int flags, i,cnt = 0;
-
-	errno = 0;
-	flags = strtoul(val, NULL, 16);
-	if (errno) {
-		printf("conversion error(%s) ", val);
-		return;
-	}
-	if (flags == 0) {
-		printf("none");
-		return;
-	}
-	for (i=0; i<FLAG_NAMES; i++) {
-		if (flagtab[i].value & flags) {
-			if (!cnt) {
-				printf("%s", flagtab[i].name);
-				cnt++;
-			} else
-				printf(",%s", flagtab[i].name);
-		}
-	}
-}
-
-static void print_promiscuous(const char *val)
-{
-	int ival;
-
-	errno = 0;
-	ival = strtol(val, NULL, 10);
-	if (errno) {
-		printf("conversion error(%s) ", val);
-		return;
-	}
-
-	if (ival == 0)
-		printf("no ");
-	else
-		printf("yes ");
-}
-
-/*
- * This table maps file system flags to their text name
- */
-static struct nv_pair captab[] = {
-        {0, "chown"},
-        {1, "dac_override"},
-        {2, "dac_read_search"},
-        {3, "fowner"},
-        {4, "fsetid"},
-        {5, "kill"},
-        {6, "setgid"},
-        {7, "setuid"},
-        {8, "setpcap"},
-        {9, "linux_immutable"},
-        {10, "net_bind_service"},
-        {11, "net_broadcast"},
-        {12, "net_admin"},
-        {13, "net_raw"},
-        {14, "ipc_lock"},
-        {15, "ipc_owner"},
-        {16, "sys_module"},
-        {17, "sys_rawio"},
-        {18, "sys_chroot"},
-        {19, "sys_ptrace"},
-        {20, "sys_pacct"},
-        {21, "sys_admin"},
-        {22, "sys_boot"},
-        {23, "sys_nice"},
-        {24, "sys_resource"},
-        {25, "sys_time"},
-        {26, "sys_tty_config"},
-        {27, "mknod"},
-        {28, "lease"},
-        {29, "audit_write"},
-        {30, "audit_control"},
-};
-#define CAP_NAMES (sizeof(captab)/sizeof(captab[0]))
-
-static void print_capabilities(char *val)
-{
-	int cap, i;
-
-	errno = 0;
-	cap = strtoul(val, NULL, 10);
-	if (errno) {
-		printf("conversion error(%s) ", val);
-		return;
-	}
-
-        for (i = 0; i < CAP_NAMES; i++) {
-                if (captab[i].value == cap) {
-                        printf("%s ", captab[i].name);
-			return;
-		}
-
-	}
-}
-
-static void print_signals(char *val)
-{
-	int i;
-
-	errno = 0;
-	i = strtoul(val, NULL, 10);
-	if (errno) {
-		printf("conversion error(%s)", val);
-		return;
-	}
-	printf("%s ", strsignal(i));
-}
-
-static const char key_sep[2] = { AUDIT_KEY_SEPARATOR, 0 };
-static void print_key(char *val)
-{
-	int count=0;
-	char *saved=NULL;
-	if (*val == '"') {
-		char *term;
-		val++;
-		term = strchr(val, '"');
-		if (term == NULL)
-			return;
-		*term = 0;
-		printf("%s ", val);
-	} else {
-		char *keyptr = unescape(val);
-		char *kptr = strtok_r(keyptr, key_sep, &saved);
-		if (kptr == NULL) {
-			printf("%s", keyptr);
-		}
-		while (kptr) {
-			if (count == 0) {
-				printf("%s", kptr);
-				count++;
-			} else
-				printf(" key=%s", kptr);
-			kptr = strtok_r(NULL, key_sep, &saved);
-		}
-		printf(" ");
-		free(keyptr);
-	}
-}
-
-static void print_list(char *val)
-{
-	int i;
-
-	errno = 0;
-	i = strtoul(val, NULL, 10);
-	if (errno) {
-		printf("conversion error(%s)", val);
-		return;
-	}
-	printf("%s ", audit_flag_to_name(i));
 }
 
 static void interpret(char *name, char *val, int comma, int rtype)
 {
 	int type;
+	idata id;
 
 	while (*name == ' '||*name == '(')
 		name++;
 
-
-	/* Do some fixups */
-	if (rtype == AUDIT_EXECVE && name[0] == 'a')
-		type = T_ESCAPED;
-	else if (rtype == AUDIT_AVC && strcmp(name, "saddr") == 0)
-		type = -1;
-	else if (strcmp(name, "acct") == 0) {
+	if (*name == 'a' && strcmp(name, "acct") == 0) {
 		// Remove trailing punctuation
 		int len = strlen(val);
 		if (val[len-1] == ':')
 			val[len-1] = 0;
-
-		if (val[0] == '"')
-			type = T_ESCAPED;
-		else if (is_hex_string(val))
-			type = T_ESCAPED;
-		else
-			type = -1;
-	} else
-		type = audit_lookup_type(name);
-
-	switch(type) {
-		case T_UID:
-			print_uid(val);
-			break;
-		case T_GID:
-			print_gid(val);
-			break;
-		case T_SYSCALL:
-			print_syscall(val);
-			break;
-		case T_ARCH:
-			print_arch(val);
-			break;
-		case T_EXIT:
-			print_exit(val);
-			break;
-		case T_ESCAPED:
-			print_escaped(val);
-			break;
-		case T_PERM:
-			print_perm(val);
-			break;
-		case T_MODE:
-			print_mode(val);
-			break;
-		case T_SOCKADDR:
-			print_sockaddr(val);
-			break;
-		case T_FLAGS:
-			print_flags(val);
-			break;
-		case T_PROMISC:
-			print_promiscuous(val);
-			break;
-		case T_CAPABILITY:
-			print_capabilities(val);
-			break;
-		case T_SIGNAL:
-			print_signals(val);
-			break;
-		case T_KEY:
-			print_key(val);
-			break;
-		case T_LIST:
-			print_list(val);
-			break;
-		case T_TTY_DATA:
-			print_tty_data(val);
-			break;
-		default:
-			printf("%s%c", val, comma ? ',' : ' ');
 	}
+	type = auparse_interp_adjust_type(rtype, name, val);
+
+	if (rtype == AUDIT_SYSCALL || rtype == AUDIT_SECCOMP) {
+		if (machine == (unsigned long)-1) 
+			machine = audit_detect_machine();
+		if (*name == 'a' && strcmp(name, "arch") == 0) {
+			unsigned long ival;
+			errno = 0;
+			ival = strtoul(val, NULL, 16);
+			if (errno) {
+				printf("arch conversion error(%s) ", val);
+				return;
+			}
+			machine = audit_elf_to_machine(ival);
+		}
+		if (cur_syscall < 0 && *name == 's' &&
+				strcmp(name, "syscall") == 0) {
+			unsigned long ival;
+			errno = 0;
+			ival = strtoul(val, NULL, 10);
+			if (errno) {
+				printf("syscall conversion error(%s) ", val);
+				return;
+			}
+			cur_syscall = ival;
+		}
+		id.syscall = cur_syscall;
+	} else
+		id.syscall = 0;
+	id.machine = machine;
+	id.a0 = a0;
+	id.a1 = a1;
+	id.name = name;
+	id.val = val;
+
+	char *out = auparse_do_interpretation(type, &id);
+	if (type == AUPARSE_TYPE_UNCLASSIFIED)
+		printf("%s%c", val, comma ? ',' : ' ');
+	else if (name[0] == 'k' && strcmp(name, "key") == 0) {
+		char *str, *ptr = out;
+		int count = 0;
+		while ((str = strchr(ptr, AUDIT_KEY_SEPARATOR))) {
+			*str = 0;
+			if (count == 0) {
+				printf("%s", ptr);
+				count++;
+			} else
+				printf(" key=%s", ptr);
+			ptr = str+1;
+		}
+		if (count == 0)
+			printf("%s ", out);
+		else
+			printf(" key=%s ", ptr);
+	} else if (type == AUPARSE_TYPE_TTY_DATA)
+		printf("%s", out);
+	else
+		printf("%s ", out);
+	free(out);
 }
 

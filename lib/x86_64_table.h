@@ -1,5 +1,5 @@
 /* x86_64_table.h --
- * Copyright 2005-09 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-14 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -308,7 +308,7 @@ _S(284, "eventfd")
 _S(285, "fallocate")
 _S(286, "timerfd_settime")
 _S(287, "timerfd_gettime")
-_S(288, "paccept")
+_S(288, "accept4")
 _S(289, "signalfd4")
 _S(290, "eventfd2")
 _S(291, "epoll_create1")
@@ -318,5 +318,22 @@ _S(294, "inotify_init1")
 _S(295, "preadv")
 _S(296, "pwritev")
 _S(297, "rt_tgsigqueueinfo")
-_S(298, "perf_counter_open")
-
+_S(298, "perf_event_open")
+_S(299, "recvmmsg")
+_S(300, "fanotify_init")
+_S(301, "fanotify_mark")
+_S(302, "prlimit64")
+_S(303, "name_to_handle_at")
+_S(304, "open_by_handle_at")
+_S(305, "clock_adjtime")
+_S(306, "syncfs")
+_S(307, "sendmmsg")
+_S(308, "setns")
+_S(309, "getcpu")
+_S(310, "process_vm_readv")
+_S(311, "process_vm_writev")
+_S(312, "kcmp")
+_S(313, "finit_module")
+_S(314, "sched_setattr")
+_S(315, "sched_getattr")
+_S(316, "renameat2")

@@ -1,5 +1,5 @@
 # Makefile.am-- 
-# Copyright 2004-2006, 2008 Red Hat Inc., Durham, North Carolina.
+# Copyright 2004-2006, 2008,2011-14 Red Hat Inc., Durham, North Carolina.
 # All Rights Reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -23,30 +23,33 @@
 CONFIG_CLEAN_FILES = *.rej *.orig
 AUTOMAKE_OPTIONS = no-dependencies
 SUBDIRS = test
-INCLUDES = -I${top_srcdir} -I${top_srcdir}/lib -I${top_srcdir}/src/libev
+INCLUDES = -I${top_srcdir} -I${top_srcdir}/lib -I${top_srcdir}/src/libev -I${top_srcdir}/auparse
 sbin_PROGRAMS = auditd auditctl aureport ausearch autrace
-LIBS = -Lmt -lauditmt
-LDADD = -lpthread
-AM_CFLAGS = -D_REENTRANT -D_GNU_SOURCE
-noinst_HEADERS = auditd-config.h auditd-event.h auditd-listen.h ausearch-llist.h ausearch-options.h auditctl-llist.h aureport-options.h ausearch-parse.h aureport-scan.h ausearch-lookup.h ausearch-int.h auditd-dispatch.h ausearch-string.h ausearch-nvpair.h ausearch-common.h ausearch-avc.h ausearch-time.h ausearch-lol.h
+AM_CFLAGS = -D_GNU_SOURCE
+noinst_HEADERS = auditd-config.h auditd-event.h auditd-listen.h ausearch-llist.h ausearch-options.h auditctl-llist.h aureport-options.h ausearch-parse.h aureport-scan.h ausearch-lookup.h ausearch-int.h auditd-dispatch.h ausearch-string.h ausearch-nvpair.h ausearch-common.h ausearch-avc.h ausearch-time.h ausearch-lol.h auditctl-listing.h ausearch-checkpt.h
 
-auditd_SOURCES = auditd.c auditd-event.c auditd-config.c auditd-reconfig.c auditd-sendmail.c auditd-dispatch.c auditd-listen.c
-auditd_CFLAGS = -fPIE -DPIE -g -D_REENTRANT -D_GNU_SOURCE -fno-strict-aliasing 
-auditd_LDFLAGS = -pie -Wl,-z,relro
+auditd_SOURCES = auditd.c auditd-event.c auditd-config.c auditd-reconfig.c auditd-sendmail.c auditd-dispatch.c
+if ENABLE_LISTENER
+auditd_SOURCES += auditd-listen.c
+endif
+auditd_CFLAGS = -fPIE -DPIE -g -D_REENTRANT -D_GNU_SOURCE -fno-strict-aliasing -pthread
+auditd_LDFLAGS = -pie -Wl,-z,relro -Wl,-z,now
 auditd_DEPENDENCIES = mt/libauditmt.a libev/libev.a
-auditd_LDADD = @LIBWRAP_LIBS@ @libev_LIBS@ -Llibev -lev -lrt -lm $(gss_libs)
+auditd_LDADD = @LIBWRAP_LIBS@ -Llibev -lev -Lmt -lauditmt -lpthread -lrt -lm $(gss_libs)
 
-auditctl_SOURCES = auditctl.c auditctl-llist.c delete_all.c
-auditctl_DEPENDENCIES = mt/libauditmt.a 
+auditctl_SOURCES = auditctl.c auditctl-llist.c delete_all.c auditctl-listing.c
+auditctl_CFLAGS = -fPIE -DPIE -g -D_GNU_SOURCE
+auditctl_LDFLAGS = -pie -Wl,-z,relro -Wl,-z,now
+auditctl_LDADD = -L${top_builddir}/lib -laudit -L${top_builddir}/auparse -lauparse
 
 aureport_SOURCES = aureport.c auditd-config.c ausearch-llist.c aureport-options.c ausearch-string.c ausearch-parse.c aureport-scan.c aureport-output.c ausearch-lookup.c ausearch-int.c ausearch-time.c ausearch-nvpair.c ausearch-avc.c ausearch-lol.c
-aureport_DEPENDENCIES = mt/libauditmt.a
+aureport_LDADD = -L${top_builddir}/lib -laudit
 
-ausearch_SOURCES = ausearch.c auditd-config.c ausearch-llist.c ausearch-options.c ausearch-report.c ausearch-match.c ausearch-string.c ausearch-parse.c ausearch-int.c ausearch-time.c ausearch-nvpair.c ausearch-lookup.c ausearch-avc.c ausearch-lol.c
-ausearch_DEPENDENCIES = mt/libauditmt.a
+ausearch_SOURCES = ausearch.c auditd-config.c ausearch-llist.c ausearch-options.c ausearch-report.c ausearch-match.c ausearch-string.c ausearch-parse.c ausearch-int.c ausearch-time.c ausearch-nvpair.c ausearch-lookup.c ausearch-avc.c ausearch-lol.c ausearch-checkpt.c
+ausearch_LDADD = -L${top_builddir}/lib -laudit -L${top_builddir}/auparse -lauparse
 
 autrace_SOURCES = autrace.c delete_all.c auditctl-llist.c
-autrace_DEPENDENCIES = mt/libauditmt.a
+autrace_LDADD = -L${top_builddir}/lib -laudit
 
 mt/libauditmt.a:
 	make -C mt
