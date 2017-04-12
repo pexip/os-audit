@@ -1,4 +1,4 @@
-.TH AUDITD.CONF: "5" "March 2014" "Red Hat" "System Administration Utilities"
+.TH AUDITD.CONF: "5" "April 2016" "Red Hat" "System Administration Utilities"
 .SH NAME
 auditd.conf \- audit daemon configuration file
 .SH DESCRIPTION
@@ -7,17 +7,32 @@ The file
 contains configuration information specific to the audit daemon. Each line should contain one configuration keyword, an equal sign, and then followed by appropriate configuration information. All option names and values are case insensitive. The keywords recognized are listed and described below. Each line should be limited to 160 characters or the line will be skipped. You may add comments to the file by starting the line with a '#' character.
 
 .TP
+.I local_events
+This yes/no keyword specifies whether or not to include local events. Normally
+you want local events so the default value is yes. Cases where you would set
+this to no is when you want to aggregate events only from the network. At the
+moment, this is useful if the audit daemon is running in a container. This
+option can only be set once at daemon start up. Reloading the config file
+has no effect.
+.TP
 .I log_file
 This keyword specifies the full path name to the log file where audit records
 will be stored. It must be a regular file.
 .TP
+.I write_logs
+This yes/no keyword determines whether or not to write logs to the disk.
+Normally you want this so the default is yes.
+.TP
 .I log_format
-The log format describes how the information should be stored on disk. There are 2 options: raw and nolog.
-If set to
+The log format describes how the information should be stored on disk. There are 2 options: raw and enriched. The nolog option is deprecated. If set to
 .IR RAW ,
-the audit records will be stored in a format exactly as the kernel sends it. If this option is set to
+the audit records will be stored in a format exactly as the kernel sends it. The
+.IR ENRICHED
+option will resolve all uid, gid, syscall, architecture, and socket address information before writing the event to disk. This aids in making sense of events created on one system but reported/analized on another system.
+The 
 .I NOLOG
-then all audit information is discarded instead of writing to disk. This mode does not affect data sent to the audit event dispatcher.
+option is now deprecated. If you were setting this format, now you should set
+the write_logs option to no.
 .TP
 .I log_group
 This keyword specifies the group that is applied to the log file's permissions. The default is root. The group name can be either numeric or spelled out.
@@ -27,7 +42,7 @@ This is a non-negative number that tells the audit daemon how much of a priority
 .TP
 .I flush
 Valid values are
-.IR none ", " incremental ", " data ",  and " sync ".
+.IR none ", " incremental ", " incremental_async ", " data ",  and " sync ".
 If set to
 .IR none ,
 no special effort is made to flush the audit records to disk. If set to
@@ -36,12 +51,16 @@ Then the
 .I freq
 parameter is used to determine how often an explicit flush to disk is issued.
 The
+.IR incremental_async
+parameter is very much like
+.IR incremental
+except the flushing is done asynchronously for higher performance. The
 .I data
 parameter tells the audit daemon to keep the data portion of the disk file
 sync'd at all times. The
 .I sync
 option tells the audit daemon to keep both the data and meta-data fully
-sync'd with every write to disk.
+sync'd with every write to disk. The default value is incremental_async.
 .TP
 .I freq
 This is a non-negative number that tells the audit daemon how many records to
@@ -49,13 +68,14 @@ write before issuing an explicit flush to disk command. This value is only
 valid when the
 .I flush
 keyword is set to
-.IR incremental .
+.IR incremental
+or incremental_async.
 .TP
 .I num_logs
 This keyword specifies the number of log files to keep if rotate is given
 as the
 .I max_log_file_action.
-If the number is < 2, logs are not rotated. This number must be 99 or less.
+If the number is < 2, logs are not rotated. This number must be 999 or less.
 The default is 0 - which means no rotation. As you increase the number of log files being rotated, you may need to adjust the kernel backlog setting upwards since it takes more time to rotate the files. This is typically done in /etc/audit/audit.rules. If log rotation is configured to occur, the daemon will check for excess logs and remove them in effort to keep disk space available. The excess log check is only done on startup and when a reconfigure results in a space check.
 .TP
 .I disp_qos
@@ -120,12 +140,14 @@ to perform a configurable action because the system is starting to run low on di
 This parameter tells the system what action to take when the system has
 detected that it is starting to get low on disk space.
 Valid values are
-.IR ignore ", " syslog ", " email ", " exec ", " suspend ", " single ", and " halt .
+.IR ignore ", " syslog ", " rotate ", " email ", " exec ", " suspend ", " single ", and " halt .
 If set to
 .IR ignore ,
 the audit daemon does nothing.
 .I syslog
 means that it will issue a warning to syslog.
+.I rotate
+will rotate logs, losing the oldest to free up space.
 .I Email
 means that it will send a warning to the email account specified in
 .I action_mail_acct
@@ -150,12 +172,14 @@ This parameter tells the system what action to take when the system has
 detected that it
 .B is low on disk space.
 Valid values are
-.IR ignore ", " syslog ", " email ", " exec ", " suspend ", " single ", and " halt .
+.IR ignore ", " syslog ", "rotate ", " email ", " exec ", " suspend ", " single ", and " halt .
 If set to
 .IR ignore ,
 the audit daemon does nothing.
 .I Syslog
 means that it will issue a warning to syslog.
+.I rotate
+will rotate logs, losing the oldest to free up space.
 .I Email
 means that it will send a warning to the email account specified in
 .I action_mail_acct
@@ -172,14 +196,16 @@ option will cause the audit daemon to shutdown the computer system.
 .I disk_full_action
 This parameter tells the system what action to take when the system has
 detected that the partition to which log files are written has become full. Valid values are
-.IR ignore ", " syslog ", " exec ", " suspend ", " single ", and " halt .
+.IR ignore ", " syslog ", " rotate ", " exec ", " suspend ", " single ", and " halt .
 If set to
 .IR ignore ,
 the audit daemon will issue a syslog message but no other action is taken.
 .I Syslog
 means that it will issue a warning to syslog.
+.I rotate
+will rotate logs, losing the oldest to free up space.
 .I exec
-/path-to-script will execute the script. You cannot pass parameters to the script. The script is also responsible for telling the auditd daemon to resume loggin
+/path-to-script will execute the script. You cannot pass parameters to the script. The script is also responsible for telling the auditd daemon to resume logging
 g once its completed its action. This can be done by adding service auditd resume to the script.
 .I Suspend
 will cause the audit daemon to stop writing records to the disk. The daemon will still be alive. The
@@ -264,6 +290,10 @@ Location of the key for this client's principal.
 Note that the key file must be owned by root and mode 0400.
 The default is
 .I /etc/audit/audit.key
+.TP
+.I distribute_network
+If set to "yes", network originating events will be distributed to the audit
+dispatcher for processing. The default is "no".
 
 .SH NOTES
 In a CAPP environment, the audit trail is considered so important that access to system resources must be denied if an audit trail cannot be created. In this environment, it would be suggested that /var/log/audit be on its own partition. This is to ensure that space detection is accurate and that no other process comes along and consumes part of it.

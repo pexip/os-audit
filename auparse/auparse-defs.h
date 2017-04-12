@@ -1,5 +1,5 @@
 /* auparse-defs.h --
- * Copyright 2006-07,09,2011-12,2014 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-07,09,2011-12,2014-16 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -83,7 +83,14 @@ typedef enum {  AUPARSE_TYPE_UNCLASSIFIED,  AUPARSE_TYPE_UID, AUPARSE_TYPE_GID,
 	AUPARSE_TYPE_ICMPTYPE, AUPARSE_TYPE_PROTOCOL,
 	AUPARSE_TYPE_ADDR, AUPARSE_TYPE_PERSONALITY,
 	AUPARSE_TYPE_SECCOMP, AUPARSE_TYPE_OFLAG,
-	AUPARSE_TYPE_MMAP, AUPARSE_TYPE_MODE_SHORT, AUPARSE_TYPE_MAC_LABEL  } auparse_type_t;
+	AUPARSE_TYPE_MMAP, AUPARSE_TYPE_MODE_SHORT, AUPARSE_TYPE_MAC_LABEL,
+	AUPARSE_TYPE_PROCTITLE, AUPARSE_TYPE_HOOK,
+	AUPARSE_TYPE_NETACTION, AUPARSE_TYPE_MACPROTO,
+	AUPARSE_TYPE_IOCTL_REQ, AUPARSE_TYPE_ESCAPED_KEY } auparse_type_t;
+
+/* This type determines what escaping if any gets applied to interpreted fields */
+typedef enum { AUPARSE_ESC_RAW, AUPARSE_ESC_TTY, AUPARSE_ESC_SHELL,
+	AUPARSE_ESC_SHELL_QUOTE } auparse_esc_t;
 
 #ifdef __cplusplus
 }

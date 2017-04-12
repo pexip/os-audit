@@ -1,6 +1,6 @@
 /*
 * ausearch-report.c - Format and output events
-* Copyright (c) 2005-09,2011-13 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-09,2011-13,2016 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -37,7 +37,7 @@
 static void output_raw(llist *l);
 static void output_default(llist *l);
 static void output_interpreted(llist *l);
-static void output_interpreted_node(const lnode *n);
+static void output_interpreted_node(const lnode *n, const event *e);
 static void interpret(char *name, char *val, int comma, int rtype);
 
 /* The machine based on elf type */
@@ -46,6 +46,25 @@ static int cur_syscall = -1;
 
 /* The first syscall argument */
 static unsigned long long a0, a1;
+
+/* tracks state of interpretations */
+static int loaded = 0;
+
+void ausearch_load_interpretations(const lnode *n)
+{
+	if (loaded == 0) {
+		_auparse_load_interpretations(n->interp);
+		loaded = 1;
+	}
+}
+
+void ausearch_free_interpretations(void)
+{
+	if (loaded) {
+		_auparse_free_interpretations();
+		loaded = 0;
+	}
+}
 
 /* This function branches to the correct output format */
 void output_record(llist *l)
@@ -80,7 +99,8 @@ static void output_raw(llist *l)
 		return;
 	}
 	do {
-		printf("%s\n", n->message);
+		n->message[n->mlen] = AUDIT_INTERP_SEPARATOR;
+		puts(n->message);
 	} while ((n=list_next(l)));
 }
 
@@ -99,11 +119,11 @@ static void output_default(llist *l)
 		fprintf(stderr, "Error - no elements in record.");
 		return;
 	}
-	if (n->type >= AUDIT_DAEMON_START && n->type < AUDIT_SYSCALL) 
-		printf("%s\n", n->message);
+	if (n->type >= AUDIT_DAEMON_START && n->type < AUDIT_SYSCALL)
+		puts(n->message); // No injection possible
 	else {
 		do {
-			printf("%s\n", n->message);
+			safe_print_string_n(n->message, n->mlen, 1);
 		} while ((n=list_prev(l)));
 	}
 }
@@ -125,10 +145,10 @@ static void output_interpreted(llist *l)
 		return;
 	}
 	if (n->type >= AUDIT_DAEMON_START && n->type < AUDIT_SYSCALL) 
-		output_interpreted_node(n);
+		output_interpreted_node(n, &(l->e));
 	else {
 		do {
-			output_interpreted_node(n);
+			output_interpreted_node(n, &(l->e));
 		} while ((n=list_prev(l)));
 	}
 }
@@ -137,21 +157,25 @@ static void output_interpreted(llist *l)
  * This function will cycle through a single record and lookup each field's
  * value that it finds. 
  */
-static void output_interpreted_node(const lnode *n)
+static void output_interpreted_node(const lnode *n, const event *e)
 {
-	char *ptr, *str = n->message, *node = NULL;
+	char *ptr, *str = n->message;
 	int found, comma = 0;
+	int num = n->type;
+	struct tm *btm;
+	char tmp[32];
 
 	// Reset these because each record could be different
 	machine = -1;
 	cur_syscall = -1;
 
-	/* Check and see if we start with a node */
-	if (str[0] == 'n') {
-		ptr=strchr(str, ' ');
-		if (ptr) {
-			*ptr = 0;
-			node = str;
+	/* Check and see if we start with a node
+ 	 * If we do, and there is a space in the line
+ 	 * move the pointer to the first character past
+ 	 * the space
+  	 */
+	if (e->node) {
+		if ((ptr=strchr(str, ' ')) != NULL) {
 			str = ptr+1;
 		}
 	}
@@ -161,76 +185,34 @@ static void output_interpreted_node(const lnode *n)
 	if (ptr == NULL) {
 		fprintf(stderr, "can't find time stamp\n");
 		return;
-	} else {
-		time_t t;
-		int milli,num = n->type;
-		unsigned long serial;
-		struct tm *btm;
-		char tmp[32];
-		const char *bptr;
+	}
 
-		*ptr++ = 0;
-		if (num == -1) {
-			// see if we are older and wiser now.
-			bptr = strchr(str, '[');
-			if (bptr && bptr < ptr) {
-				char *eptr;
-				bptr++;
-				eptr = strchr(bptr, ']');
-				if (eptr) {
-					*eptr = 0;
-					errno = 0;
-					num = strtoul(bptr, NULL, 10);
-					*eptr = ']';
-					if (errno) 
-						num = -1;
-				}
-			}
+	*ptr++ = 0;	/* move to the start of the timestamp */
+
+	// print everything up to it.
+	if (num >= 0) {
+		const char	* bptr;
+		bptr = audit_msg_type_to_name(num);
+		if (bptr) {
+			if (e->node)
+				printf("node=%s ", e->node);
+			printf("type=%s msg=audit(", bptr);
+			goto no_print;
 		}
-
-		// print everything up to it.
-		if (num >= 0) {
-			bptr = audit_msg_type_to_name(num);
-			if (bptr) {
-				if (node)
-					printf("%s ", node);
-				printf("type=%s msg=audit(", bptr);
-				goto no_print;
-			}
-		} 
-		if (node)
-			printf("%s ", node);
-		printf("%s(", str);
+	} 
+	if (e->node)
+		printf("node=%s ", e->node);
+	printf("%s(", str);
 no_print:
 
-		// output formatted time.
-		str = strchr(ptr, '.');
-		if (str == NULL)
-			return;
-		*str++ = 0;
-		errno = 0;
-		t = strtoul(ptr, NULL, 10);
-		if (errno)
-			return;
-		ptr = strchr(str, ':');
-		if (ptr == NULL)
-			return;
-		*ptr++ = 0;
-		milli = strtoul(str, NULL, 10);
-		if (errno)
-			return;
-		str = strchr(ptr, ')');
-		if(str == NULL)
-			return;
-		*str++ = 0;
-		serial = strtoul(ptr, NULL, 10);
-		if (errno)
-			return;
-		btm = localtime(&t);
-		strftime(tmp, sizeof(tmp), "%x %T", btm);
-		printf("%s", tmp);
-		printf(".%03d:%lu) ", milli, serial);
-	}
+	str = strchr(ptr, ')');
+	if(str == NULL)
+		return;
+	*str++ = 0;
+	btm = localtime(&e->sec);
+	strftime(tmp, sizeof(tmp), "%x %T", btm);
+	printf("%s", tmp);
+	printf(".%03d:%lu) ", e->milli, e->serial);
 
 	if (n->type == AUDIT_SYSCALL) { 
 		a0 = n->a0;
@@ -238,6 +220,7 @@ no_print:
 	}
 
 	// for each item.
+	ausearch_load_interpretations(n);
 	found = 0;
 	while (str && *str && (ptr = strchr(str, '='))) {
 		char *name, *val;
@@ -312,12 +295,15 @@ no_print:
 		// print interpreted string
 		interpret(name, val, comma, n->type);
 	}
+	ausearch_free_interpretations();
+
 	// If nothing found, just print out as is
 	if (!found && ptr == NULL && str)
-		printf("%s", str);
+		safe_print_string(str, 1);
+
 	// If last field had comma, output the rest
 	else if (comma)
-		printf("%s", str);
+		safe_print_string(str, 1);
 	printf("\n");
 }
 
@@ -393,6 +379,7 @@ static void interpret(char *name, char *val, int comma, int rtype)
 		printf("%s", out);
 	else
 		printf("%s ", out);
+
 	free(out);
 }
 

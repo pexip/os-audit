@@ -22,8 +22,9 @@
 
 CONFIG_CLEAN_FILES = *.rej *.orig
 EXTRA_DIST = auditd.init auditd.service auditd.sysconfig auditd.conf \
-	audit.rules auditd.cron libaudit.conf audispd.conf auditd.condrestart \
-	auditd.restart auditd.resume auditd.rotate auditd.stop augenrules
+	auditd.cron libaudit.conf audispd.conf auditd.condrestart \
+	auditd.restart auditd.resume auditd.rotate auditd.stop \
+	audit-stop.rules augenrules
 libconfig = libaudit.conf
 dispconfig = audispd.conf
 dispconfigdir = $(sysconfdir)/audisp
@@ -37,8 +38,7 @@ endif
 
 auditdir = $(sysconfdir)/audit
 auditrdir = $(auditdir)/rules.d
-dist_audit_DATA = auditd.conf
-dist_auditr_DATA = audit.rules
+dist_audit_DATA = auditd.conf audit-stop.rules
 sbin_SCRIPTS = augenrules
 
 install-data-hook:
@@ -53,7 +53,7 @@ install-exec-hook:
 if ENABLE_SYSTEMD
 	mkdir -p ${DESTDIR}${initdir}
 	mkdir -p ${DESTDIR}${legacydir}
-	$(INSTALL_SCRIPT) -D -m 640 ${srcdir}/auditd.service ${DESTDIR}${initdir}
+	$(INSTALL_SCRIPT) -D -m 644 ${srcdir}/auditd.service ${DESTDIR}${initdir}
 	$(INSTALL_SCRIPT) -D -m 750 ${srcdir}/auditd.rotate ${DESTDIR}${legacydir}/rotate
 	$(INSTALL_SCRIPT) -D -m 750 ${srcdir}/auditd.resume ${DESTDIR}${legacydir}/resume
 	$(INSTALL_SCRIPT) -D -m 750 ${srcdir}/auditd.stop ${DESTDIR}${legacydir}/stop

@@ -1,5 +1,5 @@
 # Makefile.am -- 
-# Copyright 2006-08,2014 Red Hat Inc., Durham, North Carolina.
+# Copyright 2006-08,2014-16 Red Hat Inc., Durham, North Carolina.
 # All Rights Reserved.
 #
 # This library is free software; you can redistribute it and/or
@@ -22,28 +22,36 @@
 
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig *.cur
 AUTOMAKE_OPTIONS = no-dependencies
-check_PROGRAMS = auparse_test 
+check_PROGRAMS = auparse_test auparselol_test
 dist_check_SCRIPTS = auparse_test.py
-EXTRA_DIST = auparse_test.ref auparse_test.ref.py test.log test2.log
+EXTRA_DIST = auparse_test.ref auparse_test.ref.py test.log test2.log test3.log auditd_raw.sed
 
-INCLUDES = -I${top_srcdir}/auparse -I${top_srcdir}/lib
+AM_CPPFLAGS = -I${top_srcdir}/auparse -I${top_srcdir}/lib
 
 auparse_test_SOURCES = auparse_test.c
 auparse_test_LDFLAGS = -static
 auparse_test_LDADD = ${top_builddir}/auparse/libauparse.la \
 	${top_builddir}/lib/libaudit.la
 
+auparselol_test_SOURCES = auparselol_test.c
+auparselol_test_LDFLAGS = -static
+auparselol_test_LDADD = ${top_builddir}/auparse/libauparse.la \
+	${top_builddir}/lib/libaudit.la
+
 drop_srcdir = sed 's,$(srcdir)/test,test,'
 
-check: auparse_test
+check: auparse_test auparselol_test
 	test "$(top_srcdir)" = "$(top_builddir)" || \
 			cp $(top_srcdir)/auparse/test/test*.log .
 	LC_ALL=C \
 	./auparse_test > auparse_test.cur
 	diff -u $(top_srcdir)/auparse/test/auparse_test.ref auparse_test.cur
+	./auparselol_test -f test3.log --check | sort > auparse_test.cur
+	sed -f $(top_srcdir)/auparse/test/auditd_raw.sed test3.log | sort > auparse_test.raw
+	diff -u auparse_test.raw auparse_test.cur
 if HAVE_PYTHON
-	cp ${top_builddir}/swig/.libs/_audit.so ${top_builddir}/swig
-	PYTHONPATH=${top_builddir}/bindings/python/.libs/:${top_builddir}/swig:${top_builddir}/swig/.libs \
+	cp ${top_builddir}/bindings/swig/python/.libs/_audit.so ${top_builddir}/bindings/swig/python
+	PYTHONPATH=${top_builddir}/bindings/python/python2/.libs/:${top_builddir}/bindings/swig/python:${top_builddir}/bindings/swig/python/.libs \
 	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs \
 		srcdir=$(srcdir) $(srcdir)/auparse_test.py \
 		| $(drop_srcdir) > auparse_test.cur
@@ -51,23 +59,26 @@ if HAVE_PYTHON
 endif
 	echo -e "===================\nAuparse Test Passes\n==================="
 
-diffcheck: auparse_test
+diffcheck: auparse_test auparselol_test
 	./auparse_test > auparse_test.cur
 	diff -u $(srcdir)/auparse_test.ref auparse_test.cur
+	./auparselol_test -f test3.log --check | sort > auparse_test.cur
+	sed -f ./auditd_raw.sed test3.log | sort > auparse_test.raw
+	diff -u auparse_test.raw auparse_test.cur
 
 memcheck: auparse_test
 	valgrind --leak-check=yes --show-reachable=yes ./auparse_test 
 
 pycheck: auparse_test.py
 if HAVE_PYTHON
-	PYTHONPATH=${top_builddir}/bindings/python/.libs/:${top_builddir}/swig:${top_builddir}/swig/.libs \
+	PYTHONPATH=${top_builddir}/bindings/python/python2/.libs/:${top_builddir}/bindings/swig/python:${top_builddir}/bindings/swig/python/.libs \
 	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs \
 		srcdir=$(srcdir) $(srcdir)/auparse_test.py
 endif
 
 pydiffcheck: auparse_test.py 
 if HAVE_PYTHON
-	PYTHONPATH=${top_builddir}/bindings/python/.libs/:${top_builddir}/swig:${top_builddir}/swig/.libs \
+	PYTHONPATH=${top_builddir}/bindings/python/python2/.libs/:${top_builddir}/bindings/swig/python:${top_builddir}/bindings/swig/python/.libs \
 	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs \
 		srcdir=$(srcdir) $(srcdir)/auparse_test.py \
 		| $(drop_srcdir) > auparse_test.cur
@@ -76,7 +87,7 @@ endif
 
 pymemcheck: auparse_test.py
 if HAVE_PYTHON
-	PYTHONPATH=${top_builddir}/bindings/python/.libs/:${top_builddir}/swig:${top_builddir}/swig/.libs \
+	PYTHONPATH=${top_builddir}/bindings/python/python2/.libs/:${top_builddir}/bindings/swig/python:${top_builddir}/bindings/swig/python/.libs \
 	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs srcdir=$(srcdir) valgrind --leak-check=yes --show-reachable=yes python $(srcdir)/auparse_test.py
 
 ${top_builddir}/bindings/python/build/*/auparse.so: ${top_srcdir}/bindings/python/auparse_python.c
@@ -85,7 +96,8 @@ endif
 
 clean-generic:
 	$(RM) *.cur
+	$(RM) auparse_test.raw
 if HAVE_PYTHON
-	$(RM) ${top_builddir}/swig/_audit.so
+	$(RM) ${top_builddir}/bindings/swig/python/_audit.so
 endif
 	test "$(top_srcdir)" = "$(top_builddir)" || $(RM) test*.log

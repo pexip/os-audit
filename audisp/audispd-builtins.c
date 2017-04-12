@@ -302,6 +302,16 @@ static void init_syslog(const plugin_conf_t *conf)
 				facility = LOG_LOCAL6;
 			else if (strcasecmp(conf->args[i], "LOG_LOCAL7") == 0)
 				facility = LOG_LOCAL7;
+			else if (strcasecmp(conf->args[i], "LOG_AUTH") == 0)
+				facility = LOG_AUTH;
+			else if (strcasecmp(conf->args[i], "LOG_AUTHPRIV") == 0)
+				facility = LOG_AUTHPRIV;
+			else if (strcasecmp(conf->args[i], "LOG_DAEMON") == 0)
+				facility = LOG_DAEMON;
+			else if (strcasecmp(conf->args[i], "LOG_SYSLOG") == 0)
+				facility = LOG_SYSLOG;
+			else if (strcasecmp(conf->args[i], "LOG_USER") == 0)
+				facility = LOG_USER;
 			else {
 				syslog(LOG_ERR, 
 					"Unknown log priority/facility %s",
@@ -317,10 +327,24 @@ static void init_syslog(const plugin_conf_t *conf)
 	syslog_started = 1;
 }
 
-void send_syslog(const char *s)
+void send_syslog(const char *s, uint32_t ver)
 {
-	if (syslog_started) 
+	if (syslog_started) {
+		if (ver == AUDISP_PROTOCOL_VER2) {
+			char *ptr = strdup(s);
+			if (ptr) {
+				char *c = strchr(ptr, AUDIT_INTERP_SEPARATOR);
+				if (c)
+					*c = ' ';
+				syslog(priority, "%s", ptr);
+				free(ptr);
+				return;
+			}
+		}
+		// Everything should fall through except success because
+		// something is better than nothing.
 		syslog(priority, "%s", s);
+	}
 }
 
 void destroy_syslog(void)

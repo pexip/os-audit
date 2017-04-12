@@ -19,6 +19,21 @@ event 1 has 1 records
         auid=848 (unknown(848))
 
 event 2 has 1 records
+    record 1 of type 1112(USER_LOGIN) has 10 fields
+    line=3 file=None
+    event time: 1143146623.879:146, host=(null)
+        type=USER_LOGIN (USER_LOGIN)
+        pid=2027 (2027)
+        uid=0 (root)
+        auid=848 (unknown(848))
+        uid=848 (unknown(848))
+        exe="/bin/login" (/bin/login)
+        hostname=? (?)
+        addr=? (?)
+        terminal=tty3 (tty3)
+        res=success (success)
+
+event 3 has 1 records
     record 1 of type 1300(SYSCALL) has 24 fields
     line=2 file=None
     event time: 1143146623.875:143, host=(null)
@@ -46,21 +61,6 @@ event 2 has 1 records
         comm="login" (login)
         exe="/bin/login" (/bin/login)
         subj=system_u:system_r:local_login_t:s0-s0:c0.c255 (system_u:system_r:local_login_t:s0-s0:c0.c255)
-
-event 3 has 1 records
-    record 1 of type 1112(USER_LOGIN) has 10 fields
-    line=3 file=None
-    event time: 1143146623.879:146, host=(null)
-        type=USER_LOGIN (USER_LOGIN)
-        pid=2027 (2027)
-        uid=0 (root)
-        auid=848 (unknown(848))
-        uid=848 (unknown(848))
-        exe="/bin/login" (/bin/login)
-        hostname=? (?)
-        addr=? (?)
-        terminal=tty3 (tty3)
-        res=success (success)
 
 Test 2 Done
 
@@ -96,7 +96,7 @@ event 1 has 4 records
         arch=c000003e (x86_64)
         syscall=2 (open)
         success=no (no)
-        exit=-13 (-13(Permission denied))
+        exit=-13 (EACCES(Permission denied))
         a0=5555665d91b0 (0x5555665d91b0)
         a1=10800 (O_RDONLY|O_NONBLOCK|O_DIRECTORY)
         a2=5555665d91b8 (0x5555665d91b8)
@@ -255,7 +255,7 @@ event 1 has 4 records
         arch=c000003e (x86_64)
         syscall=2 (open)
         success=no (no)
-        exit=-13 (-13(Permission denied))
+        exit=-13 (EACCES(Permission denied))
         a0=5555665d91b0 (0x5555665d91b0)
         a1=10800 (O_RDONLY|O_NONBLOCK|O_DIRECTORY)
         a2=5555665d91b8 (0x5555665d91b8)
@@ -411,7 +411,7 @@ event 8 has 4 records
         arch=c000003e (x86_64)
         syscall=2 (open)
         success=no (no)
-        exit=-13 (-13(Permission denied))
+        exit=-13 (EACCES(Permission denied))
         a0=5555665d91b0 (0x5555665d91b0)
         a1=10800 (O_RDONLY|O_NONBLOCK|O_DIRECTORY)
         a2=5555665d91b8 (0x5555665d91b8)
@@ -552,9 +552,9 @@ auid exists...which is correct
 Testing BUFFER_ARRAY, stop on field
 Found auid = 848
 Testing BUFFER_ARRAY, stop on record
-Found type = SYSCALL
+Found type = USER_LOGIN
 Testing BUFFER_ARRAY, stop on event
-Found type = SYSCALL
+Found type = USER_LOGIN
 Testing test.log, stop on field
 Found auid = 4294967295
 Testing test.log, stop on record
@@ -585,6 +585,21 @@ event 1 has 1 records
         auid=848 (unknown(848))
 
 event 2 has 1 records
+    record 1 of type 1112(USER_LOGIN) has 10 fields
+    line=3 file=None
+    event time: 1143146623.879:146, host=(null)
+        type=USER_LOGIN (USER_LOGIN)
+        pid=2027 (2027)
+        uid=0 (root)
+        auid=848 (unknown(848))
+        uid=848 (unknown(848))
+        exe="/bin/login" (/bin/login)
+        hostname=? (?)
+        addr=? (?)
+        terminal=tty3 (tty3)
+        res=success (success)
+
+event 3 has 1 records
     record 1 of type 1300(SYSCALL) has 24 fields
     line=2 file=None
     event time: 1143146623.875:143, host=(null)
@@ -613,21 +628,6 @@ event 2 has 1 records
         exe="/bin/login" (/bin/login)
         subj=system_u:system_r:local_login_t:s0-s0:c0.c255 (system_u:system_r:local_login_t:s0-s0:c0.c255)
 
-event 3 has 1 records
-    record 1 of type 1112(USER_LOGIN) has 10 fields
-    line=3 file=None
-    event time: 1143146623.879:146, host=(null)
-        type=USER_LOGIN (USER_LOGIN)
-        pid=2027 (2027)
-        uid=0 (root)
-        auid=848 (unknown(848))
-        uid=848 (unknown(848))
-        exe="/bin/login" (/bin/login)
-        hostname=? (?)
-        addr=? (?)
-        terminal=tty3 (tty3)
-        res=success (success)
-
 Test 9 Done
 
 Starting Test 10, file feed...
@@ -654,7 +654,7 @@ event 1 has 4 records
         arch=c000003e (x86_64)
         syscall=2 (open)
         success=no (no)
-        exit=-13 (-13(Permission denied))
+        exit=-13 (EACCES(Permission denied))
         a0=5555665d91b0 (0x5555665d91b0)
         a1=10800 (O_RDONLY|O_NONBLOCK|O_DIRECTORY)
         a2=5555665d91b8 (0x5555665d91b8)

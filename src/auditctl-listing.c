@@ -1,5 +1,5 @@
 /* auditctl-listing.c -- 
- * Copyright 2014 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2014,16 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -63,7 +63,8 @@ int key_match(const struct audit_rule_data *r)
 		}
 		if (((field >= AUDIT_SUBJ_USER && field <= AUDIT_OBJ_LEV_HIGH)
                      && field != AUDIT_PPID) || field == AUDIT_WATCH ||
-			field == AUDIT_DIR || field == AUDIT_FILTERKEY) {
+			field == AUDIT_DIR || field == AUDIT_FILTERKEY
+		     || field == AUDIT_EXE) {
 				boffset += r->values[i];
 		}
 	}
@@ -112,8 +113,18 @@ static int print_arch(unsigned int value, int op)
 		printf(" -F arch%s0x%X", audit_operator_to_symbol(op),
 				(unsigned)value);
 	else {
-		const char *ptr = audit_machine_to_name(machine);
-		printf(" -F arch%s%s", audit_operator_to_symbol(op), ptr);
+		if (interpret == 0) {
+			if (__AUDIT_ARCH_64BIT & _audit_elf)
+				printf(" -F arch%sb64",
+						audit_operator_to_symbol(op));
+			else
+				printf(" -F arch%sb32",
+						audit_operator_to_symbol(op));
+		} else {	
+			const char *ptr = audit_machine_to_name(machine);
+			printf(" -F arch%s%s", audit_operator_to_symbol(op),
+						ptr);
+		}
 	}
 	return machine;
 }
@@ -340,26 +351,30 @@ static void print_rule(const struct audit_rule_data *r)
 				boffset += r->values[i];
 			} else if (field == AUDIT_DIR) {
 				if (watch)
-					printf("-w %.*s/", r->values[i],
+					printf("-w %.*s", r->values[i],
 						&r->buf[boffset]);
 				else
 					printf(" -F dir=%.*s", r->values[i],
 						&r->buf[boffset]);
 
 				boffset += r->values[i];
+			} else if (field == AUDIT_EXE) {
+				printf(" -F exe=%.*s",
+					r->values[i], &r->buf[boffset]);
+				boffset += r->values[i];
 			} else if (field == AUDIT_FILTERKEY) {
-				char *rkey, *ptr;
+				char *rkey, *ptr, *saved;
 				if (asprintf(&rkey, "%.*s", r->values[i],
 					      &r->buf[boffset]) < 0)
 					rkey = NULL;
 				boffset += r->values[i];
-				ptr = strtok(rkey, key_sep);
+				ptr = strtok_r(rkey, key_sep, &saved);
 				while (ptr) {
 					if (watch)
 						printf(" -k %s", ptr);
 					else
 						printf(" -F key=%s", ptr);
-					ptr = strtok(NULL, key_sep);
+					ptr = strtok_r(NULL, key_sep, &saved);
 				}
 				free(rkey);
 			} else if (field == AUDIT_PERM) {
@@ -452,6 +467,36 @@ void audit_print_init(void)
 	list_create(&l);
 }
 
+const char *get_enable(unsigned e)
+{
+	switch (e)
+	{
+		case 0:
+			return "disable";
+		case 1:
+			return "enabled";
+		case 2:
+			return "enabled+immutable";
+		default:
+			return "unknown";
+	}
+}
+
+const char *get_failure(unsigned f)
+{
+	switch (f)
+	{
+		case 0:
+			return "silent";
+		case 1:
+			return "printk";
+		case 2:
+			return "panic";
+		default:
+			return "unknown";
+	}
+}
+
 /*
  * This function interprets the reply and prints it to stdout. It returns
  * 0 if no more should be read and 1 to indicate that more messages of this
@@ -487,21 +532,32 @@ int audit_print_reply(struct audit_reply *rep, int fd)
 			printed = 1;
 			break;
 		case AUDIT_GET:
-			printf("enabled %d\nflag %d\npid %d\nrate_limit %d\n"
-			"backlog_limit %d\nlost %d\nbacklog %u\n",
-			rep->status->enabled, rep->status->failure,
+			if (interpret)
+				printf("enabled %s\nfailure %s\n",
+					get_enable(rep->status->enabled),
+					get_failure(rep->status->failure));
+			else
+				printf("enabled %u\nfailure %u\n",
+				rep->status->enabled, rep->status->failure);
+			printf("pid %u\nrate_limit %u\nbacklog_limit %u\n"
+				"lost %u\nbacklog %u\n",
 			rep->status->pid, rep->status->rate_limit,
 			rep->status->backlog_limit, rep->status->lost,
 			rep->status->backlog);
+#if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME
+			printf("backlog_wait_time %u\n",
+				rep->status->backlog_wait_time);
+#endif
 			printed = 1;
 			break;
-#if HAVE_DECL_AUDIT_FEATURE_VERSION
+#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
+    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
 		case AUDIT_GET_FEATURE:
 			{
 			uint32_t mask = AUDIT_FEATURE_TO_MASK(AUDIT_FEATURE_LOGINUID_IMMUTABLE);
 			if (rep->features->mask & mask)
 				printf("loginuid_immutable %u %s\n",
-					rep->features->features & mask,
+					!!(rep->features->features & mask),
 					rep->features->lock & mask ? "locked" :
 					"unlocked");
 			}

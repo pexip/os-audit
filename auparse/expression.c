@@ -3,19 +3,19 @@
 * Copyright (C) 2008,2014 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved.
 *
-* This software may be freely redistributed and/or modified under the
-* terms of the GNU General Public License as published by the Free
-* Software Foundation; either version 2, or (at your option) any
-* later version.
+* This library is free software; you can redistribute it and/or
+* modify it under the terms of the GNU Lesser General Public
+* License as published by the Free Software Foundation; either
+* version 2.1 of the License, or (at your option) any later version.
 *
-* This program is distributed in the hope that it will be useful,
+* This library is distributed in the hope that it will be useful,
 * but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+* Lesser General Public License for more details.
 *
-* You should have received a copy of the GNU General Public License
-* along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* You should have received a copy of the GNU Lesser General Public
+* License along with this library; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 *
 * Authors:
 *   Miloslav Trmač <mitr@redhat.com>
@@ -974,13 +974,13 @@ compare_values(auparse_state_t *au, rnode *record, const struct expr *expr,
 	}
 	switch (expr->v.p.field.id) {
 	case EF_TIMESTAMP:
-		if (au->le.e.sec < expr->v.p.value.timestamp.sec)
+		if (au->le->e.sec < expr->v.p.value.timestamp.sec)
 			res = -1;
-		else if (au->le.e.sec > expr->v.p.value.timestamp.sec)
+		else if (au->le->e.sec > expr->v.p.value.timestamp.sec)
 			res = 1;
-		else if (au->le.e.milli < expr->v.p.value.timestamp.milli)
+		else if (au->le->e.milli < expr->v.p.value.timestamp.milli)
 			res = -1;
-		else if (au->le.e.milli > expr->v.p.value.timestamp.milli)
+		else if (au->le->e.milli > expr->v.p.value.timestamp.milli)
 			res = 1;
 		else
 			res = 0;
@@ -996,17 +996,17 @@ compare_values(auparse_state_t *au, rnode *record, const struct expr *expr,
 		break;
 
 	case EF_TIMESTAMP_EX:
-		if (au->le.e.sec < expr->v.p.value.timestamp.sec)
+		if (au->le->e.sec < expr->v.p.value.timestamp.sec)
 			res = -1;
-		else if (au->le.e.sec > expr->v.p.value.timestamp.sec)
+		else if (au->le->e.sec > expr->v.p.value.timestamp.sec)
 			res = 1;
-		else if (au->le.e.milli < expr->v.p.value.timestamp.milli)
+		else if (au->le->e.milli < expr->v.p.value.timestamp.milli)
 			res = -1;
-		else if (au->le.e.milli > expr->v.p.value.timestamp.milli)
+		else if (au->le->e.milli > expr->v.p.value.timestamp.milli)
 			res = 1;
-		else if (au->le.e.serial < expr->v.p.value.timestamp_ex.serial)
+		else if (au->le->e.serial < expr->v.p.value.timestamp_ex.serial)
 			res = -1;
-		else if (au->le.e.serial > expr->v.p.value.timestamp_ex.serial)
+		else if (au->le->e.serial > expr->v.p.value.timestamp_ex.serial)
 			res = 1;
 		else
 			res = 0;

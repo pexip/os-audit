@@ -32,6 +32,7 @@
 #include <arpa/inet.h>	// inet_ntop
 #include <utmp.h>
 #include <limits.h>	// PATH_MAX
+#include <fcntl.h>
 
 #include "libaudit.h"
 #include "private.h"
@@ -172,10 +173,20 @@ static char *_get_exename(char *exename, int size)
 static char *_get_commname(const char *comm, char *commname, unsigned int size)
 {
 	unsigned int len;
+	char tmp_comm[20];
 	
 	if (comm == NULL) {
-		strcpy(commname, "\"?\"");
-		return commname;
+		char *ptr;
+		int len;
+		int fd = open("/proc/self/comm", O_RDONLY);
+		if (fd < 0) {
+			strcpy(commname, "\"?\"");
+			return commname;
+		}
+		len = read(fd, tmp_comm, sizeof(tmp_comm));
+		if (len > 0)
+			tmp_comm[len-1] = 0;
+		comm = tmp_comm;
 	}
 
 	len = strlen(comm);
@@ -512,7 +523,7 @@ int audit_log_user_avc_message(int audit_fd, int type, const char *message,
 
 	errno = 0;
 	retval = audit_send_user_message( audit_fd, type, REAL_ERR, buf );
-	if (retval == -EPERM && getuid() != 0) {
+	if (retval == -EPERM && !audit_can_write()) {
 		syslog(LOG_ERR, "Can't send to audit system: %s %s",
 			audit_msg_type_to_name(type), buf);
 		return 0;

@@ -1,6 +1,6 @@
 /*
 * ausearch-lookup.h - Header file for ausearch-lookup.c
-* Copyright (c) 2005-06 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-06,2014 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved.
 *
 * This software may be freely redistributed and/or modified under the
@@ -36,11 +36,13 @@ const char *aulookup_success(int s);
 const char *aulookup_syscall(llist *l, char *buf, size_t size);
 const char *aulookup_uid(uid_t uid, char *buf, size_t size);
 void aulookup_destroy_uid_list(void);
-const char *aulookup_gid(gid_t gid, char *buf, size_t size);
-void aulookup_destroy_gid_list(void);
 char *unescape(const char *buf);
 int is_hex_string(const char *str);
 void print_tty_data(const char *val);
+int need_sanitize(const unsigned char *s, unsigned int len);
+void sanitize(const char *s, unsigned int len);
+void safe_print_string_n(const char *s, unsigned int len, int ret);
+void safe_print_string(const char *s, int ret);
 
 #endif
 

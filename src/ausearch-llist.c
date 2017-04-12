@@ -1,6 +1,6 @@
 /*
 * ausearch-llist.c - Minimal linked list library
-* Copyright (c) 2005-2008, 2011 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-2008,2011,2016 Red Hat Inc., Durham, North Carolina.
 * Copyright (c) 2011 IBM Corp.
 * All Rights Reserved. 
 *
@@ -59,6 +59,9 @@ void list_create(llist *l)
 	l->s.session_id = -2;
 	l->s.uuid = NULL;
 	l->s.vmname = NULL;
+	l->s.tuid = NULL;
+	l->s.teuid = NULL;
+	l->s.tauid = NULL;
 	l->s.exit = 0;
 	l->s.exit_is_set = 0;
 }
@@ -107,6 +110,8 @@ void list_append(llist *l, lnode *node)
 	else
 		newnode->message = NULL;
 
+	newnode->interp = node->interp;
+	newnode->mlen = node->mlen;
 	newnode->type = node->type;
 	newnode->a0 = node->a0;
 	newnode->a1 = node->a1;
@@ -206,6 +211,12 @@ void list_clear(llist* l)
 	l->s.uuid = NULL;
 	free(l->s.vmname);
 	l->s.vmname = NULL;
+	free(l->s.tuid);
+	l->s.tuid = NULL;
+	free(l->s.teuid);
+	l->s.teuid = NULL;
+	free(l->s.tauid);
+	l->s.tauid = NULL;
 	l->s.exit = 0;
 	l->s.exit_is_set = 0;
 }

@@ -252,14 +252,16 @@ int main(int argc, char *argv[])
 	do {
 		fd_set read_mask;
 		struct timeval tv;
-		int retval;
+		int retval = -1;
 
 		/* Load configuration */
 		if (hup) {
 			reload_config();
 		}
 		do {
-			tv.tv_sec = 5;
+			if (retval == 0 && auparse_feed_has_data(au))
+				auparse_feed_age_events(au);
+			tv.tv_sec = 4;
 			tv.tv_usec = 0;
 			FD_ZERO(&read_mask);
 			FD_SET(0, &read_mask);
@@ -449,6 +451,8 @@ static int get_loginuid_info(auparse_state_t *au, idmef_user_id_t *user_id)
 			int uid = auparse_get_field_int(au);
 			idmef_user_id_set_number(user_id, uid);
 		} else {
+			// This use is OK because its looking up local
+			// user names to ship externally.
 			struct passwd *pw;
 			pw = getpwnam(auid);
 			if (pw) 

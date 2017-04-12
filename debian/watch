@@ -1,2 +1,2 @@
 version=3
-http://people.redhat.com/sgrubb/audit/ audit-(.*)\.tar\.gz
+http://people.redhat.com/sgrubb/audit/ audit-([\d\.]*)\.tar\.gz

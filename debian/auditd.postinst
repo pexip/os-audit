@@ -23,7 +23,7 @@ case "$1" in
         # Only copy the file on first installation
         if [ -z "$2" -a ! -f /etc/audit/audit.rules ]
         then
-            cp -a /etc/audit/rules.d/audit.rules /etc/audit/audit.rules
+            augenrules
         fi
     ;;
 

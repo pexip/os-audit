@@ -1,5 +1,5 @@
 /* aureport-scan.h -- 
- * Copyright 2005-06, 2008 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-06,2008,2014 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -33,14 +33,17 @@ typedef struct sdata {
 	slist files;
 	slist hosts;
 	slist exes;
+	slist comms;
 	slist avc_objs;
 	slist keys;
 	ilist pids;
-	ilist sys_list;
+	slist sys_list;
 	ilist anom_list;
 	ilist resp_list;
 	ilist mac_list;
 	ilist crypto_list;
+	ilist virt_list;
+	ilist integ_list;
 	unsigned long changes;
 	unsigned long crypto;
 	unsigned long acct_changes;
@@ -54,6 +57,8 @@ typedef struct sdata {
 	unsigned long failed_syscalls;
 	unsigned long anomalies;
 	unsigned long responses;
+	unsigned long virt;
+	unsigned long integ;
 } summary_data;
 
 void reset_counters(void);

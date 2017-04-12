@@ -1,5 +1,6 @@
 # Makefile.am--
-# Copyright (C) 2007,2008,2011 International Business Machines  Corp.
+# Copyright (C) 2007,2008 International Business Machines  Corp.
+# Copyright (C) 2011, 2015 Red Hat., Durham, North Carolina.
 # All Rights Reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -20,7 +21,7 @@
 #   Klaus Heinrich Kiwi <klausk@br.ibm.com>
 #
 
-INCLUDES = -I${top_srcdir} -I${top_srcdir}/lib -I${top_srcdir}/auparse
+AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/lib -I${top_srcdir}/auparse
 CONFIG_CLEAN_FILES = *.rej *.orig
 AUTOMAKE_OPTIONS = no-dependencies
 EXTRA_DIST = zos-remote.conf audispd-zos-remote.conf

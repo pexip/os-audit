@@ -1,5 +1,5 @@
 /* deprecated.c -- This file is the trash heap of things about to leave 
- * Copyright 2006-07,2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-07,2009,2016 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -50,7 +50,7 @@ retry:
 		   and disable the audit system get in. ECONNREFUSED is
 		   issued by the kernel when there is "no on listening". */
 		return 0;
-	} else if (rc == -EPERM && getuid() != 0 && hide_error == HIDE_IT) {
+	} else if (rc == -EPERM && !audit_can_write() && hide_error == HIDE_IT) {
 		/* If we get this, then the kernel supports auditing
 		 * but we don't have enough privilege to write to the
 		 * socket. Therefore, we have already been authenticated
@@ -73,5 +73,4 @@ retry:
 	}
 	return rc;
 }
-hidden_def(audit_send_user_message)
 

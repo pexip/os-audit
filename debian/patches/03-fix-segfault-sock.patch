@@ -1,0 +1,32 @@
+From f85cb62f10644e347c16541c8aa988219a3b3501 Mon Sep 17 00:00:00 2001
+From: sgrubb <sgrubb@redhat.com>
+Date: Thu, 30 Mar 2017 13:12:38 -0400
+Subject: [PATCH] In auparse, output socket family name if unsupported but
+ known
+
+---
+ ChangeLog           | 1 +
+ auparse/interpret.c | 5 ++++-
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+--- a/auparse/interpret.c
++++ b/auparse/interpret.c
+@@ -1139,6 +1139,9 @@ static const char *print_sockaddr(const
+ 					  str, n->nl_family, n->nl_pid);
+                         }
+                         break;
++		default:
++			rc = asprintf(&out, "{ fam=%s (unsupported) }", str);
++			break;
+         }
+ 	if (rc < 0)
+ 		out = NULL;
+@@ -2912,7 +2915,7 @@ char *auparse_do_interpretation(int type
+ 			break;
+         }
+ 
+-	if (escape_mode != AUPARSE_ESC_RAW) {
++	if (escape_mode != AUPARSE_ESC_RAW && out) {
+ 		char *str = NULL;
+ 		unsigned int len = strlen(out);
+ 		if (type == AUPARSE_TYPE_ESCAPED_KEY) {
