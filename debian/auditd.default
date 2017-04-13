@@ -13,4 +13,4 @@ AUDITD_STOP_DISABLE="no"
 # This option determines whether or not to call augenrules to compile the
 # audit rules from /etc/audit/rules.d. The default is "no" so that nothing
 # happens to existing rules.
-USE_AUGENRULES="no"
+USE_AUGENRULES="yes"

@@ -2,6 +2,7 @@ audit (1:2.4-1+b1pexip1) pexip; urgency=low
 
   * Migrate to Jessie
   * debian/patches/syslog-facilities.diff: Drop; merged upstream
+  * debian/auditd.default: use augenrules by default
 
  -- John-Mark Bell <jmb@pexip.com>  Mon, 20 Feb 2017 15:41:32 +0000
 
