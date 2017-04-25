@@ -13,7 +13,7 @@
 # Based on Debians /etc/init.d/skeleton and Auditds init.d/auditd.init
 
 # PATH should only include /usr/* if it runs after the mountnfs.sh script
-PATH=/sbin:/bin
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
 DESC="audit daemon"
 NAME=auditd
 DAEMON=/sbin/auditd
