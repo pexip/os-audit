@@ -1,3 +1,10 @@
+audit (1:2.4-1+b1pexip2) pexip; urgency=low
+
+  * debian/patches/use-augenrules.patch: Invoke augenrules from
+    systemd unit.
+
+ -- John-Mark Bell <jmb@pexip.com>  Tue, 03 Jul 2018 11:16:13 +0100
+
 audit (1:2.4-1+b1pexip1) pexip; urgency=low
 
   * Migrate to Jessie
