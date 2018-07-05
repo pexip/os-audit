@@ -1,5 +1,5 @@
 /* auparse.c --
- * Copyright 2006-08,2012-14 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-08,2012-16 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -25,6 +25,8 @@
 #include "internal.h"
 #include "auparse.h"
 #include "interpret.h"
+#include "auparse-idata.h"
+#include "libaudit.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,6 +34,12 @@
 #include <stdio_ext.h>
 
 static int debug = 0;
+
+static void init_lib(void) __attribute__ ((constructor));
+static void init_lib(void)
+{
+	init_interpretation_list();
+}
 
 /* like strchr except string is delimited by length, not null byte */
 static char *strnchr(const char *s, int c, size_t n)
@@ -51,8 +59,8 @@ static int setup_log_file_array(auparse_state_t *au)
         int len, num = 0, i = 0;
 
         /* Load config so we know where logs are */
-	set_aumessage_mode(MSG_STDERR, DBG_NO);
-	load_config(&config, TEST_SEARCH);
+	set_aumessage_mode(au, MSG_STDERR, DBG_NO);
+	aup_load_config(au, &config, TEST_SEARCH);
 
 	/* for each file */
 	len = strlen(config.log_file) + 16;
@@ -106,6 +114,273 @@ static int setup_log_file_array(auparse_state_t *au)
 	return 0;
 }
 
+
+/*
+ * au_lol_create - Create and initialise the base List of List event structure
+ * Args:
+ *   lol  - pointer to memory holding structure (eg the static au_lo variable)
+ * Rtns:
+ *   NULL - no memory
+ *   ptr  - pointer to array of event nodes (au_lolnode)
+ */
+static au_lolnode *au_lol_create(au_lol *lol)
+{
+	int sz = ARRAY_LIMIT * sizeof(au_lolnode);
+
+	lol->maxi = -1;
+	lol->limit = ARRAY_LIMIT;
+	if ((lol->array = (au_lolnode *)malloc(sz)) == NULL) {
+		lol->maxi = -1;
+		return NULL;
+	}
+	memset(lol->array, 0x00, sz);
+
+	return lol->array;
+}
+
+/*
+ * au_lol_clear - Free or rest the base List of List event structure
+ *
+ * Args:
+ *  lol	- pointer to memory holding structure (eg the static au_lo variable)
+ *  reset - flag to indicate a reset of the structure, or the complete
+ *          freeing of memory
+ * Rtns:
+ *	void
+ */
+static void au_lol_clear(au_lol *lol, int reset)
+{
+	int i;
+
+	if (lol->array) {
+		for (i = 0; i <= lol->maxi; i++) {
+			if (lol->array[i].l) {
+				aup_list_clear(lol->array[i].l);
+				free(lol->array[i].l);
+			}
+		}
+	}
+	if (reset) {
+		/* If resetting, we just zero fields */
+		if (lol->array)
+			memset(lol->array, 0x00,
+					lol->limit * sizeof(au_lolnode));
+		lol->maxi = -1;
+	} else {
+		/* If not resetting, we free everything */
+		if (lol->array) free(lol->array);
+		lol->array = NULL;
+		lol->maxi = -1;
+	}
+}
+
+/*
+ * au_lol_append - Add a new event to our base List of List structure
+ *
+ * Args:
+ *  lol	- pointer to memory holding structure (eg the static au_lo variable)
+ *  l	- event list structure (which contains an event's constituent records)
+ * Rtns:
+ *   ptr  - pointer to au_lolnode which holds the event list structure
+ *   NULL - failed to reallocate memory
+ */
+static au_lolnode *au_lol_append(au_lol *lol, event_list_t *l)
+{
+	int i;
+	size_t new_size;
+	au_lolnode *ptr;
+
+	for (i = 0; i < lol->limit; i++) {
+		au_lolnode *cur = &lol->array[i];
+		if (cur->status == EBS_EMPTY) {
+			cur->l = l;
+			cur->status = EBS_BUILDING;
+			if (i > lol->maxi)
+				lol->maxi = i;
+			return cur;
+		}
+	}
+	/* Over ran the array, make it bigger */
+	new_size = sizeof(au_lolnode) * (lol->limit + ARRAY_LIMIT);
+	ptr = realloc(lol->array, new_size);
+	if (ptr) {
+		lol->array = ptr;
+		memset(&lol->array[lol->limit], 0x00,
+				sizeof(au_lolnode) * ARRAY_LIMIT);
+		lol->array[i].l = l;
+		lol->array[i].status = EBS_BUILDING;
+		lol->maxi = i;
+		lol->limit += ARRAY_LIMIT;
+	}
+	return ptr;
+}
+
+/*
+ * au_get_ready_event - Find the next COMPLETE event in our list and mark EMPTY
+ *
+ * Args:
+ *  lol	- pointer to memory holding structure (eg the static au_lo variable)
+ *  is_test - do not mark the node EMPTY
+ * Rtns:
+ *  ptr	- pointer to complete node (possibly just marked empty)
+ *  NULL - no complete nodes exist
+ */
+static event_list_t *au_get_ready_event(auparse_state_t *au, int is_test)
+{
+        int i;
+	au_lol *lol = au->au_lo;
+	
+	if (au->au_ready == 0)
+		return NULL;
+
+        for (i=0; i<=lol->maxi; i++) {
+                au_lolnode *cur = &(lol->array[i]);
+                if (cur->status == EBS_COMPLETE) {
+			/*
+			 * If we are just testing for a complete event, return
+			 */
+			if (is_test)
+				return cur->l;
+			/*
+			 * Otherwise set it status to empty and accept the
+			 * caller will take custody of the memory
+			 */
+                        cur->status = EBS_EMPTY;
+			au->au_ready--;
+                        return cur->l;
+                }
+        }
+
+        return NULL;
+}
+
+/*
+ * au_check_events  - Run though all events marking those we can mark COMPLETE
+ *
+ * Args:
+ *  lol	- pointer to memory holding structure (eg the static au_lo variable)
+ *  sec	- time of current event from stream being processed. We use this to see
+ *        how old the events are we have in our list
+ * Rtns:
+ *	void
+ */
+static void au_check_events(auparse_state_t *au, time_t sec)
+{
+	rnode *r;
+        int i;
+	au_lol *lol = au->au_lo;
+
+        for(i=0; i<=lol->maxi; i++) {
+                au_lolnode *cur = &lol->array[i];
+                if (cur->status == EBS_BUILDING) {
+                        if ((r = aup_list_get_cur(cur->l)) == NULL)
+				continue;
+                        // If 2 seconds have elapsed, we are done
+                        if (cur->l->e.sec + 2 < sec) {
+                                cur->status = EBS_COMPLETE;
+				au->au_ready++;
+                        } else if ( // FIXME: Check this v remains true
+				r->type == AUDIT_PROCTITLE ||
+				r->type == AUDIT_EOE || 
+				r->type < AUDIT_FIRST_EVENT ||
+				r->type >= AUDIT_FIRST_ANOM_MSG) {
+                                // If known to be 1 record event, we are done
+				cur->status = EBS_COMPLETE;
+				au->au_ready++;
+                        }
+                }
+        }
+}
+
+/*
+ * au_terminate_all_events - Mark all events in 'BUILD' state to be COMPLETE
+ *
+ * Args:
+ *  lol	- pointer to memory holding structure (eg the static au_lo variable)
+ * Rtns:
+ *  void
+ */
+static void au_terminate_all_events(auparse_state_t *au)
+{
+        int i;
+	au_lol *lol = au->au_lo;
+
+        for (i=0; i<=lol->maxi; i++) {
+                au_lolnode *cur = &lol->array[i];
+                if (cur->status == EBS_BUILDING) {
+                        cur->status = EBS_COMPLETE;
+			au->au_ready++;
+                }
+        }
+}
+
+#if	LOL_EVENTS_DEBUG01
+/*
+ * print_list_t	- Print summary of event's records
+ * Args:
+ * 	l	- event_list to print
+ * Rtns:
+ *	void
+ */
+void print_list_t(event_list_t *l)
+{
+	rnode *r;
+
+	if (l == NULL) {
+		printf("\n");
+		return;
+	}
+	printf("0x%X: %lu.%3.3lu:%d %s", l, l->e.sec, l->e.milli,
+			l->e.serial, l->e.host ? l->e.host : "");
+	printf(" cnt=%d", l->cnt);
+	for (r = l->head; r != NULL; r = r->next) {
+		printf(" {%d %d %d}", r->type, r->list_idx, r->line_number);
+	}
+	printf("\n");
+}
+
+/*
+ * lol_status - return type of event state as a character
+ * Args:
+ *	s	- event state
+ * Rtns:
+ *	char	- E, B or C for EMPTY, BUILDING or COMPLETE, or '*' for unknown
+ */
+static char lol_status(au_lol_t s)
+{
+	switch(s) {
+	case EBS_EMPTY: return 'E'; break;
+	case EBS_BUILDING: return 'B'; break;
+	case EBS_COMPLETE: return 'C'; break;
+	}
+	return '*';
+}
+
+/*
+ * print_lol - Print a list of list events and their records
+ * Args:
+ *   label - String to act as label when printing
+ *   lol   - pointer to memory holding structure (eg the static au_lo variable)
+ * Rtns:
+ *	void
+ */
+void print_lol(char *label, au_lol *lol)
+{
+	int  i;
+
+	printf("%s 0x%X: a: 0x%X, %d, %d\n", label, lol, lol->array,
+					lol->maxi, lol->limit);
+	if (debug > 1) for (i = 0; i <= lol->maxi; i++) {
+		printf("{%2d 0x%X %c } ", i, (&lol->array[i]),
+					lol_status(lol->array[i].status));
+		print_list_t(lol->array[i].l);
+	}
+	if (lol->maxi >= 0)
+		printf("\n");
+}
+#endif	/* LOL_EVENTS_DEBUG01 */
+
+
 /* General functions that affect operation of the library */
 auparse_state_t *auparse_init(ausource_t source, const void *b)
 {
@@ -118,6 +393,27 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 		errno = ENOMEM;
 		return NULL;
 	}
+
+	au->le = NULL;
+
+	/*
+	 * Set up the List of List events base structure
+	 */
+	au->au_lo = calloc(sizeof(au_lol), 1);
+	if (au->au_lo == NULL) {
+		free(au);
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	au_lol_clear(au->au_lo, 0);	// python doesn't call auparse_destroy
+	if (au_lol_create(au->au_lo) == NULL) {
+		free(au->au_lo);
+		free(au);
+		errno = ENOMEM;
+		return NULL;
+	}
+	au->au_ready = 0;
 
 	au->in = NULL;
 	au->source_list = NULL;
@@ -135,6 +431,8 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 			setup_log_file_array(au);
 			break;
 		case AUSOURCE_FILE:
+			if (b == NULL)
+				goto bad_exit;
 			if (access(b, R_OK))
 				goto bad_exit;
 			tmp = malloc(2*sizeof(char *));
@@ -143,6 +441,8 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 			au->source_list = tmp;
 			break;
 		case AUSOURCE_FILE_ARRAY:
+			if (bb == NULL)
+				goto bad_exit;
 			n = 0;
 			while (bb[n]) {
 				if (access(bb[n], R_OK))
@@ -156,7 +456,8 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 			au->source_list = tmp;
 			break;
 		case AUSOURCE_BUFFER:
-			buf = buf;
+			if (buf == NULL)
+				goto bad_exit;
 			len = strlen(buf);
 			if (databuf_init(&au->databuf, len,
 					 DATABUF_FLAG_PRESERVE_HEAD) < 0)
@@ -165,6 +466,8 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 				goto bad_exit;
 			break;
 		case AUSOURCE_BUFFER_ARRAY:
+			if (bb == NULL)
+				goto bad_exit;
 			size = 0;
 			for (n = 0; (buf = bb[n]); n++) {
 				len = strlen(bb[n]);
@@ -205,15 +508,20 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 	au->off = 0;
 	au->cur_buf = NULL;
 	au->line_pushed = 0;
-	aup_list_create(&au->le);
 	au->parse_state = EVENT_EMPTY;
 	au->expr = NULL;
 	au->find_field = NULL;
 	au->search_where = AUSEARCH_STOP_EVENT;
+	au->escape_mode = AUPARSE_ESC_TTY;
+	au->message_mode = MSG_QUIET;
+	au->debug_message = DBG_NO;
 
 	return au;
 bad_exit:
 	databuf_free(&au->databuf);
+	/* Feee list of events list (au_lo) structure */
+	au_lol_clear(au->au_lo, 0);
+	free(au->au_lo);
 	free(au);
 	return NULL;
 }
@@ -248,14 +556,24 @@ static void consume_feed(auparse_state_t *au, int flush)
 	if (flush) {
 		// FIXME: might need a call here to force auparse_next_event()
 		// to consume any partial data not fully consumed.
-		if (au->parse_state == EVENT_ACCUMULATING) {
-			// Emit the event, set event cursors to initial position
-			aup_list_first(&au->le);
-			aup_list_first_field(&au->le);
-			au->parse_state = EVENT_EMITTED;
+
+		/* Terminate all outstanding events, as we are at end of input
+		 * (ie mark BUILDING events as COMPLETE events) then if we
+		 * have a callback execute the callback on each event
+		 * FIXME: Should we implement a 'checkpoint' concept as per
+		 * ausearch or accept these 'partial' events?
+		 */
+		event_list_t	*l;
+
+		if (debug) printf("terminate all events in flush\n");
+		au_terminate_all_events(au);
+		while ((l = au_get_ready_event(au, 0)) != NULL) {
+			au->le = l;  // make this current the event of interest
+			aup_list_first(l);
+			aup_list_first_field(l);
 			if (au->callback) {
-				 (*au->callback)(au, AUPARSE_CB_EVENT_READY,
-						 au->callback_user_data);
+				(*au->callback)(au, AUPARSE_CB_EVENT_READY,
+					au->callback_user_data);
 			}
 		}
 	}
@@ -277,11 +595,50 @@ int auparse_flush_feed(auparse_state_t *au)
 
 // If there is data in the state machine, return 1
 // Otherwise return 0 to indicate its empty
-int auparse_feed_has_data(const auparse_state_t *au)
+int auparse_feed_has_data(auparse_state_t *au)
 {
-	if (au->parse_state == EVENT_ACCUMULATING)
+	if (au_get_ready_event(au, 1) != NULL)
 		return 1;
+
 	return 0;
+}
+
+void auparse_feed_age_events(auparse_state_t *au)
+{
+	time_t t = time(NULL);
+	au_check_events(au, t);
+	consume_feed(au, 0);
+}
+
+void auparse_set_escape_mode(auparse_state_t *au, auparse_esc_t mode)
+{
+	set_escape_mode(mode);
+	if (au == NULL)
+		return;
+	au->escape_mode = mode;
+}
+
+/*
+ * Non-public function. Subject to change.
+ * buf is a string of name value pairs to be used for interpreting.
+ * Calling this function automatically releases the previous list.
+ */
+void _auparse_load_interpretations(const char *buf)
+{
+	free_interpretation_list();
+
+	if (buf == NULL)
+		return;
+
+	load_interpretation_list(buf);
+}
+
+/*
+ * Non-public function. Subject to change.
+ */
+void _auparse_free_interpretations(void)
+{
+	free_interpretation_list();
 }
 
 int auparse_reset(auparse_state_t *au)
@@ -291,7 +648,12 @@ int auparse_reset(auparse_state_t *au)
 		return -1;
 	}
 
-	aup_list_clear(&au->le);
+	/* Create or Free list of events list (au_lo) structure */
+	if (au->au_lo->array == NULL)
+		au_lol_create(au->au_lo);
+	else
+		au_lol_clear(au->au_lo, 1);
+
 	au->parse_state = EVENT_EMPTY;
 	switch (au->source)
 	{
@@ -318,6 +680,7 @@ int auparse_reset(auparse_state_t *au)
 		default:
 			return -1;
 	}
+	free_interpretation_list();
 	return 0;
 }
 
@@ -527,6 +890,7 @@ void auparse_destroy(auparse_state_t *au)
 {
 	aulookup_destroy_uid_list();
 	aulookup_destroy_gid_list();
+
 	if (au == NULL)
 		return;
 
@@ -541,7 +905,7 @@ void auparse_destroy(auparse_state_t *au)
 	au->next_buf = NULL;
         free(au->cur_buf);
 	au->cur_buf = NULL;
-	aup_list_clear(&au->le);
+	au->le = NULL;
 	au->parse_state = EVENT_EMPTY;
         free(au->find_field);
 	au->find_field = NULL;
@@ -555,6 +919,9 @@ void auparse_destroy(auparse_state_t *au)
 		fclose(au->in);
 		au->in = NULL;
 	}
+	free_interpretation_list();
+	au_lol_clear(au->au_lo, 0);
+	free(au->au_lo);
 	free(au);
 }
 
@@ -712,15 +1079,15 @@ static int extract_timestamp(const char *b, au_event_t *e)
 		tmp = strndupa(b, 340);
 	else
 		tmp = strndupa(b, 80);
-	ptr = strtok(tmp, " ");
+	ptr = audit_strsplit(tmp);
 	if (ptr) {
 		// Optionally grab the node - may or may not be included
 		if (*ptr == 'n') {
 			e->host = strdup(ptr+5);
-			(void)strtok(NULL, " "); // Bump along to the next one
+			(void)audit_strsplit(NULL); // Bump along to the next one
 		}
 		// at this point we have type=
-		ptr = strtok(NULL, " ");
+		ptr = audit_strsplit(NULL);
 		if (ptr) {
 			if (*(ptr+9) == '(')
 				ptr+=9;
@@ -750,7 +1117,7 @@ static int extract_timestamp(const char *b, au_event_t *e)
 	return rc;
 }
 
-static int inline events_are_equal(au_event_t *e1, au_event_t *e2)
+static int events_are_equal(au_event_t *e1, au_event_t *e2)
 {
 	// Check time & serial first since its most likely way
 	// to spot 2 different events
@@ -866,17 +1233,11 @@ static int retrieve_next_line(auparse_state_t *au)
 			else
 				if (rc > 0)
 					au->line_number++;
-				return rc;
+			return rc;
 		default:
 			return -1;
 	}
 	return -1;		/* should never reach here */
-}
-
-static void push_line(auparse_state_t *au)
-{
-	au->line_number--;
-	au->line_pushed = 1;
 }
 
 /*******
@@ -889,11 +1250,11 @@ static int ausearch_reposition_cursors(auparse_state_t *au)
 	switch (au->search_where)
 	{
 		case AUSEARCH_STOP_EVENT:
-			aup_list_first(&au->le);
-			aup_list_first_field(&au->le);
+			aup_list_first(au->le);
+			aup_list_first_field(au->le);
 			break;
 		case AUSEARCH_STOP_RECORD:
-			aup_list_first_field(&au->le);
+			aup_list_first_field(au->le);
 			break;
 		case AUSEARCH_STOP_FIELD:
 			// do nothing - this is the normal stopping point
@@ -911,7 +1272,7 @@ static int ausearch_compare(auparse_state_t *au)
 {
 	rnode *r;
 
-	r = aup_list_get_cur(&au->le);
+	r = aup_list_get_cur(au->le);
 	if (r)
 		return expr_eval(au, r, au->expr);
 
@@ -946,104 +1307,193 @@ int ausearch_next_event(auparse_state_t *au)
 	return 0;
 }
 
+/*
+ * au_auparse_next_event - Get the next complete event
+ * Args:
+ * 	au - the parser state machine
+ * Rtns:
+ *	< 0	- error
+ *	== 0	- no data
+ *	> 0	- we have an event and it's set to the 'current event' au->le
+ */
+static int au_auparse_next_event(auparse_state_t *au)
+{
+	int rc, i, built;
+	event_list_t *l;
+	au_event_t e;
+
+	/*
+	 * Deal with Python memory management issues where it issues a
+	 * auparse_destroy() call after an auparse_init() call but then wants
+	 * to still work with auparse data. Bascially, we assume if the user
+	 * wants to parse for events (calling auparse_next_event()) we accept
+	 * that they expect the memory structures to exist. This is a bit
+	 * 'disconcerting' but the au_lol capability is a patch trying to
+	 * redress a singleton approach to event processing.
+	 */
+	if (au->au_lo->array == NULL && au->au_lo->maxi == -1) {
+		au_lol_create(au->au_lo);
+	}	
+	/*
+	 * First see if we have any empty events but with an allocated event
+	 * list. These would have just been processed, so we can free them
+	 */
+	for (i = 0; i <= au->au_lo->maxi; i++) {
+		au_lolnode *cur = &au->au_lo->array[i];
+		if (cur->status == EBS_EMPTY && cur->l) {
+#if	LOL_EVENTS_DEBUG01
+			if (debug) {printf("Freeing at start "); print_list_t(cur->l);}
+#endif	/* LOL_EVENTS_DEBUG01 */
+			aup_list_clear(cur->l);
+			free(cur->l);
+			au->le = NULL;	// this should crash any usage
+					// of au->le until reset
+			cur->l = NULL;
+		}
+	}
+	/*
+	 * Now see if we have completed events queued, and if so grab the
+	 * first one and set it to be the 'current' event of interest
+	 */
+	if ((l = au_get_ready_event(au, 0)) != NULL) {
+		rnode *r;
+
+		aup_list_first(l);
+		r = aup_list_get_cur(l);
+		free_interpretation_list();
+		load_interpretation_list(r->interp);
+		aup_list_first_field(l);
+		au->le = l;
+#if	LOL_EVENTS_DEBUG01
+		if (debug) print_lol("upfront", au->au_lo);
+#endif	/* LOL_EVENTS_DEBUG01 */
+		return 1;
+	}
+	/*
+	 * If no complete events are available, lets ingest
+	 */
+	while (1) {
+		for (i = 0; i <= au->au_lo->maxi; i++) {
+			au_lolnode *cur = &au->au_lo->array[i];
+			if (cur->status == EBS_EMPTY && cur->l) {
+#if	LOL_EVENTS_DEBUG01
+				if (debug) {printf("Freeing at loop"); print_list_t(cur->l);}
+#endif	/* LOL_EVENTS_DEBUG01 */
+				aup_list_clear(cur->l);
+				free(cur->l);
+				au->le = NULL;	/* this should crash any usage of au->le until reset */
+				cur->l = NULL;
+			}
+		}
+		rc = retrieve_next_line(au);
+		if (debug) printf("next_line(%d) '%s'\n", rc, au->cur_buf);
+		if (rc == 0) {
+#if	LOL_EVENTS_DEBUG01
+			if (debug) printf("Empty line\n");
+#endif	/* LOL_EVENTS_DEBUG01 */
+			return 0;	/* NO data now */
+		}
+		if (rc == -2) {
+			/*
+			 * We are at EOF, so see if we have any accumulated
+			 * events.
+			 */
+			if (debug) printf("EOF\n");
+			au_terminate_all_events(au);
+			if ((l = au_get_ready_event(au, 0)) != NULL) {
+				rnode *r;
+
+				aup_list_first(l);
+				r = aup_list_get_cur(l);
+				free_interpretation_list();
+				load_interpretation_list(r->interp);
+				aup_list_first_field(l);
+				au->le = l;
+#if	LOL_EVENTS_DEBUG01
+				if (debug) print_lol("eof termination",au->au_lo);
+#endif	/* LOL_EVENTS_DEBUG01 */
+				return 1;
+			}
+			return 0;
+		} else if (rc < 0) {
+			/* Straight error */
+			if (debug) printf("Error %d\n", rc);
+			return -1;
+		}
+		/* So we got a successful read ie rc > 0 */
+		if (extract_timestamp(au->cur_buf, &e)) {
+			if (debug) printf("Malformed line:%s\n", au->cur_buf);
+			continue;
+		}
+
+		/*
+		 * Is this an event we have already been building?
+		 */
+		built = 0;
+		for (i = 0; i <= au->au_lo->maxi; i++) {
+			au_lolnode *cur = &au->au_lo->array[i];
+			if (cur->status == EBS_BUILDING) {
+				if (events_are_equal(&cur->l->e, &e)) {
+					if (debug) printf("Adding event to building event\n");
+					aup_list_append(cur->l, au->cur_buf,
+						au->list_idx, au->line_number);
+					au->cur_buf = NULL;
+					free((char *)e.host);
+					au_check_events(au,  e.sec);
+#if	LOL_EVENTS_DEBUG01
+					if (debug) print_lol("building",au->au_lo);
+#endif	/* LOL_EVENTS_DEBUG01 */
+					/* we built something, so break out */
+					built++;
+					break;
+				}
+			}
+		}
+		if (built)
+			continue;
+
+		/* So create one */
+		if (debug) printf("First record in new event, initialize event\n");
+		if ((l=(event_list_t *)malloc(sizeof(event_list_t))) == NULL) {
+			return -1;
+		}
+		aup_list_create(l);
+		aup_list_set_event(l, &e);
+		aup_list_append(l, au->cur_buf, au->list_idx, au->line_number);
+		if (au_lol_append(au->au_lo, l) == NULL) {
+			return -1;
+		}
+		au->cur_buf = NULL;
+		free((char *)e.host);
+		au_check_events(au,  e.sec);
+		if ((l = au_get_ready_event(au, 0)) != NULL) {
+			rnode *r;
+
+			aup_list_first(l);
+			r = aup_list_get_cur(l);
+			free_interpretation_list();
+			load_interpretation_list(r->interp);
+			aup_list_first_field(l);
+			au->le = l;
+#if	LOL_EVENTS_DEBUG01
+			if (debug) print_lol("basic", au->au_lo);
+#endif	/* LOL_EVENTS_DEBUG01 */
+			return 1;
+		}
+	}
+}
+
 // Brute force go to next event. Returns < 0 on error, 0 no data, > 0 success
 int auparse_next_event(auparse_state_t *au)
 {
-	int rc;
-	au_event_t event;
-
-	if (au->parse_state == EVENT_EMITTED) {
-		// If the last call resulted in emitting event data then
-		// clear previous event data in preparation to accumulate
-		// new event data
-		aup_list_clear(&au->le);
-		au->parse_state = EVENT_EMPTY;
-	}
-
-	// accumulate new event data
-	while (1) {
-		rc = retrieve_next_line(au);
-		if (debug) printf("next_line(%d) '%s'\n", rc, au->cur_buf);
-		if (rc ==  0) return 0;	// No data now
-		if (rc == -2) {
-			// We're at EOF, did we read any data previously?
-			// If so return data available, else return no data
-			// available
-			if (au->parse_state == EVENT_ACCUMULATING) {
-				if (debug) printf("EOF, EVENT_EMITTED\n");
-				au->parse_state = EVENT_EMITTED;
-				return 1; // data is available
-			}
-			return 0;
-		}
-		if (rc > 0) {	        // Input available
-			rnode *r;
-			if (extract_timestamp(au->cur_buf, &event)) {
-				if (debug)
-					printf("Malformed line:%s\n",
-							 au->cur_buf);
-				continue;
-			}
-			if (au->parse_state == EVENT_EMPTY) {
-				// First record in new event, initialize event
-				if (debug)
-					printf(
-			"First record in new event, initialize event\n");
-				aup_list_set_event(&au->le, &event);
-				aup_list_append(&au->le, au->cur_buf,
-						au->list_idx, au->line_number);
-				au->parse_state = EVENT_ACCUMULATING;
-				au->cur_buf = NULL; 
-			} else if (events_are_equal(&au->le.e, &event)) {
-				// Accumulate data into existing event
-				if (debug)
-					printf(
-				    "Accumulate data into existing event\n");
-				aup_list_append(&au->le, au->cur_buf,
-						au->list_idx, au->line_number);
-				au->parse_state = EVENT_ACCUMULATING;
-				au->cur_buf = NULL; 
-			} else {
-				// New event, save input for next invocation
-				if (debug)
-					printf(
-	"New event, save current input for next invocation, EVENT_EMITTED\n");
-				push_line(au);
-				// Emit the event, set event cursors to 
-				// initial position
-				aup_list_first(&au->le);
-				aup_list_first_field(&au->le);
-				au->parse_state = EVENT_EMITTED;
-				free((char *)event.host);
-				return 1; // data is available
-			}
-			free((char *)event.host);
-			// Check to see if the event can be emitted due to EOE
-			// or something we know is a single record event. At
-			// this point, new record should be pointed at 'cur'
-			if ((r = aup_list_get_cur(&au->le)) == NULL)
-				continue;
-			if (	r->type == AUDIT_EOE ||
-				r->type < AUDIT_FIRST_EVENT ||
-				r->type >= AUDIT_FIRST_ANOM_MSG) {
-				// Emit the event, set event cursors to 
-				// initial position
-				aup_list_first(&au->le);
-				aup_list_first_field(&au->le);
-				au->parse_state = EVENT_EMITTED;
-				return 1; // data is available
-			}
-		} else {		// Read error
-			return -1;
-		}
-	}	
+	return au_auparse_next_event(au);
 }
 
 /* Accessors to event data */
 const au_event_t *auparse_get_timestamp(auparse_state_t *au)
 {
-	if (au && au->le.e.sec != 0)
-		return &au->le.e;
+	if (au && au->le->e.sec != 0)
+		return &au->le->e;
 	else
 		return NULL;
 }
@@ -1052,7 +1502,7 @@ const au_event_t *auparse_get_timestamp(auparse_state_t *au)
 time_t auparse_get_time(auparse_state_t *au)
 {
 	if (au)
-		return au->le.e.sec;
+		return au->le->e.sec;
 	else
 		return 0;
 }
@@ -1061,7 +1511,7 @@ time_t auparse_get_time(auparse_state_t *au)
 unsigned int auparse_get_milli(auparse_state_t *au)
 {
 	if (au)
-		return au->le.e.milli;
+		return au->le->e.milli;
 	else
 		return 0;
 }
@@ -1070,7 +1520,7 @@ unsigned int auparse_get_milli(auparse_state_t *au)
 unsigned long auparse_get_serial(auparse_state_t *au)
 {
 	if (au)
-		return au->le.e.serial;
+		return au->le->e.serial;
 	else
 		return 0;
 }
@@ -1079,8 +1529,8 @@ unsigned long auparse_get_serial(auparse_state_t *au)
 // Gets the machine node name
 const char *auparse_get_node(auparse_state_t *au)
 {
-	if (au && au->le.e.host != NULL)
-		return strdup(au->le.e.host);
+	if (au && au->le->e.host != NULL)
+		return strdup(au->le->e.host);
 	else
 		return NULL;
 }
@@ -1124,7 +1574,7 @@ int auparse_timestamp_compare(au_event_t *e1, au_event_t *e2)
 
 unsigned int auparse_get_num_records(auparse_state_t *au)
 {
-	return aup_list_get_cnt(&au->le);
+	return aup_list_get_cnt(au->le);
 }
 
 
@@ -1132,42 +1582,61 @@ unsigned int auparse_get_num_records(auparse_state_t *au)
 int auparse_first_record(auparse_state_t *au)
 {
 	int rc;
+	rnode *r;
 
-	if (aup_list_get_cnt(&au->le) == 0) {
+	if (aup_list_get_cnt(au->le) == 0) {
+		// This function loads interpretations
 		rc = auparse_next_event(au);
 		if (rc <= 0)
 			return rc;
 	}
-	aup_list_first(&au->le);
-	aup_list_first_field(&au->le);
+	aup_list_first(au->le);
+	r = aup_list_get_cur(au->le);
+	free_interpretation_list();
+	load_interpretation_list(r->interp);
+	aup_list_first_field(au->le);
 	
 	return 1;
 }
 
-
+/*
+ * Returns:	-1 if an error occurs,
+ * 		0 if no more records in  current  event,
+ *		1 for success.
+ */
 int auparse_next_record(auparse_state_t *au)
 {
-	if (aup_list_get_cnt(&au->le) == 0) { 
+	rnode *r;
+
+	free_interpretation_list();
+	if (aup_list_get_cnt(au->le) == 0) { 
 		int rc = auparse_first_record(au);
 		if (rc <= 0)
 			return rc;
 	}
-	if (aup_list_next(&au->le))
+	r = aup_list_next(au->le);
+	if (r) {
+		load_interpretation_list(r->interp);
 		return 1;
-	else
+	} else
 		return 0;
 }
 
 
 int auparse_goto_record_num(auparse_state_t *au, unsigned int num)
 {
+	rnode *r;
+
 	/* Check if a request is out of range */
-	if (num >= aup_list_get_cnt(&au->le))
+	free_interpretation_list();
+	if (num >= aup_list_get_cnt(au->le))
 		return 0;
 
-	if (aup_list_goto_rec(&au->le, num) != NULL)
+	r = aup_list_goto_rec(au->le, num);
+	if (r != NULL) {
+		load_interpretation_list(r->interp);
 		return 1;
-	else
+	} else
 		return 0;
 }
 
@@ -1175,7 +1644,7 @@ int auparse_goto_record_num(auparse_state_t *au, unsigned int num)
 /* Accessors to record data */
 int auparse_get_type(auparse_state_t *au)
 {
-	rnode *r = aup_list_get_cur(&au->le);
+	rnode *r = aup_list_get_cur(au->le);
 	if (r) 
 		return r->type;
 	else
@@ -1185,7 +1654,7 @@ int auparse_get_type(auparse_state_t *au)
 
 const char *auparse_get_type_name(auparse_state_t *au)
 {
-	rnode *r = aup_list_get_cur(&au->le);
+	rnode *r = aup_list_get_cur(au->le);
 	if (r)
 		return audit_msg_type_to_name(r->type);
 	else
@@ -1195,7 +1664,7 @@ const char *auparse_get_type_name(auparse_state_t *au)
 
 unsigned int auparse_get_line_number(auparse_state_t *au)
 {
-	rnode *r = aup_list_get_cur(&au->le);
+	rnode *r = aup_list_get_cur(au->le);
 	if (r) 
 		return r->line_number;
 	else
@@ -1214,7 +1683,7 @@ const char *auparse_get_filename(auparse_state_t *au)
 			return NULL;
 	}
 
-	rnode *r = aup_list_get_cur(&au->le);
+	rnode *r = aup_list_get_cur(au->le);
 	if (r) {
 		if (r->list_idx < 0) return NULL;
 		return au->source_list[r->list_idx];
@@ -1226,13 +1695,13 @@ const char *auparse_get_filename(auparse_state_t *au)
 
 int auparse_first_field(auparse_state_t *au)
 {
-	return aup_list_first_field(&au->le);
+	return aup_list_first_field(au->le);
 }
 
 
 int auparse_next_field(auparse_state_t *au)
 {
-	rnode *r = aup_list_get_cur(&au->le);
+	rnode *r = aup_list_get_cur(au->le);
 	if (r) {
 		if (nvlist_next(&r->nv))
 			return 1;
@@ -1245,7 +1714,7 @@ int auparse_next_field(auparse_state_t *au)
 
 unsigned int auparse_get_num_fields(auparse_state_t *au)
 {
-	rnode *r = aup_list_get_cur(&au->le);
+	rnode *r = aup_list_get_cur(au->le);
 	if (r)
 		return nvlist_get_cnt(&r->nv);
 	else
@@ -1254,9 +1723,18 @@ unsigned int auparse_get_num_fields(auparse_state_t *au)
 
 const char *auparse_get_record_text(auparse_state_t *au)
 {
-	rnode *r = aup_list_get_cur(&au->le);
+	rnode *r = aup_list_get_cur(au->le);
 	if (r) 
 		return r->record;
+	else
+		return NULL;
+}
+
+const char *auparse_get_record_interpretations(auparse_state_t *au)
+{
+	rnode *r = aup_list_get_cur(au->le);
+	if (r) 
+		return r->interp;
 	else
 		return NULL;
 }
@@ -1268,12 +1746,12 @@ const char *auparse_find_field(auparse_state_t *au, const char *name)
 	free(au->find_field);
 	au->find_field = strdup(name);
 
-	if (au->le.e.sec) {
+	if (au->le->e.sec) {
 		const char *cur_name;
 		rnode *r;
 
 		// look at current record before moving
-		r = aup_list_get_cur(&au->le);
+		r = aup_list_get_cur(au->le);
 		if (r == NULL)
 			return NULL;
 		cur_name = nvlist_get_cur_name(&r->nv);
@@ -1292,10 +1770,10 @@ const char *auparse_find_field_next(auparse_state_t *au)
 		errno = EINVAL;
 		return NULL;
 	}
-	if (au->le.e.sec) {
+	if (au->le->e.sec) {
 		int moved = 0;
 
-		rnode *r = aup_list_get_cur(&au->le);
+		rnode *r = aup_list_get_cur(au->le);
 		while (r) {	// For each record in the event...
 			if (!moved) {
 				nvlist_next(&r->nv);
@@ -1303,9 +1781,9 @@ const char *auparse_find_field_next(auparse_state_t *au)
 			}
 			if (nvlist_find_name(&r->nv, au->find_field))
 				return nvlist_get_cur_val(&r->nv);
-			r = aup_list_next(&au->le);
+			r = aup_list_next(au->le);
 			if (r)
-				aup_list_first_field(&au->le);
+				aup_list_first_field(au->le);
 		}
 	}
 	return NULL;
@@ -1315,8 +1793,8 @@ const char *auparse_find_field_next(auparse_state_t *au)
 /* Accessors to field data */
 const char *auparse_get_field_name(auparse_state_t *au)
 {
-	if (au->le.e.sec) {
-		rnode *r = aup_list_get_cur(&au->le);
+	if (au->le->e.sec) {
+		rnode *r = aup_list_get_cur(au->le);
 		if (r) 
 			return nvlist_get_cur_name(&r->nv);
 	}
@@ -1326,8 +1804,8 @@ const char *auparse_get_field_name(auparse_state_t *au)
 
 const char *auparse_get_field_str(auparse_state_t *au)
 {
-	if (au->le.e.sec) {
-		rnode *r = aup_list_get_cur(&au->le);
+	if (au->le->e.sec) {
+		rnode *r = aup_list_get_cur(au->le);
 		if (r) 
 			return nvlist_get_cur_val(&r->nv);
 	}
@@ -1336,8 +1814,8 @@ const char *auparse_get_field_str(auparse_state_t *au)
 
 int auparse_get_field_type(auparse_state_t *au)
 {
-        if (au->le.e.sec) {
-                rnode *r = aup_list_get_cur(&au->le);
+        if (au->le->e.sec) {
+                rnode *r = aup_list_get_cur(au->le);
                 if (r)
                         return nvlist_get_cur_type(r);
         }
@@ -1359,11 +1837,10 @@ int auparse_get_field_int(auparse_state_t *au)
 	return -1;
 }
 
-
 const char *auparse_interpret_field(auparse_state_t *au)
 {
-        if (au->le.e.sec) {
-                rnode *r = aup_list_get_cur(&au->le);
+        if (au->le->e.sec) {
+                rnode *r = aup_list_get_cur(au->le);
                 if (r)
                         return nvlist_interp_cur_val(r);
         }

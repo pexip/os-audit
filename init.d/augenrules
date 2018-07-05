@@ -39,7 +39,7 @@ trap 'rm -f ${TmpRules}; exit 1' 1 2 3 13 15
 
 try_load() {
 	if [ $LoadRules -eq 1 ] ; then
-		auditctl -R ${DestinationFile}
+		/sbin/auditctl -R ${DestinationFile}
 		RETVAL=$?
 	fi
 }
@@ -115,15 +115,21 @@ if [ $? -eq 0 ]; then
 	exit $RETVAL
 elif [ $OnlyCheck -eq 1 ] ; then
 	echo "$0: Rules have changed and should be updated"
+	rm -f ${TmpRules}
 	exit 0
 fi
 
 # Otherwise we install the new file
 if [ -f ${DestinationFile} ]; then
-	cp ${DestinationFile} ${DestinationFile}.prev
+	cp ${DestinationFile} ${DestinationFile}.${ASuffix}
 fi
 # We copy the file so that it gets the right selinux lable
 cp ${TmpRules} ${DestinationFile}
+chmod 0640 ${DestinationFile}
+# Restore context on MLS system. /tmp is SystemLow & audit.rules is SystemHigh
+if [ -x /usr/sbin/restorecon ] ; then
+	/usr/sbin/restorecon -F ${DestinationFile}
+fi
 rm -f ${TmpRules}
 
 try_load

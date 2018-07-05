@@ -1,5 +1,5 @@
 /* interpret.h --
- * Copyright 2007,08 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2007,08,2016 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -24,31 +24,23 @@
 #define INTERPRET_HEADER
 
 #include "config.h"
-#include "private.h"
+#include "dso.h"
 #include "rnode.h"
 #include <time.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+/* Make these hidden to prevent conflicts */
+AUDIT_HIDDEN_START
 
-
+void init_interpretation_list(void);
+int load_interpretation_list(const char *buf);
+void free_interpretation_list(void);
 int lookup_type(const char *name);
 const char *interpret(const rnode *r);
 void aulookup_destroy_uid_list(void);
 void aulookup_destroy_gid_list(void);
 char *au_unescape(char *buf);
 
-/* Make these hidden to prevent conflicts */
-hidden_proto(lookup_type);
-hidden_proto(interpret);
-hidden_proto(aulookup_destroy_uid_list);
-hidden_proto(aulookup_destroy_gid_list);
-hidden_proto(au_unescape);
+AUDIT_HIDDEN_END
 
-#ifdef __cplusplus
-}
-#endif
- 
 #endif
 

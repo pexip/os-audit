@@ -1,5 +1,5 @@
 /* audisp-remote.c --
- * Copyright 2008-2012 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2008-2012,2016 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -76,6 +76,7 @@ static volatile int sock=-1;
 static volatile int remote_ended = 0, quiet = 0;
 static int ifd;
 remote_conf_t config;
+static int warned = 0;
 
 /* Constants */
 static const char *SINGLE = "1";
@@ -138,8 +139,10 @@ static void user1_handler( int sig )
 
 static void dump_stats(struct queue *queue)
 {
-	syslog(LOG_INFO, "suspend=%s, transport_ok=%s, queue_size=%zu",
+	syslog(LOG_INFO,
+		"suspend=%s, remote_ended=%s, transport_ok=%s, queue_size=%zu",
 		suspend ? "yes" : "no",
+		remote_ended ? "yes" : "no",
 		transport_ok ? "yes" : "no",
 		q_queue_length(queue));
 	dump = 0;
@@ -175,6 +178,17 @@ static int sync_error_handler (const char *why)
 	   doesn't fix it, we eventually call network_failure_handler
 	   which has all the user-tweakable actions.  */
 	syslog (LOG_ERR, "lost/losing sync, %s", why);
+	return 0;
+}
+
+static int is_pipe(int fd)
+{
+	struct stat st;
+
+	if (fstat(fd, &st) == 0) {
+		if (S_ISFIFO(st.st_mode))
+			return 1;
+	}
 	return 0;
 }
 
@@ -244,16 +258,28 @@ static int do_action (const char *desc, const char *message,
 	case FA_EXEC:
 		safe_exec (exe, message);
 		return 0;
+	case FA_WARN_ONCE_CONT:
+		if (warned & 1)
+			return -1;
+		warned |= 1;
+		syslog (log_level, "%s, %s", desc, message);
+		return 0;
+	case FA_WARN_ONCE:
+		if (warned & 2)
+			return -1;
+		warned |= 2;
+		syslog (log_level, "%s, %s", desc, message);
+		return -1;
 	case FA_SUSPEND:
 		syslog (log_level,
 			"suspending remote logging due to %s", desc);
 		suspend = 1;
-		return 0;
+		return -1;
 	case FA_RECONNECT:
 		syslog (log_level,
 	"remote logging disconnected due to %s, will attempt reconnection",
 			desc);
-		return 0;
+		return -1;
 	case FA_SINGLE:
 		syslog (log_level,
 	"remote logging is switching system to single user mode due to %s",
@@ -414,6 +440,8 @@ static void send_one(struct queue *queue)
 	if (relay_event(event, len-1) < 0)
 		return;
 
+	/* reset on all successful transmissions */
+	warned = 0;
 	if (q_drop_head(queue) != 0)
 		queue_error();
 }
@@ -442,6 +470,7 @@ int main(int argc, char *argv[])
 	if (load_config(&config, CONFIG_FILE))
 		return 6;
 
+	(void) umask( umask( 077 ) | 027 );
 	// ifd = open("test.log", O_RDONLY);
 	ifd = 0;
 	fcntl(ifd, F_SETFL, O_NONBLOCK);
@@ -570,6 +599,13 @@ int main(int argc, char *argv[])
 				send_one(queue);
 		}
 	}
+
+	// If stdin is a pipe, then flush the queue
+	if (is_pipe(0)) {
+		while (q_queue_length(queue) && !suspend && transport_ok)
+			send_one(queue);
+	}
+
 	if (sock >= 0) {
 		shutdown(sock, SHUT_RDWR);
 		close(sock);
@@ -1019,6 +1055,7 @@ static int init_sock(void)
 			       "Cannot bind local socket to port %d",
 					config.local_port);
 			stop_sock();
+			freeaddrinfo(ai);
 			return ET_TEMPORARY;
 		}
 
@@ -1257,9 +1294,15 @@ static int recv_msg_tcp (unsigned char *header, char *msg, uint32_t *mlen)
 	int hver, mver, rc;
 	uint32_t type, rlen, seq;
 
+	errno = 0;
 	rc = ar_read (sock, header, AUDIT_RMW_HEADER_SIZE);
 	if (rc < 16) {
-		syslog(LOG_ERR, "read from %s failed", config.remote_server);
+		if (rc == -1 && errno == 0)
+			syslog(LOG_ERR, "ack from %s timed out",
+						config.remote_server);
+		else
+			syslog(LOG_ERR, "read from %s failed",
+						config.remote_server);
 		return -1;
 	}
 

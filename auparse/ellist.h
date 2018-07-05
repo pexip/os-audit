@@ -3,19 +3,19 @@
 * Copyright (c) 2006-07 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved.
 *
-* This software may be freely redistributed and/or modified under the
-* terms of the GNU General Public License as published by the Free
-* Software Foundation; either version 2, or (at your option) any
-* later version.
+* This library is free software; you can redistribute it and/or
+* modify it under the terms of the GNU Lesser General Public
+* License as published by the Free Software Foundation; either
+* version 2.1 of the License, or (at your option) any later version.
 *
-* This program is distributed in the hope that it will be useful,
+* This library is distributed in the hope that it will be useful,
 * but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+* Lesser General Public License for more details.
 *
-* You should have received a copy of the GNU General Public License
-* along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* You should have received a copy of the GNU Lesser General Public
+* License along with this library; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -41,26 +41,32 @@ typedef struct {
 	au_event_t e;		// event - time & serial number
 } event_list_t;
 
-void aup_list_create(event_list_t *l) hidden;
-void aup_list_clear(event_list_t* l) hidden;
-static inline unsigned int aup_list_get_cnt(event_list_t *l) { return l->cnt; }
+static inline unsigned int aup_list_get_cnt(event_list_t *l) { return l ? l->cnt : 0; }
 static inline void aup_list_first(event_list_t *l) { l->cur = l->head; }
 static inline rnode *aup_list_get_cur(event_list_t *l) { return l->cur; }
-rnode *aup_list_next(event_list_t *l) hidden;
-int aup_list_append(event_list_t *l, char *record, int list_idx, unsigned int line_number) hidden;
-//int aup_list_get_event(event_list_t* l, au_event_t *e) hidden;
-int aup_list_set_event(event_list_t* l, au_event_t *e) hidden;
+
+AUDIT_HIDDEN_START
+
+void aup_list_create(event_list_t *l);
+void aup_list_clear(event_list_t* l);
+rnode *aup_list_next(event_list_t *l);
+int aup_list_append(event_list_t *l, char *record, int list_idx,
+	unsigned int line_number);
+//int aup_list_get_event(event_list_t* l, au_event_t *e);
+int aup_list_set_event(event_list_t* l, au_event_t *e);
 
 /* Given a message type, find the matching node */
-rnode *aup_list_find_rec(event_list_t *l, int i) hidden;
+rnode *aup_list_find_rec(event_list_t *l, int i);
 
 /* Seek to a specific record number */
-rnode *aup_list_goto_rec(event_list_t *l, int i) hidden;
+rnode *aup_list_goto_rec(event_list_t *l, int i);
 
 /* Given two message types, find the first matching node */
-rnode *aup_list_find_rec_range(event_list_t *l, int low, int high) hidden;
+rnode *aup_list_find_rec_range(event_list_t *l, int low, int high);
 
-int aup_list_first_field(event_list_t *l) hidden;
+int aup_list_first_field(event_list_t *l);
+
+AUDIT_HIDDEN_END
 
 #endif
 

@@ -1,5 +1,5 @@
 /* auditd.c -- 
- * Copyright 2004-09,2011,2013 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-09,2011,2013,2016 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -60,12 +60,12 @@
 volatile int stop = 0;
 
 /* Local data */
-static int fd = -1;
+static int fd = -1, pipefds[2] = {-1, -1};
 static struct daemon_conf config;
 static const char *pidfile = "/var/run/auditd.pid";
 static int init_pipe[2];
-static int do_fork = 1;
-static struct auditd_reply_list *rep = NULL;
+static int do_fork = 1, opt_aggregate_only = 0;
+static struct auditd_event *cur_event = NULL, *reconfig_ev = NULL;
 static int hup_info_requested = 0;
 static int usr1_info_requested = 0, usr2_info_requested = 0;
 static char subj[SUBJ_LEN];
@@ -122,7 +122,7 @@ static void hup_handler( struct ev_loop *loop, struct ev_signal *sig, int revent
 	rc = audit_request_signal_info(fd);
 	if (rc < 0)
 		send_audit_event(AUDIT_DAEMON_CONFIG, 
-				 "auditd error getting hup info - no change, sending auid=? pid=? subj=? res=failed");
+			 "op=hup-info auid=? pid=? subj=? res=failed");
 	else
 		hup_info_requested = 1;
 }
@@ -138,7 +138,7 @@ static void user1_handler(struct ev_loop *loop, struct ev_signal *sig,
 	rc = audit_request_signal_info(fd);
 	if (rc < 0)
 		send_audit_event(AUDIT_DAEMON_ROTATE, 
-				 "auditd error getting usr1 info - no change, sending auid=? pid=? subj=? res=failed");
+			 "op=usr1-info auid=? pid=? subj=? res=failed");
 	else
 		usr1_info_requested = 1;
 }
@@ -154,7 +154,7 @@ static void user2_handler( struct ev_loop *loop, struct ev_signal *sig, int reve
 	if (rc < 0) {
 		resume_logging();
 		send_audit_event(AUDIT_DAEMON_RESUME, 
-			 "auditd resuming logging, sending auid=? pid=? subj=? res=success");
+			 "op=resume-logging auid=? pid=? subj=? res=success");
 	} else
 		usr2_info_requested = 1;
 }
@@ -173,37 +173,59 @@ static void child_handler(struct ev_loop *loop, struct ev_signal *sig,
 	}
 }
 
-static void distribute_event(struct auditd_reply_list *rep)
+static int extract_type(const char *str)
 {
-	int attempt = 0;
+	const char *tptr, *ptr2, *ptr = str;
+	if (*str == 'n') {
+		ptr = strchr(str+1, ' ');
+		if (ptr == NULL)
+			return -1; // Malformed - bomb out
+		ptr++;
+	}
+	// ptr should be at 't'
+	ptr2 = strchr(ptr, ' ');
+	// get type=xxx in a buffer
+	tptr = strndupa(ptr, ptr2 - ptr);
+	// find =
+	str = strchr(tptr, '=');
+	if (str == NULL)
+		return -1; // Malformed - bomb out
+	// name is 1 past
+	str++;
+	return audit_name_to_msg_type(str);
+}
+
+void distribute_event(struct auditd_event *e)
+{
+	int attempt = 0, route = 1;
+
+	/* If type is 0, then its a network originating event */
+	if (e->reply.type == 0) {
+		// See if we are distributing network originating events
+		if (!dispatch_network_events())
+			route = 0;
+		else	// We only need the original type if its being routed
+			e->reply.type = extract_type(e->reply.message);
+	} else if (e->reply.type != AUDIT_DAEMON_RECONFIG)
+		// All other events need formatting
+		format_event(e);
+	else
+		route = 0; // Don't DAEMON_RECONFIG events until after enqueue
 
 	/* Make first attempt to send to plugins */
-	if (dispatch_event(&rep->reply, attempt) == 1)
+	if (route && dispatch_event(&e->reply, attempt) == 1)
 		attempt++; /* Failed sending, retry after writing to disk */
 
 	/* End of Event is for realtime interface - skip local logging of it */
-	if (rep->reply.type != AUDIT_EOE) {
-		int yield = rep->reply.type <= AUDIT_LAST_DAEMON &&
-				rep->reply.type >= AUDIT_FIRST_DAEMON ? 1 : 0;
-		/* Write to local disk */
-		enqueue_event(rep);
-		if (yield) {
-			struct timespec ts;
-			ts.tv_sec = 0;
-			ts.tv_nsec = 2 * 1000 * 1000; // 2 milliseconds
-			nanosleep(&ts, NULL); // Let other thread try to log it
-		}
-	} else
-		free(rep);	// This function takes custody of the memory
-
-	// FIXME: This is commented out since it fails to work. The
-	// problem is that the logger thread free's the buffer. Probably
-	// need a way to flag in the buffer if logger thread should free or
-	// move the free to this function.
+	if (e->reply.type != AUDIT_EOE)
+		handle_event(e); /* Write to local disk */
 
 	/* Last chance to send...maybe the pipe is empty now. */
-//	if (attempt) 
-//		dispatch_event(&rep->reply, attempt);
+	if ((attempt && route) || (e->reply.type == AUDIT_DAEMON_RECONFIG))
+		dispatch_event(&e->reply, attempt);
+
+	/* Free msg and event memory */
+	cleanup_event(e);
 }
 
 /*
@@ -213,39 +235,37 @@ static void distribute_event(struct auditd_reply_list *rep)
 static unsigned seq_num = 0;
 int send_audit_event(int type, const char *str)
 {
-	struct auditd_reply_list *rep;
+	struct auditd_event *e;
 	struct timeval tv;
-	
-	if ((rep = malloc(sizeof(*rep))) == NULL) {
+
+	e = create_event(NULL, 0, NULL, 0);
+	if (e == NULL) {
 		audit_msg(LOG_ERR, "Cannot allocate audit reply");
 		return 1;
 	}
 
-	rep->reply.type = type;
-	rep->reply.message = (char *)malloc(DMSG_SIZE);
-	if (rep->reply.message == NULL) {
-		free(rep);
-		audit_msg(LOG_ERR, "Cannot allocate local event message");
-		return 1;
-	}
+	e->reply.type = type;
 	if (seq_num == 0) {
 		srand(time(NULL));
 		seq_num = rand()%10000;
 	} else
 		seq_num++;
+	// Write event into netlink area like normal events
 	if (gettimeofday(&tv, NULL) == 0) {
-		rep->reply.len = snprintf((char *)rep->reply.message,
+		e->reply.len = snprintf((char *)e->reply.msg.data,
 			DMSG_SIZE, "audit(%lu.%03u:%u): %s", 
 			tv.tv_sec, (unsigned)(tv.tv_usec/1000), seq_num, str);
 	} else {
-		rep->reply.len = snprintf((char *)rep->reply.message,
+		e->reply.len = snprintf((char *)e->reply.msg.data,
 			DMSG_SIZE, "audit(%lu.%03u:%u): %s", 
 			(unsigned long)time(NULL), 0, seq_num, str);
 	}
-	if (rep->reply.len > DMSG_SIZE)
-		rep->reply.len = DMSG_SIZE;
+	// Point message at the netlink buffer like normal events
+	e->reply.message = e->reply.msg.data;
+	if (e->reply.len > DMSG_SIZE)
+		e->reply.len = DMSG_SIZE;
 
-	distribute_event(rep);
+	distribute_event(e);
 	return 0;
 }
 
@@ -394,16 +414,16 @@ static void tell_parent(int status)
 static void netlink_handler(struct ev_loop *loop, struct ev_io *io,
 			int revents)
 {
-	if (rep == NULL) { 
-		if ((rep = malloc(sizeof(*rep))) == NULL) {
+	if (cur_event == NULL) { 
+		if ((cur_event = malloc(sizeof(*cur_event))) == NULL) {
 			char emsg[DEFAULT_BUF_SZ];
 			if (*subj)
 				snprintf(emsg, sizeof(emsg),
-			"auditd error halt, auid=%u pid=%d subj=%s res=failed",
+			"op=error-halt auid=%u pid=%d subj=%s res=failed",
 					audit_getloginuid(), getpid(), subj);
 			else
 				snprintf(emsg, sizeof(emsg),
-				 "auditd error halt, auid=%u pid=%d res=failed",
+				 "op=error-halt auid=%u pid=%d res=failed",
 					 audit_getloginuid(), getpid());
 			EV_STOP ();
 			send_audit_event(AUDIT_DAEMON_ABORT, emsg);
@@ -415,10 +435,11 @@ static void netlink_handler(struct ev_loop *loop, struct ev_io *io,
 			shutdown_dispatcher();
 			return;
 		}
+		cur_event->ack_func = NULL;
 	}
-	if (audit_get_reply(fd, &rep->reply, 
+	if (audit_get_reply(fd, &cur_event->reply, 
 			    GET_REPLY_NONBLOCKING, 0) > 0) {
-		switch (rep->reply.type)
+		switch (cur_event->reply.type)
 		{	/* For now dont process these */
 		case NLMSG_NOOP:
 		case NLMSG_DONE:
@@ -431,42 +452,42 @@ static void netlink_handler(struct ev_loop *loop, struct ev_io *io,
 			if (hup_info_requested) {
 				audit_msg(LOG_DEBUG,
 				    "HUP detected, starting config manager");
-				if (start_config_manager(rep)) {
+				reconfig_ev = cur_event;
+				if (start_config_manager(cur_event)) {
 					send_audit_event(
 						AUDIT_DAEMON_CONFIG, 
-				  "auditd error getting hup info - no change,"
-				  " sending auid=? pid=? subj=? res=failed");
+				  "op=reconfigure state=no-change "
+				  "auid=? pid=? subj=? res=failed");
 				}
-				rep = NULL;
+				cur_event = NULL;
 				hup_info_requested = 0;
 			} else if (usr1_info_requested) {
 				char usr1[MAX_AUDIT_MESSAGE_LENGTH];
-				if (rep->reply.len == 24) {
+				if (cur_event->reply.len == 24) {
 					snprintf(usr1, sizeof(usr1),
-					 "auditd sending auid=? pid=? subj=?");
+					 "op=rotate-logs auid=? pid=? subj=?");
 				} else {
 					snprintf(usr1, sizeof(usr1),
-				 "auditd sending auid=%u pid=%d subj=%s",
-						 rep->reply.signal_info->uid, 
-						 rep->reply.signal_info->pid,
-						 rep->reply.signal_info->ctx);
+				 "op=rotate-logs auid=%u pid=%d subj=%s",
+					 cur_event->reply.signal_info->uid, 
+					 cur_event->reply.signal_info->pid,
+					 cur_event->reply.signal_info->ctx);
 				}
 				send_audit_event(AUDIT_DAEMON_ROTATE, usr1);
 				usr1_info_requested = 0;
 			} else if (usr2_info_requested) {
 				char usr2[MAX_AUDIT_MESSAGE_LENGTH];
-				if (rep->reply.len == 24) {
+				if (cur_event->reply.len == 24) {
 					snprintf(usr2, sizeof(usr2), 
-						"auditd resuming logging, "
-						"sending auid=? pid=? subj=? "
-						"res=success");
+						"op=resume-logging auid=? "
+						"pid=? subj=? res=success");
 				} else {
 					snprintf(usr2, sizeof(usr2),
-						"auditd resuming logging, "
-				  "sending auid=%u pid=%d subj=%s res=success",
-						 rep->reply.signal_info->uid, 
-						 rep->reply.signal_info->pid,
-						 rep->reply.signal_info->ctx);
+						"op=resume-logging "
+					"auid=%u pid=%d subj=%s res=success",
+					 cur_event->reply.signal_info->uid, 
+					 cur_event->reply.signal_info->pid,
+					 cur_event->reply.signal_info->ctx);
 				}
 				resume_logging();
 				send_audit_event(AUDIT_DAEMON_RESUME, usr2); 
@@ -474,8 +495,8 @@ static void netlink_handler(struct ev_loop *loop, struct ev_io *io,
 			}
 			break;
 		default:
-			distribute_event(rep);
-			rep = NULL;
+			distribute_event(cur_event);
+			cur_event = NULL;
 			break;
 		}
 	} else {
@@ -483,6 +504,29 @@ static void netlink_handler(struct ev_loop *loop, struct ev_io *io,
 			// FIXME do err action
 		}
 	}
+}
+
+static void pipe_handler(struct ev_loop *loop, struct ev_io *io,
+                        int revents)
+{
+	char buf[16];
+
+	// Drain the pipe - won't block because libev sets non-blocking mode
+	read(pipefds[0], buf, sizeof(buf));
+	enqueue_event(reconfig_ev);
+	reconfig_ev = NULL;
+}
+
+void reconfig_ready(void)
+{
+	const char *msg = "ready\n";
+	write(pipefds[1], msg, strlen(msg));
+}
+
+static void close_pipes(void)
+{
+	close(pipefds[0]);
+	close(pipefds[1]);
 }
 
 int main(int argc, char *argv[])
@@ -496,6 +540,7 @@ int main(int argc, char *argv[])
 	extern int optind;
 	struct ev_loop *loop;
 	struct ev_io netlink_watcher;
+	struct ev_io pipe_watcher;
 	struct ev_signal sigterm_watcher;
 	struct ev_signal sighup_watcher;
 	struct ev_signal sigusr1_watcher;
@@ -503,13 +548,13 @@ int main(int argc, char *argv[])
 	struct ev_signal sigchld_watcher;
 
 	/* Get params && set mode */
-	while ((c = getopt(argc, argv, "flns:")) != -1) {
+	while ((c = getopt(argc, argv, "aflns:")) != -1) {
 		switch (c) {
 		case 'f':
 			opt_foreground = 1;
 			break;
 		case 'l':
-			opt_allow_links=1;
+			opt_allow_links = 1;
 			break;
 		case 'n':
 			do_fork = 0;
@@ -551,10 +596,16 @@ int main(int argc, char *argv[])
 	}
 
 #ifndef DEBUG
-	/* Make sure we are root */
-	if (getuid() != 0) {
-		fprintf(stderr, "You must be root to run this program.\n");
-		return 4;
+	/* Make sure we can do our job. Containers may not give you
+	 * capabilities, so we revert to a uid check for that case. */
+	if (!audit_can_control() || !audit_can_read()) {
+		if (!config.local_events && geteuid() == 0)
+			;
+		else {
+			fprintf(stderr,
+		"You must be root or have capabilities to run this program.\n");
+			return 4;
+		}
 	}
 #endif
 
@@ -576,8 +627,13 @@ int main(int argc, char *argv[])
 	setrlimit(RLIMIT_CPU, &limit);
 
 	/* Load the Configuration File */
-	if (load_config(&config, TEST_AUDITD))
+	if (load_config(&config, TEST_AUDITD)) {
+		free_config(&config);
 		return 6;
+	}
+
+	// This can only be set at start up
+	opt_aggregate_only = !config.local_events;
 
 	if (config.priority_boost != 0) {
 		errno = 0;
@@ -585,6 +641,7 @@ int main(int argc, char *argv[])
 		if (rc == -1 && errno) {
 			audit_msg(LOG_ERR, "Cannot change priority (%s)", 
 					strerror(errno));
+			free_config(&config);
 			return 1;
 		}
 	} 
@@ -595,6 +652,7 @@ int main(int argc, char *argv[])
 			audit_msg(LOG_ERR, "Cannot daemonize (%s)",
 				strerror(errno));
 			tell_parent(FAILURE);
+			free_config(&config);
 			return 1;
 		} 
 		openlog("auditd", LOG_PID, LOG_DAEMON);
@@ -604,6 +662,7 @@ int main(int argc, char *argv[])
 	if ((fd = audit_open()) < 0) {
         	audit_msg(LOG_ERR, "Cannot open netlink audit socket");
 		tell_parent(FAILURE);
+		free_config(&config);
 		return 1;
 	}
 
@@ -613,6 +672,7 @@ int main(int argc, char *argv[])
 		if (pidfile)
 			unlink(pidfile);
 		tell_parent(FAILURE);
+		free_config(&config);
 		return 1;
 	}
 
@@ -620,6 +680,7 @@ int main(int argc, char *argv[])
 		if (pidfile)
 			unlink(pidfile);
 		tell_parent(FAILURE);
+		free_config(&config);
 		return 1;
 	}
 
@@ -628,8 +689,20 @@ int main(int argc, char *argv[])
 		if (pidfile)
 			unlink(pidfile);
 		tell_parent(FAILURE);
+		free_config(&config);
 		return 1;
 	}
+
+	/* Setup the reconfig notification pipe */
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, pipefds)) {
+		if (pidfile)
+			unlink(pidfile);
+		tell_parent(FAILURE);
+		free_config(&config);
+		return 1;
+	}
+	fcntl(pipefds[0], F_SETFD, FD_CLOEXEC);
+	fcntl(pipefds[1], F_SETFD, FD_CLOEXEC);
 
 	/* Write message to log that we are alive */
 	{
@@ -642,17 +715,19 @@ int main(int argc, char *argv[])
 			if (pidfile)
 				unlink(pidfile);
 			tell_parent(FAILURE);
+			close_pipes();
+			free_config(&config);
 			return 1;
 		}
 		if (getsubj(subj))
 			snprintf(start, sizeof(start),
-				"auditd start, ver=%s format=%s "
+				"op=start ver=%s format=%s "
 			    "kernel=%.56s auid=%u pid=%d subj=%s res=success",
 				VERSION, fmt, ubuf.release,
 				audit_getloginuid(), getpid(), subj);
 		else
 			snprintf(start, sizeof(start),
-				"auditd start, ver=%s format=%s "
+				"op=start ver=%s format=%s "
 				"kernel=%.56s auid=%u pid=%d res=success",
 				VERSION, fmt, ubuf.release,
 				audit_getloginuid(), getpid());
@@ -662,6 +737,8 @@ int main(int argc, char *argv[])
 				unlink(pidfile);
 			shutdown_dispatcher();
 			tell_parent(FAILURE);
+			close_pipes();
+			free_config(&config);
 			return 1;
 		}
 	}
@@ -672,16 +749,17 @@ int main(int argc, char *argv[])
 	/* let config manager init */
 	init_config_manager();
 
-	if (opt_startup != startup_nochange && (audit_is_enabled(fd) < 2) &&
-	    audit_set_enabled(fd, (int)opt_startup) < 0) {
+	if (opt_startup != startup_nochange && !opt_aggregate_only &&
+			(audit_is_enabled(fd) < 2) &&
+			audit_set_enabled(fd, (int)opt_startup) < 0) {
 		char emsg[DEFAULT_BUF_SZ];
 		if (*subj)
 			snprintf(emsg, sizeof(emsg),
-			"auditd error halt, auid=%u pid=%d subj=%s res=failed",
+			"op=set-enable auid=%u pid=%d subj=%s res=failed",
 				audit_getloginuid(), getpid(), subj);
 		else
 			snprintf(emsg, sizeof(emsg),
-				"auditd error halt, auid=%u pid=%d res=failed",
+				"op=set-enable auid=%u pid=%d res=failed",
 				audit_getloginuid(), getpid());
 		stop = 1;
 		send_audit_event(AUDIT_DAEMON_ABORT, emsg);
@@ -693,19 +771,21 @@ int main(int argc, char *argv[])
 			unlink(pidfile);
 		shutdown_dispatcher();
 		tell_parent(FAILURE);
+		close_pipes();
+		free_config(&config);
 		return 1;
 	}
 
 	/* Tell the kernel we are alive */
-	if (audit_set_pid(fd, getpid(), WAIT_YES) < 0) {
+	if (!opt_aggregate_only && audit_set_pid(fd, getpid(), WAIT_YES) < 0) {
 		char emsg[DEFAULT_BUF_SZ];
 		if (*subj)
 			snprintf(emsg, sizeof(emsg),
-			"auditd error halt, auid=%u pid=%d subj=%s res=failed",
+			"op=set-pid auid=%u pid=%d subj=%s res=failed",
 				audit_getloginuid(), getpid(), subj);
 		else
 			snprintf(emsg, sizeof(emsg),
-				"auditd error halt, auid=%u pid=%d res=failed",
+				"op=set-pid auid=%u pid=%d res=failed",
 				audit_getloginuid(), getpid());
 		stop = 1;
 		send_audit_event(AUDIT_DAEMON_ABORT, emsg);
@@ -715,14 +795,18 @@ int main(int argc, char *argv[])
 			unlink(pidfile);
 		shutdown_dispatcher();
 		tell_parent(FAILURE);
+		close_pipes();
+		free_config(&config);
 		return 1;
 	}
 
 	/* Depending on value of opt_startup (-s) set initial audit state */
 	loop = ev_default_loop (EVFLAG_NOENV);
 
-	ev_io_init (&netlink_watcher, netlink_handler, fd, EV_READ);
-	ev_io_start (loop, &netlink_watcher);
+	if (!opt_aggregate_only) {
+		ev_io_init (&netlink_watcher, netlink_handler, fd, EV_READ);
+		ev_io_start (loop, &netlink_watcher);
+	}
 
 	ev_signal_init (&sigterm_watcher, term_handler, SIGTERM);
 	ev_signal_start (loop, &sigterm_watcher);
@@ -739,15 +823,18 @@ int main(int argc, char *argv[])
 	ev_signal_init (&sigchld_watcher, child_handler, SIGCHLD);
 	ev_signal_start (loop, &sigchld_watcher);
 
-	if (auditd_tcp_listen_init (loop, &config)) {
+	ev_io_init (&pipe_watcher, pipe_handler, pipefds[0], EV_READ);
+	ev_io_start (loop, &pipe_watcher);
+
+	if (auditd_tcp_listen_init(loop, &config)) {
 		char emsg[DEFAULT_BUF_SZ];
 		if (*subj)
 			snprintf(emsg, sizeof(emsg),
-			"auditd error halt, auid=%u pid=%d subj=%s res=failed",
+			"op=network-init auid=%u pid=%d subj=%s res=failed",
 				audit_getloginuid(), getpid(), subj);
 		else
 			snprintf(emsg, sizeof(emsg),
-				"auditd error halt, auid=%u pid=%d res=failed",
+				"op=network-init auid=%u pid=%d res=failed",
 				audit_getloginuid(), getpid());
 		stop = 1;
 		send_audit_event(AUDIT_DAEMON_ABORT, emsg);
@@ -769,6 +856,7 @@ int main(int argc, char *argv[])
 	if (!stop)
 		ev_loop (loop, 0);
 
+	// Event loop finished, clean up everything
 	auditd_tcp_listen_uninit (loop, &config);
 
 	// Tear down IO watchers Part 1
@@ -786,7 +874,7 @@ int main(int argc, char *argv[])
 		if (rc > 0) {
 			char txt[MAX_AUDIT_MESSAGE_LENGTH];
 			snprintf(txt, sizeof(txt),
-				"auditd normal halt, sending auid=%u "
+				"op=terminate auid=%u "
 				"pid=%d subj=%s res=success",
 				 trep.signal_info->uid,
 				 trep.signal_info->pid, 
@@ -796,12 +884,14 @@ int main(int argc, char *argv[])
 	} 
 	if (rc <= 0)
 		send_audit_event(AUDIT_DAEMON_END, 
-				"auditd normal halt, sending auid=? "
-				"pid=? subj=? res=success");
-	free(rep);
+			"op=terminate auid=? pid=? subj=? res=success");
+	free(cur_event);
 
 	// Tear down IO watchers Part 2
-	ev_io_stop (loop, &netlink_watcher);
+	if (!opt_aggregate_only)
+		ev_io_stop (loop, &netlink_watcher);
+	ev_io_stop (loop, &pipe_watcher);
+	close_pipes();
 
 	// Give DAEMON_END event a little time to be sent in case
 	// of remote logging
@@ -809,7 +899,7 @@ int main(int argc, char *argv[])
 	shutdown_dispatcher();
 
 	// Tear down IO watchers Part 3
-	ev_signal_stop (loop, &sigchld_watcher);
+	ev_signal_stop(loop, &sigchld_watcher);
 
 	close_down();
 	free_config(&config);
@@ -842,7 +932,8 @@ static void clean_exit(void)
 {
 	audit_msg(LOG_INFO, "The audit daemon is exiting.");
 	if (fd >= 0) {
-		audit_set_pid(fd, 0, WAIT_NO);
+		if (!opt_aggregate_only)
+			audit_set_pid(fd, 0, WAIT_NO);
 		audit_close(fd);
 	}
 	if (pidfile)

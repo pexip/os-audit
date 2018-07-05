@@ -6,16 +6,19 @@ Conflicts=shutdown.target
 Before=sysinit.target shutdown.target
 RefuseManualStop=yes
 ConditionKernelCommandLine=!audit=0
+Documentation=man:auditd(8) https://people.redhat.com/sgrubb/audit/
 
 [Service]
 ExecStart=/sbin/auditd -n
-## To use augenrules, copy this file to /etc/systemd/system/auditd.service
-## and uncomment the next line and delete/comment out the auditctl line.
-## Then copy existing rules to /etc/audit/rules.d/
-## Not doing this last step can cause loss of existing rules
-#ExecStartPost=-/sbin/augenrules --load
-ExecStartPost=-/sbin/auditctl -R /etc/audit/audit.rules
+## To not use augenrules, copy this file to /etc/systemd/system/auditd.service
+## and comment/delete the next line and uncomment the auditctl line.
+## NOTE: augenrules expect any rules to be added to /etc/audit/rules.d/
+ExecStartPost=-/sbin/augenrules --load
+#ExecStartPost=-/sbin/auditctl -R /etc/audit/audit.rules
 ExecReload=/bin/kill -HUP $MAINPID
+# By default we don't clear the rules on exit. To enable this, uncomment
+# the next line after copying the file to /etc/systemd/system/auditd.service
+#ExecStopPost=/sbin/auditctl -R /etc/audit/audit-stop.rules
 
 [Install]
 WantedBy=multi-user.target

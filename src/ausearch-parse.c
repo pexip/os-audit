@@ -37,10 +37,12 @@
 #include "ausearch-options.h"
 #include "ausearch-lookup.h"
 #include "ausearch-parse.h"
+#include "auparse-idata.h"
 
 #define NAME_OFFSET 36
 static const char key_sep[2] = { AUDIT_KEY_SEPARATOR, 0 };
 
+static int parse_task_info(lnode *n, search_items *s);
 static int parse_syscall(lnode *n, search_items *s);
 static int parse_dir(const lnode *n, search_items *s);
 static int common_path_parser(search_items *s, char *path);
@@ -138,9 +140,14 @@ int extract_search_items(llist *l)
 			case AUDIT_NETFILTER_PKT:
 				ret = parse_pkt(n, s);
 				break;
+			case AUDIT_FEATURE_CHANGE:
+			case AUDIT_ANOM_LINK:
+				ret = parse_task_info(n, s);
+				break;
 			case AUDIT_SECCOMP:
-			case
-			   AUDIT_FIRST_KERN_ANOM_MSG...AUDIT_LAST_KERN_ANOM_MSG:
+			case AUDIT_ANOM_PROMISCUOUS:
+			case AUDIT_ANOM_ABEND:
+		//	   AUDIT_FIRST_KERN_ANOM_MSG...AUDIT_LAST_KERN_ANOM_MSG:
 				ret = parse_kernel_anom(n, s);
 				break;
 			case AUDIT_MAC_POLICY_LOAD...AUDIT_MAC_UNLBL_STCDEL:
@@ -162,6 +169,7 @@ int extract_search_items(llist *l)
 			case AUDIT_CAPSET:
 			case AUDIT_MMAP:
 			case AUDIT_NETFILTER_CFG:
+			case AUDIT_PROCTITLE:
 				// Nothing to parse
 				break;
 			case AUDIT_TTY:
@@ -183,10 +191,256 @@ int extract_search_items(llist *l)
 	return ret;
 }
 
+/*
+ * returns malloc'ed buffer on success and NULL on failure
+ */
+static const char *lookup_uid(const char *field, uid_t uid)
+{
+	const char *value;
+	value = _auparse_lookup_interpretation(field);
+	if (value)
+		return value;
+	if (uid == 0)
+		return strdup("root");
+	else if (uid == -1)
+		return strdup("unset");
+	else {
+		struct passwd *pw;
+		pw = getpwuid(uid);
+		if (pw)
+			return strdup(pw->pw_name);
+	}
+	return NULL;
+}
+
+static int parse_task_info(lnode *n, search_items *s)
+{
+	char *ptr, *str, *term;
+	term = n->message;
+
+	// ppid
+	if (event_ppid != -1) {
+		str = strstr(term, "ppid=");
+		if (str != NULL) { // ppid is an optional field
+			ptr = str + 5;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 14;
+			*term = 0;
+			errno = 0;
+			s->ppid = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 15;
+			*term = ' ';
+		}
+	}
+	// pid
+	if (event_pid != -1) {
+		str = strstr(term, " pid=");
+		if (str == NULL)
+			return 16;
+		ptr = str + 5;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 17;
+		*term = 0;
+		errno = 0;
+		s->pid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 18;
+		*term = ' ';
+	}
+	// optionally get loginuid
+	if (event_loginuid != -2 || event_tauid) {
+		str = strstr(term, "auid=");
+		if (str == NULL) {
+			str = strstr(term, "loginuid=");
+			if (str == NULL)
+				return 19;
+			ptr = str + 9;
+		} else
+			ptr = str + 5;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 20;
+		*term = 0;
+		errno = 0;
+		s->loginuid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 21;
+		*term = ' ';
+		if (s->tauid) free(s->tauid);
+		s->tauid = lookup_uid("auid", s->loginuid);
+	}
+	// optionally get uid
+	if (event_uid != -1 || event_tuid) {
+		str = strstr(term, "uid=");
+		if (str == NULL)
+			return 22;
+		ptr = str + 4;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 23;
+		*term = 0;
+		errno = 0;
+		s->uid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 24;
+		*term = ' ';
+		if (s->tuid) free(s->tuid);
+		s->tuid = lookup_uid("uid", s->uid);
+	}
+
+	// optionally get gid
+	if (event_gid != -1) {
+		str = strstr(term, "gid=");
+		if (str == NULL)
+			return 25;
+		ptr = str + 4;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 26;
+		*term = 0;
+		errno = 0;
+		s->gid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 27;
+		*term = ' ';
+	}
+
+	// euid
+	if (event_euid != -1 || event_teuid) {
+		str = strstr(term, "euid=");
+		if (str == NULL)
+			return 28;
+		ptr = str + 5;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 29;
+		*term = 0;
+		errno = 0;
+		s->euid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 30;
+		*term = ' ';
+		s->teuid = lookup_uid("euid", s->euid);
+	}
+
+	// egid
+	if (event_egid != -1) {
+		str = strstr(term, "egid=");
+		if (str == NULL)
+			return 31;
+		ptr = str + 5;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 32;
+		*term = 0;
+		errno = 0;
+		s->egid = strtoul(ptr, NULL, 10);
+		if (errno)
+			return 33;
+		*term = ' ';
+	}
+
+	if (event_terminal) {
+		// dont do this search unless needed
+		str = strstr(term, "tty=");
+		if (str) {
+			str += 4;
+			term = strchr(str, ' ');
+			if (term == NULL)
+				return 34;
+			*term = 0;
+			s->terminal = strdup(str);
+			*term = ' ';
+		}
+	}
+	// ses
+	if (event_session_id != -2 ) {
+		str = strstr(term, "ses=");
+		if (str) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 35;
+			*term = 0;
+			errno = 0;
+			s->session_id = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 36;
+			*term = ' ';
+		}
+	}
+
+	if (event_comm) {
+		// dont do this search unless needed
+		str = strstr(term, "comm=");
+		if (str) {
+			/* Make the syscall one override */
+			if (s->comm)
+				free(s->comm);
+			str += 5;
+			if (*str == '"') {
+				str++;
+				term = strchr(str, '"');
+				if (term == NULL)
+					return 37;
+				*term = 0;
+				s->comm = strdup(str);
+				*term = '"';
+			} else 
+				s->comm = unescape(str);
+		} else
+			return 38;
+	}
+	if (event_exe) {
+		// dont do this search unless needed
+		str = strstr(n->message, "exe=");
+		if (str) {
+			str += 4;
+			if (*str == '"') {
+				str++;
+				term = strchr(str, '"');
+				if (term == NULL)
+					return 39;
+				*term = 0;
+				s->exe = strdup(str);
+				*term = '"';
+			} else 
+				s->exe = unescape(str);
+		} else
+			return 40;
+	}
+	if (event_subject) {
+		// scontext
+		str = strstr(term, "subj=");
+		if (str != NULL) {
+			str += 5;
+			term = strchr(str, ' ');
+			if (term == NULL)
+				return 41;
+			*term = 0;
+			if (audit_avc_init(s) == 0) {
+				anode an;
+
+				anode_init(&an);
+				an.scontext = strdup(str);
+				alist_append(s->avc, &an);
+				*term = ' ';
+			} else
+				return 42;
+		}
+	}
+
+	return 0;
+}
+
 static int parse_syscall(lnode *n, search_items *s)
 {
 	char *ptr, *str, *term;
 	extern int event_machine;
+	int ret;
 
 	term = n->message;
 	if (report_format > RPT_DEFAULT || event_machine != -1) {
@@ -282,214 +536,11 @@ static int parse_syscall(lnode *n, search_items *s)
 	if (errno)
 		return 13;
 	*term = ' ';
-	// ppid
-	if (event_ppid != -1) {
-		str = strstr(term, "ppid=");
-		if (str != NULL) { // ppid is an optional field
-			ptr = str + 5;
-			term = strchr(ptr, ' ');
-			if (term == NULL)
-				return 14;
-			*term = 0;
-			errno = 0;
-			s->ppid = strtoul(ptr, NULL, 10);
-			if (errno)
-				return 15;
-			*term = ' ';
-		}
-	}
-	// pid
-	if (event_pid != -1) {
-		str = strstr(term, " pid=");
-		if (str == NULL)
-			return 16;
-		ptr = str + 5;
-		term = strchr(ptr, ' ');
-		if (term == NULL)
-			return 17;
-		*term = 0;
-		errno = 0;
-		s->pid = strtoul(ptr, NULL, 10);
-		if (errno)
-			return 18;
-		*term = ' ';
-	}
-	// optionally get loginuid
-	if (event_loginuid != -2) {
-		str = strstr(term, "auid=");
-		if (str == NULL) {
-			str = strstr(term, "loginuid=");
-			if (str == NULL)
-				return 19;
-			ptr = str + 9;
-		} else
-			ptr = str + 5;
-		term = strchr(ptr, ' ');
-		if (term == NULL)
-			return 20;
-		*term = 0;
-		errno = 0;
-		s->loginuid = strtoul(ptr, NULL, 10);
-		if (errno)
-			return 21;
-		*term = ' ';
-	}
-	// optionally get uid
-	if (event_uid != -1) {
-		str = strstr(term, "uid=");
-		if (str == NULL)
-			return 22;
-		ptr = str + 4;
-		term = strchr(ptr, ' ');
-		if (term == NULL)
-			return 23;
-		*term = 0;
-		errno = 0;
-		s->uid = strtoul(ptr, NULL, 10);
-		if (errno)
-			return 24;
-		*term = ' ';
-	}
 
-	// optionally get gid
-	if (event_gid != -1) {
-		str = strstr(term, "gid=");
-		if (str == NULL)
-			return 25;
-		ptr = str + 4;
-		term = strchr(ptr, ' ');
-		if (term == NULL)
-			return 26;
-		*term = 0;
-		errno = 0;
-		s->gid = strtoul(ptr, NULL, 10);
-		if (errno)
-			return 27;
-		*term = ' ';
-	}
+	ret = parse_task_info(n, s);
+	if (ret)
+		return ret;
 
-	// euid
-	if (event_euid != -1) {
-		str = strstr(term, "euid=");
-		if (str == NULL)
-			return 28;
-		ptr = str + 5;
-		term = strchr(ptr, ' ');
-		if (term == NULL)
-			return 29;
-		*term = 0;
-		errno = 0;
-		s->euid = strtoul(ptr, NULL, 10);
-		if (errno)
-			return 30;
-		*term = ' ';
-	}
-
-	// egid
-	if (event_egid != -1) {
-		str = strstr(term, "egid=");
-		if (str == NULL)
-			return 31;
-		ptr = str + 5;
-		term = strchr(ptr, ' ');
-		if (term == NULL)
-			return 32;
-		*term = 0;
-		errno = 0;
-		s->egid = strtoul(ptr, NULL, 10);
-		if (errno)
-			return 33;
-		*term = ' ';
-	}
-
-	if (event_terminal) {
-		// dont do this search unless needed
-		str = strstr(term, "tty=");
-		if (str) {
-			str += 4;
-			term = strchr(str, ' ');
-			if (term == NULL)
-				return 34;
-			*term = 0;
-			s->terminal = strdup(str);
-			*term = ' ';
-		}
-	}
-	// ses
-	if (event_session_id != -2 ) {
-		str = strstr(term, "ses=");
-		if (str) {
-			ptr = str + 4;
-			term = strchr(ptr, ' ');
-			if (term == NULL)
-				return 35;
-			*term = 0;
-			errno = 0;
-			s->session_id = strtoul(ptr, NULL, 10);
-			if (errno)
-				return 36;
-			*term = ' ';
-		}
-	}
-	if (event_comm) {
-		// dont do this search unless needed
-		str = strstr(term, "comm=");
-		if (str) {
-			/* Make the syscall one override */
-			if (s->comm)
-				free(s->comm);
-			str += 5;
-			if (*str == '"') {
-				str++;
-				term = strchr(str, '"');
-				if (term == NULL)
-					return 37;
-				*term = 0;
-				s->comm = strdup(str);
-				*term = '"';
-			} else 
-				s->comm = unescape(str);
-		} else
-			return 38;
-	}
-	if (event_exe) {
-		// dont do this search unless needed
-		str = strstr(n->message, "exe=");
-		if (str) {
-			str += 4;
-			if (*str == '"') {
-				str++;
-				term = strchr(str, '"');
-				if (term == NULL)
-					return 39;
-				*term = 0;
-				s->exe = strdup(str);
-				*term = '"';
-			} else 
-				s->exe = unescape(str);
-		} else
-			return 40;
-	}
-	if (event_subject) {
-		// scontext
-		str = strstr(term, "subj=");
-		if (str != NULL) {
-			str += 5;
-			term = strchr(str, ' ');
-			if (term == NULL)
-				return 41;
-			*term = 0;
-			if (audit_avc_init(s) == 0) {
-				anode an;
-
-				anode_init(&an);
-				an.scontext = strdup(str);
-				alist_append(s->avc, &an);
-				*term = ' ';
-			} else
-				return 42;
-		}
-	}
 	if (event_key) {
 		str = strstr(term, "key=");
 		if (str) {
@@ -518,7 +569,7 @@ static int parse_syscall(lnode *n, search_items *s)
 				*term = '"';
 			} else { 
 				if (s->key) {
-					char *saved=NULL;
+					char *saved;
 					char *keyptr = unescape(str);
 					char *kptr = strtok_r(keyptr,
 							key_sep, &saved);
@@ -666,7 +717,7 @@ static int avc_parse_path(const lnode *n, search_items *s)
 
 static int parse_path(const lnode *n, search_items *s)
 {
-	// We add 32 to message because we do not nee to look at
+	// We add 32 to message because we do not need to look at
 	// anything before that. Its only time and type.
 	char *str, *term = n->message+NAME_OFFSET;
 
@@ -755,7 +806,7 @@ static int parse_user(const lnode *n, search_items *s)
 		*term = ' ';
 	}
 	// optionally get uid
-	if (event_uid != -1) {
+	if (event_uid != -1 || event_tuid) {
 		str = strstr(term, "uid=");
 		if (str == NULL)
 			return 4;
@@ -769,9 +820,10 @@ static int parse_user(const lnode *n, search_items *s)
 		if (errno)
 			return 6;
 		*term = ' ';
+		s->tuid = lookup_uid("uid", s->uid);
 	}
 	// optionally get loginuid
-	if (event_loginuid != -2) {
+	if (event_loginuid != -2 || event_tauid) {
 		*term = ' ';
 		str = strstr(term, "auid=");
 		if (str == NULL) { // Try the older one
@@ -790,6 +842,7 @@ static int parse_user(const lnode *n, search_items *s)
 		if (errno)
 			return 9;
 		*term = ' ';
+		s->tauid = lookup_uid("auid", s->loginuid);
 	}
 	// ses
 	if (event_session_id != -2 ) {
@@ -825,6 +878,28 @@ static int parse_user(const lnode *n, search_items *s)
 				*term = ' ';
 			} else
 				return 13;
+		}
+	}
+	// optionally get gid
+	if (event_gid != -1) {
+		if (n->type == AUDIT_ADD_GROUP || n->type == AUDIT_DEL_GROUP ||
+			n->type == AUDIT_GRP_MGMT) {
+			str = strstr(term, " id=");
+			// Take second shot in the case of MGMT events
+			if (str == NULL && n->type == AUDIT_GRP_MGMT)
+				str = strstr(term, "gid=");
+			if (str) {
+				ptr = str + 4;
+				term = strchr(ptr, ' ');
+				if (term == NULL)
+					return 31;
+				*term = 0;
+				errno = 0;
+				s->gid = strtoul(ptr, NULL, 10);
+				if (errno)
+					return 32;
+				*term = ' ';
+			}
 		}
 	}
 	if (event_vmname) {
@@ -898,7 +973,7 @@ static int parse_user(const lnode *n, search_items *s)
 	}
 	// optionally get uid - some records the second uid is what we want.
 	// USER_LOGIN for example.
-	if (event_uid != -1) {
+	if (event_uid != -1 || event_tuid) {
 		str = strstr(term, "uid=");
 		if (str) {
 			if (*(str - 1) == 'a' || *(str - 1) == 's' ||
@@ -920,6 +995,7 @@ static int parse_user(const lnode *n, search_items *s)
 			if (errno)
 				return 15;
 			*term = saved;
+			s->tuid = lookup_uid("uid", s->uid);
 		}
 	}
 skip:
@@ -949,7 +1025,7 @@ skip:
 		ptr = str + 5;
 		term = ptr + 1;
 		if (*ptr == '"') {
-			while (*term != '"')
+			while (*term != '"' && *term)
 				term++;
 			saved = *term;
 			*term = 0;
@@ -961,7 +1037,7 @@ skip:
 			char *end = ptr;
 			int legacy = 0;
 
-			while (*end != ' ') {
+			while (*end != ' ' && *end) {
 				if (!isxdigit(*end))
 					legacy = 1;
 				end++;
@@ -1157,7 +1233,7 @@ static int parse_login(const lnode *n, search_items *s)
 		*term = ' ';
 	}
 	// optionally get uid
-	if (event_uid != -1) {
+	if (event_uid != -1 || event_tuid) {
 		str = strstr(term, "uid=");
 		if (str == NULL)
 			return 4;
@@ -1171,6 +1247,7 @@ static int parse_login(const lnode *n, search_items *s)
 		if (errno)
 			return 6;
 		*term = ' ';
+		s->tuid = lookup_uid("uid", s->uid);
 	}
 	// optionally get subj
 	if (event_subject) {
@@ -1194,7 +1271,7 @@ static int parse_login(const lnode *n, search_items *s)
 		}
 	}
 	// optionally get loginuid
-	if (event_loginuid != -2) {
+	if (event_loginuid != -2 || event_tauid) {
 		str = strstr(term, "new auid=");
 		if (str == NULL) {
 			// 3.14 kernel changed it to the next line
@@ -1217,10 +1294,13 @@ static int parse_login(const lnode *n, search_items *s)
 			return 8;
 		if (term)
 			*term = ' ';
+		s->tauid = lookup_uid("auid", s->loginuid);
 	}
 
 	// success
 	if (event_success != S_UNSET) {
+		if (term == NULL)
+			term = n->message;
 		str = strstr(term, "res=");
 		if (str != NULL) {
 			ptr = str + 4;
@@ -1274,7 +1354,7 @@ static int parse_daemon1(const lnode *n, search_items *s)
 	term = mptr;
 
 	// optionally get auid
-	if (event_loginuid != -2 ) {
+	if (event_loginuid != -2 || event_tauid) {
 		str = strstr(mptr, "auid=");
 		if (str == NULL)
 			return 1;
@@ -1289,6 +1369,7 @@ static int parse_daemon1(const lnode *n, search_items *s)
 		if (errno)
 			return 3;
 		*term = saved;
+		s->tauid = lookup_uid("auid", s->loginuid);
 	}
 
 	// pid
@@ -1450,7 +1531,12 @@ static int parse_sockaddr(const lnode *n, search_items *s)
 					if (s->filename) {
 						// append
 						snode sn;
-						sn.str = strdup(un->sun_path);
+						if (un->sun_path[0])
+						    sn.str =
+							strdup(un->sun_path);
+						else
+						    sn.str =
+							strdup(un->sun_path+1);
 						sn.key = NULL;
 						sn.hits = 1;
 						slist_append(s->filename, &sn);
@@ -1509,7 +1595,7 @@ static int parse_integrity(const lnode *n, search_items *s)
 	}
 
 	// optionally get uid
-	if (event_uid != -1) {
+	if (event_uid != -1 || event_tuid) {
 		str = strstr(term, " uid=");
 		if (str) {
 			ptr = str + 4;
@@ -1522,11 +1608,12 @@ static int parse_integrity(const lnode *n, search_items *s)
 			if (errno)
 				return 4;
 			*term = ' ';
+			s->tuid = lookup_uid("uid", s->uid);
 		}
 	}
 
 	// optionally get loginuid
-	if (event_loginuid != -2) {
+	if (event_loginuid != -2 || event_tauid) {
 		str = strstr(n->message, "auid=");
 		if (str) {
 			ptr = str + 5;
@@ -1539,6 +1626,7 @@ static int parse_integrity(const lnode *n, search_items *s)
 			if (errno)
 				return 6;
 			*term = ' ';
+			s->tauid = lookup_uid("auid", s->loginuid);
 		}
 	}
 
@@ -1628,7 +1716,7 @@ static int parse_integrity(const lnode *n, search_items *s)
 
 
 /* FIXME: If they are in permissive mode or hit an auditallow, there can 
- * be more that 1 avc in the same syscall. For now, we pickup just the first.
+ * be more than 1 avc in the same syscall. For now, we pickup just the first.
  */
 static int parse_avc(const lnode *n, search_items *s)
 {
@@ -1802,7 +1890,7 @@ static int parse_kernel_anom(const lnode *n, search_items *s)
 	char *str, *ptr, *term = n->message;
 
 	// optionally get loginuid
-	if (event_loginuid != -2) {
+	if (event_loginuid != -2 || event_tauid) {
 		str = strstr(term, "auid=");
 		if (str == NULL)
 			return 1;
@@ -1818,10 +1906,11 @@ static int parse_kernel_anom(const lnode *n, search_items *s)
 			*term = ' ';
 		else
 			term = ptr;
+		s->tauid = lookup_uid("auid", s->loginuid);
 	}
 
 	// optionally get uid
-	if (event_uid != -1) {
+	if (event_uid != -1 || event_tuid) {
 		str = strstr(term, "uid="); // if promiscuous, we start over
 		if (str) {
 			ptr = str + 4;
@@ -1834,6 +1923,7 @@ static int parse_kernel_anom(const lnode *n, search_items *s)
 			if (errno)
 				return 4;
 			*term = ' ';
+			s->tuid = lookup_uid("uid", s->uid);
 		}
 	}
 
@@ -1929,6 +2019,25 @@ static int parse_kernel_anom(const lnode *n, search_items *s)
 	}
 
 	if (n->type == AUDIT_SECCOMP) {
+		if (event_exe) {
+			// dont do this search unless needed
+			str = strstr(n->message, "exe=");
+			if (str) {
+				str += 4;
+			if (*str == '"') {
+					str++;
+					term = strchr(str, '"');
+					if (term == NULL)
+						return 13;
+					*term = 0;
+					s->exe = strdup(str);
+					*term = '"';
+				} else 
+					s->exe = unescape(str);
+			} else
+				return 14;
+		}
+
 		// get arch
 		str = strstr(term, "arch=");
 		if (str == NULL) 
@@ -1936,26 +2045,26 @@ static int parse_kernel_anom(const lnode *n, search_items *s)
 		ptr = str + 5;
 		term = strchr(ptr, ' ');
 		if (term == NULL) 
-			return 12;
+			return 15;
 		*term = 0;
 		errno = 0;
 		s->arch = (int)strtoul(ptr, NULL, 16);
 		if (errno) 
-			return 13;
+			return 16;
 		*term = ' ';
 		// get syscall
 		str = strstr(term, "syscall=");
 		if (str == NULL)
-			return 14;
+			return 17;
 		ptr = str + 8;
 		term = strchr(ptr, ' ');
 		if (term == NULL)
-			return 15;
+			return 18;
 		*term = 0;
 		errno = 0;
 		s->syscall = (int)strtoul(ptr, NULL, 10);
 		if (errno)
-			return 16;
+			return 19;
 		*term = ' ';
 	}
 
@@ -1969,7 +2078,7 @@ static int parse_simple_message(const lnode *n, search_items *s)
 	char *str, *ptr, *term = n->message;
 
 	// optionally get loginuid - old kernels skip auid for CONFIG_CHANGE
-	if (event_loginuid != -2) {
+	if (event_loginuid != -2 || event_tauid) {
 		str = strstr(term, "auid=");
 		if (str == NULL && n->type != AUDIT_CONFIG_CHANGE)
 			return 1;
@@ -1986,6 +2095,7 @@ static int parse_simple_message(const lnode *n, search_items *s)
 				*term = ' ';
 			else
 				term = ptr;
+			s->tauid = lookup_uid("auid", s->loginuid);
 		}
 	}
 
@@ -2061,7 +2171,7 @@ static int parse_simple_message(const lnode *n, search_items *s)
 					return 6;
 			} else {
 				if (s->key) {
-					char *saved=NULL;
+					char *saved;
 					char *keyptr = unescape(ptr);
 					char *kptr = strtok_r(keyptr,
 						key_sep, &saved);
@@ -2129,7 +2239,7 @@ static int parse_tty(const lnode *n, search_items *s)
 	}
 
 	// optionally get uid
-	if (event_uid != -1) {
+	if (event_uid != -1 || event_tuid) {
 		str = strstr(term, " uid="); // if promiscuous, we start over
 		if (str) {
 			ptr = str + 4;
@@ -2142,11 +2252,12 @@ static int parse_tty(const lnode *n, search_items *s)
 			if (errno)
 				return 4;
 			*term = ' ';
+			s->tuid = lookup_uid("uid", s->uid);
 		}
 	}
 
 	// optionally get loginuid
-	if (event_loginuid != -2) {
+	if (event_loginuid != -2 || event_tauid) {
 		str = strstr(term, "auid=");
 		if (str == NULL)
 			return 5;
@@ -2162,6 +2273,7 @@ static int parse_tty(const lnode *n, search_items *s)
 			*term = ' ';
 		else
 			term = ptr;
+		s->tauid = lookup_uid("auid", s->loginuid);
 	}
 
 	// ses

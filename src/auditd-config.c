@@ -1,5 +1,5 @@
 /* auditd-config.c -- 
- * Copyright 2004-2011,2013-14 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-2011,2013-14,2016 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -66,6 +66,10 @@ static char *get_line(FILE *f, char *buf, unsigned size, int *lineno,
 		const char *file);
 static int nv_split(char *buf, struct nv_pair *nv);
 static const struct kw_pair *kw_lookup(const char *val);
+static int local_events_parser(struct nv_pair *nv, int line,
+		struct daemon_conf *config);
+static int write_logs_parser(struct nv_pair *nv, int line,
+		struct daemon_conf *config);
 static int log_file_parser(struct nv_pair *nv, int line, 
 		struct daemon_conf *config);
 static int num_logs_parser(struct nv_pair *nv, int line, 
@@ -124,10 +128,14 @@ static int krb5_principal_parser(struct nv_pair *nv, int line,
 		struct daemon_conf *config);
 static int krb5_key_file_parser(struct nv_pair *nv, int line,
 		struct daemon_conf *config);
+static int distribute_network_parser(struct nv_pair *nv, int line,
+		struct daemon_conf *config);
 static int sanity_check(struct daemon_conf *config);
 
 static const struct kw_pair keywords[] = 
 {
+  {"local_events",             local_events_parser,		0},
+  {"write_logs",               write_logs_parser,		0 },
   {"log_file",                 log_file_parser,			0 },
   {"log_format",               log_format_parser,		0 },
   {"log_group",                log_group_parser,		0 },
@@ -157,13 +165,15 @@ static const struct kw_pair keywords[] =
   {"enable_krb5",              enable_krb5_parser,              0 },
   {"krb5_principal",           krb5_principal_parser,           0 },
   {"krb5_key_file",            krb5_key_file_parser,            0 },
-  { NULL,                      NULL }
+  {"distribute_network",       distribute_network_parser,       0 },
+  { NULL,                      NULL,                            0 }
 };
 
 static const struct nv_list log_formats[] =
 {
   {"raw",  LF_RAW },
   {"nolog", LF_NOLOG },
+  {"enriched", LF_ENRICHED },
   { NULL,  0 }
 };
 
@@ -171,6 +181,7 @@ static const struct nv_list flush_techniques[] =
 {
   {"none",        FT_NONE },
   {"incremental", FT_INCREMENTAL },
+  {"incremental_async", FT_INCREMENTAL_ASYNC },
   {"data",        FT_DATA },
   {"sync",        FT_SYNC },
   { NULL,         0 }
@@ -180,6 +191,7 @@ static const struct nv_list failure_actions[] =
 {
   {"ignore",  FA_IGNORE },
   {"syslog",  FA_SYSLOG },
+  {"rotate",  FA_ROTATE },
   {"email",   FA_EMAIL },
   {"exec",    FA_EXEC },
   {"suspend", FA_SUSPEND },
@@ -237,10 +249,12 @@ void set_allow_links(int allow)
 */
 void clear_config(struct daemon_conf *config)
 {
+	config->local_events = 1;
 	config->qos = QOS_NON_BLOCKING;
 	config->sender_uid = 0;
 	config->sender_pid = 0;
 	config->sender_ctx = NULL;
+	config->write_logs = 1;
 	config->log_file = strdup("/var/log/audit/audit.log");
 	config->log_format = LF_RAW;
 	config->log_group = 0;
@@ -274,6 +288,7 @@ void clear_config(struct daemon_conf *config)
 	config->enable_krb5 = 0;
 	config->krb5_principal = NULL;
 	config->krb5_key_file = NULL;
+	config->distribute_network_events = 0;
 }
 
 static log_test_t log_test = TEST_AUDITD;
@@ -452,7 +467,7 @@ static int nv_split(char *buf, struct nv_pair *nv)
 	nv->name = NULL;
 	nv->value = NULL;
 	nv->option = NULL;
-	ptr = strtok(buf, " ");
+	ptr = audit_strsplit(buf);
 	if (ptr == NULL)
 		return 0; /* If there's nothing, go to next line */
 	if (ptr[0] == '#')
@@ -460,25 +475,25 @@ static int nv_split(char *buf, struct nv_pair *nv)
 	nv->name = ptr;
 
 	/* Check for a '=' */
-	ptr = strtok(NULL, " ");
+	ptr = audit_strsplit(NULL);
 	if (ptr == NULL)
 		return 1;
 	if (strcmp(ptr, "=") != 0)
 		return 2;
 
 	/* get the value */
-	ptr = strtok(NULL, " ");
+	ptr = audit_strsplit(NULL);
 	if (ptr == NULL)
 		return 1;
 	nv->value = ptr;
 
 	/* See if there's an option */
-	ptr = strtok(NULL, " ");
+	ptr = audit_strsplit(NULL);
 	if (ptr) {
 		nv->option = ptr;
 
 		/* Make sure there's nothing else */
-		ptr = strtok(NULL, " ");
+		ptr = audit_strsplit(NULL);
 		if (ptr)
 			return 1;
 	}
@@ -498,6 +513,42 @@ static const struct kw_pair *kw_lookup(const char *val)
 	return &keywords[i];
 }
  
+static int local_events_parser(struct nv_pair *nv, int line,
+	struct daemon_conf *config)
+{
+	unsigned long i;
+
+	audit_msg(LOG_DEBUG, "local_events_parser called with: %s",
+		  nv->value);
+
+	for (i=0; yes_no_values[i].name != NULL; i++) {
+		if (strcasecmp(nv->value, yes_no_values[i].name) == 0) {
+			config->local_events = yes_no_values[i].option;
+			return 0;
+		}
+	}
+	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->value, line);
+	return 1;
+}
+
+static int write_logs_parser(struct nv_pair *nv, int line,
+	struct daemon_conf *config)
+{
+	unsigned long i;
+
+	audit_msg(LOG_DEBUG, "write_logs_parser called with: %s",
+		  nv->value);
+
+	for (i=0; yes_no_values[i].name != NULL; i++) {
+		if (strcasecmp(nv->value, yes_no_values[i].name) == 0) {
+			config->write_logs = yes_no_values[i].option;
+			return 0;
+		}
+	}
+	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->value, line);
+	return 1;
+}
+
 static int log_file_parser(struct nv_pair *nv, int line,
 	struct daemon_conf *config)
 {
@@ -566,13 +617,11 @@ static int log_file_parser(struct nv_pair *nv, int line,
 		return 1;
 	}
 	if ( (buf.st_mode & (S_IXUSR|S_IWGRP|S_IXGRP|S_IRWXO)) ) {
-		audit_msg(LOG_ERR, "%s permissions should be 0600 or 0640",
+		audit_msg(LOG_WARNING, "%s permissions should be 0600 or 0640",
 				nv->value);
-		return 1;
 	}
 	if ( !(buf.st_mode & S_IWUSR) ) {
-		audit_msg(LOG_ERR, "audit log is not writable by owner");
-		return 1;
+		audit_msg(LOG_WARNING, "audit log is not writable by owner");
 	}
 
 	free((void *)config->log_file);
@@ -609,8 +658,8 @@ static int num_logs_parser(struct nv_pair *nv, int line,
 			strerror(errno), line);
 		return 1;
 	}
-	if (i > 99) {
-		audit_msg(LOG_ERR, "num_logs must be 99 or less");
+	if (i > 999) {
+		audit_msg(LOG_ERR, "num_logs must be 999 or less");
 		return 1;
 	}
 	config->num_logs = i;
@@ -789,6 +838,15 @@ static int log_format_parser(struct nv_pair *nv, int line,
 	for (i=0; log_formats[i].name != NULL; i++) {
 		if (strcasecmp(nv->value, log_formats[i].name) == 0) {
 			config->log_format = log_formats[i].option;
+			if (config->log_format == LF_NOLOG) {
+				audit_msg(LOG_WARNING,
+				    "The NOLOG option to log_format is deprecated. Please use the write_logs option.");
+				if (config->log_format == LF_NOLOG &&
+					config->write_logs != 0)
+					audit_msg(LOG_WARNING,
+					    "The NOLOG option is overriding the write_logs current setting.");
+				config->write_logs = 0;
+			}
 			return 0;
 		}
 	}
@@ -1028,13 +1086,15 @@ static int validate_email(const char *acct)
 					audit_msg(LOG_ERR,
 				"validate_email: failed looking up host for %s",
 					ptr1+1);
-				return 2;
-			}
-			else if (h_errno == TRY_AGAIN)
+				// FIXME: gethostbyname is having trouble
+				// telling when we have a temporary vs permanent
+				// dns failure. So, for now, treat all as temp
+				return 1;
+			} else if (h_errno == TRY_AGAIN)
 				audit_msg(LOG_DEBUG,
 		"validate_email: temporary failure looking up domain for %s",
 					ptr1+1);
-				return 1;
+			return 1;
 		}
 	}
 	return 0;
@@ -1161,7 +1221,8 @@ static int disk_error_action_parser(struct nv_pair *nv, int line,
 								nv->value);
 	for (i=0; failure_actions[i].name != NULL; i++) {
 		if (strcasecmp(nv->value, failure_actions[i].name) == 0) {
-			if (failure_actions[i].option == FA_EMAIL) {
+			if (failure_actions[i].option == FA_EMAIL ||
+				failure_actions[i].option == FA_ROTATE) {
 				audit_msg(LOG_ERR, 
 			"Illegal option %s for disk_error_action - line %d",
 					nv->value, line);
@@ -1581,6 +1642,25 @@ static int krb5_key_file_parser(struct nv_pair *nv, int line,
 	return 0;
 }
 
+static int distribute_network_parser(struct nv_pair *nv, int line,
+	struct daemon_conf *config)
+{
+	unsigned long i;
+	audit_msg(LOG_DEBUG, "distribute_network_parser called with: %s",
+		  nv->value);
+
+
+	for (i=0; yes_no_values[i].name != NULL; i++) {
+		if (strcasecmp(nv->value, yes_no_values[i].name) == 0) {
+			config->distribute_network_events =
+						yes_no_values[i].option;
+			return 0;
+		}
+	}
+	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->value, line);
+	return 1;
+}
+
 /*
  * This function is where we do the integrated check of the audit config
  * options. At this point, all fields have been read. Returns 0 if no
@@ -1595,13 +1675,14 @@ static int sanity_check(struct daemon_conf *config)
 		    config->space_left, config->admin_space_left);
 		return 1;
 	}
-	if (config->flush == FT_INCREMENTAL && config->freq == 0) {
+	if ((config->flush == FT_INCREMENTAL || config->flush == FT_INCREMENTAL_ASYNC) &&
+			config->freq == 0) {
 		audit_msg(LOG_ERR, 
 		"Error - incremental flushing chosen, but 0 selected for freq");
 		return 1;
 	}
 	/* Warnings */
-	if (config->flush > FT_INCREMENTAL && config->freq != 0) {
+	if (config->flush > FT_INCREMENTAL_ASYNC && config->freq != 0) {
 		audit_msg(LOG_WARNING, 
            "Warning - freq is non-zero and incremental flushing not selected.");
 	}

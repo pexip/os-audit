@@ -1,5 +1,5 @@
 /* libaudit.c -- 
- * Copyright 2004-2009,2012,2014 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-2009,2012,2014,2016 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -39,7 +39,9 @@
 #include <limits.h>	/* for PATH_MAX */
 #include <sys/stat.h>
 #include <sys/types.h>
-
+#ifdef HAVE_LIBCAP_NG
+#include <cap-ng.h>
+#endif
 #include "libaudit.h"
 #include "private.h"
 #include "errormsg.h"
@@ -82,6 +84,7 @@ static const struct nv_list failure_actions[] =
 int _audit_permadded = 0;
 int _audit_archadded = 0;
 int _audit_syscalladded = 0;
+int _audit_exeadded = 0;
 unsigned int _audit_elf = 0U;
 static struct libaudit_conf config;
 
@@ -114,7 +117,6 @@ int audit_request_status(int fd)
 			"Error sending status request (%s)", strerror(-rc));
 	return rc;
 }
-hidden_def(audit_request_status)
 
 /*
  * Set everything to its default value
@@ -144,7 +146,7 @@ static int nv_split(char *buf, struct nv_pair *nv)
 
 	nv->name = NULL;
 	nv->value = NULL;
-	ptr = strtok_r(buf, " ", &saved);
+	ptr = audit_strsplit_r(buf, &saved);
 	if (ptr == NULL)
 		return 0; /* If there's nothing, go to next line */
 	if (ptr[0] == '#')
@@ -152,20 +154,20 @@ static int nv_split(char *buf, struct nv_pair *nv)
 	nv->name = ptr;
 
 	/* Check for a '=' */
-	ptr = strtok_r(NULL, " ", &saved);
+	ptr = audit_strsplit_r(NULL, &saved);
 	if (ptr == NULL)
 		return 1;
 	if (strcmp(ptr, "=") != 0)
 		return 2;
 
 	/* get the value */
-	ptr = strtok_r(NULL, " ", &saved);
+	ptr = audit_strsplit_r(NULL, &saved);
 	if (ptr == NULL)
 		return 1;
 	nv->value = ptr;
 
 	/* Make sure there's nothing else */
-	ptr = strtok_r(NULL, " ", &saved);
+	ptr = audit_strsplit_r(NULL, &saved);
 	if (ptr)
 		return 1;
 
@@ -396,7 +398,7 @@ int audit_is_enabled(int fd)
 		   and disable the audit system get in. ECONNREFUSED is
 		   issued by the kernel when there is "no on listening". */
 		return 0;
-	} else if (rc == -EPERM && getuid() != 0) {
+	} else if (rc == -EPERM && !audit_can_control()) {
 		/* If we get this, then the kernel supports auditing
 		 * but we don't have enough privilege to write to the
 		 * socket. Therefore, we have already been authenticated
@@ -493,9 +495,28 @@ int audit_set_backlog_limit(int fd, uint32_t limit)
 	return rc;
 }
 
+int audit_set_backlog_wait_time(int fd, uint32_t bwt)
+{
+	int rc = -1;
+#if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME
+	struct audit_status s;
+
+	memset(&s, 0, sizeof(s));
+	s.mask          = AUDIT_STATUS_BACKLOG_WAIT_TIME;
+	s.backlog_wait_time = bwt;
+	rc = audit_send(fd, AUDIT_SET, &s, sizeof(s));
+	if (rc < 0)
+		audit_msg(audit_priority(errno),
+			"Error sending backlog limit request (%s)", 
+			strerror(-rc));
+#endif
+	return rc;
+}
+
 int audit_set_feature(int fd, unsigned feature, unsigned value, unsigned lock)
 {
-#if HAVE_DECL_AUDIT_FEATURE_VERSION
+#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
+    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
 	int rc;
 	struct audit_features f;
 
@@ -516,11 +537,11 @@ int audit_set_feature(int fd, unsigned feature, unsigned value, unsigned lock)
 	return -1;
 #endif
 }
-hidden_def(audit_set_feature)
 
 int audit_request_features(int fd)
 {
-#if HAVE_DECL_AUDIT_FEATURE_VERSION
+#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
+    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
 	int rc;
 	struct audit_features f;
 
@@ -536,16 +557,77 @@ int audit_request_features(int fd)
 	return -1;
 #endif
 }
-hidden_def(audit_request_features)
 
 extern int  audit_set_loginuid_immutable(int fd)
 {
-#if HAVE_DECL_AUDIT_FEATURE_VERSION
+#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
+    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
 	return audit_set_feature(fd, AUDIT_FEATURE_LOGINUID_IMMUTABLE, 1, 1);
 #else
 	errno = EINVAL;
 	return -1;
 #endif
+}
+
+#define AUDIT_FEATURES_UNSET 0xFFFFFFFF
+#define AUDIT_FEATURES_UNSUPPORTED 0xEFFFFFFF
+static uint32_t features_bitmap = AUDIT_FEATURES_UNSET;
+static void load_feature_bitmap(void)
+{
+	int rc, fd;
+
+	fd = audit_open();
+	if (fd < 0) {
+		features_bitmap = AUDIT_FEATURES_UNSUPPORTED;
+		return;
+	}
+
+#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
+    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+	if ((rc = audit_request_status(fd)) > 0) {
+		struct audit_reply rep;
+		int i;
+		int timeout = 40; /* tenths of seconds */
+		struct pollfd pfd[1];
+
+		pfd[0].fd = fd;
+		pfd[0].events = POLLIN;
+
+	        for (i = 0; i < timeout; i++) {
+			do {
+				rc = poll(pfd, 1, 100);
+			} while (rc < 0 && errno == EINTR);
+
+			rc = audit_get_reply(fd, &rep, GET_REPLY_NONBLOCKING,0);
+			if (rc > 0) {
+                	        /* If we get done or error, break out */
+                        	if (rep.type == NLMSG_DONE || 
+					rep.type == NLMSG_ERROR)
+	                                break;
+
+        	                /* If its not status, keep looping */
+	                        if (rep.type != AUDIT_GET)
+        	                        continue;
+
+				/* Found it... */
+				features_bitmap = rep.status->feature_bitmap;
+				return;
+			}
+		}
+	}
+#endif
+	features_bitmap = AUDIT_FEATURES_UNSUPPORTED;
+}
+
+uint32_t audit_get_features(void)
+{
+	if (features_bitmap == AUDIT_FEATURES_UNSET)
+		load_feature_bitmap();
+
+	if (features_bitmap == AUDIT_FEATURES_UNSUPPORTED)
+		return 0;
+
+	return features_bitmap;
 }
 
 int audit_request_rules_list_data(int fd)
@@ -650,7 +732,6 @@ int audit_add_watch_dir(int type, struct audit_rule_data **rulep,
 
 	return  0;
 }
-hidden_def(audit_add_watch_dir)
 
 int audit_add_rule_data(int fd, struct audit_rule_data *rule,
                         int flags, int action)
@@ -815,7 +896,6 @@ int audit_rule_syscall_data(struct audit_rule_data *rule, int scall)
 	rule->mask[word] |= bit;
 	return 0;
 }
-hidden_def(audit_rule_syscall_data)
 
 int audit_rule_syscallbyname_data(struct audit_rule_data *rule,
                                   const char *scall)
@@ -843,7 +923,6 @@ int audit_rule_syscallbyname_data(struct audit_rule_data *rule,
 		return audit_rule_syscall_data(rule, nr);
 	return -1;
 }
-hidden_def(audit_rule_syscallbyname_data)
 
 int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 					 const char *pair,
@@ -902,19 +981,24 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 		case AUDIT_EUID:
 			switch(field2) {
 			case AUDIT_LOGINUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_EUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_AUID_TO_EUID;
 				break;
 			case AUDIT_FSUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_FSUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_EUID_TO_FSUID;
 				break;
 			case AUDIT_OBJ_UID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_OBJ_UID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_EUID_TO_OBJ_UID;
 				break;
 			case AUDIT_SUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_SUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_EUID_TO_SUID;
 				break;
 			case AUDIT_UID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_EUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_UID_TO_EUID;
 				break;
 			default:
 				return -1;
@@ -923,19 +1007,24 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 		case AUDIT_FSUID:
 			switch(field2) {
 			case AUDIT_LOGINUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_FSUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_AUID_TO_FSUID;
 				break;
 			case AUDIT_EUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_FSUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_EUID_TO_FSUID;
 				break;
 			case AUDIT_OBJ_UID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_FSUID_TO_OBJ_UID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_FSUID_TO_OBJ_UID;
 				break;
 			case AUDIT_SUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_SUID_TO_FSUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_SUID_TO_FSUID;
 				break;
 			case AUDIT_UID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_FSUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_UID_TO_FSUID;
 				break;
 			default:
 				return -1;
@@ -944,19 +1033,24 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 		case AUDIT_LOGINUID:
 			switch(field2) {
 			case AUDIT_EUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_EUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_AUID_TO_EUID;
 				break;
 			case AUDIT_FSUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_FSUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_AUID_TO_FSUID;
 				break;
 			case AUDIT_OBJ_UID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_OBJ_UID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_AUID_TO_OBJ_UID;
 				break;
 			case AUDIT_SUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_SUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_AUID_TO_SUID;
 				break;
 			case AUDIT_UID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_AUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_UID_TO_AUID;
 				break;
 			default:
 				return -1;
@@ -965,19 +1059,24 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 		case AUDIT_SUID:
 			switch(field2) {
 			case AUDIT_LOGINUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_SUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_AUID_TO_SUID;
 				break;
 			case AUDIT_EUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_SUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_EUID_TO_SUID;
 				break;
 			case AUDIT_FSUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_SUID_TO_FSUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_SUID_TO_FSUID;
 				break;
 			case AUDIT_OBJ_UID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_SUID_TO_OBJ_UID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_SUID_TO_OBJ_UID;
 				break;
 			case AUDIT_UID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_SUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_UID_TO_SUID;
 				break;
 			default:
 				return -1;
@@ -986,19 +1085,24 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 		case AUDIT_OBJ_UID:
 			switch(field2) {
 			case AUDIT_LOGINUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_AUID_TO_OBJ_UID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_AUID_TO_OBJ_UID;
 				break;
 			case AUDIT_EUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EUID_TO_OBJ_UID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_EUID_TO_OBJ_UID;
 				break;
 			case AUDIT_FSUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_FSUID_TO_OBJ_UID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_FSUID_TO_OBJ_UID;
 				break;
 			case AUDIT_UID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_OBJ_UID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_UID_TO_OBJ_UID;
 				break;
 			case AUDIT_SUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_SUID_TO_OBJ_UID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_SUID_TO_OBJ_UID;
 				break;
 			default:
 				return -1;
@@ -1007,19 +1111,24 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 		case AUDIT_UID:
 			switch(field2) {
 			case AUDIT_LOGINUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_AUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_UID_TO_AUID;
 				break;
 			case AUDIT_EUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_EUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_UID_TO_EUID;
 				break;
 			case AUDIT_FSUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_FSUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_UID_TO_FSUID;
 				break;
 			case AUDIT_OBJ_UID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_OBJ_UID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_UID_TO_OBJ_UID;
 				break;
 			case AUDIT_SUID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_UID_TO_SUID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_UID_TO_SUID;
 				break;
 			default:
 				return -1;
@@ -1030,16 +1139,20 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 		case AUDIT_EGID:
 			switch(field2) {
 			case AUDIT_FSGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_FSGID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_EGID_TO_FSGID;
 				break;
 			case AUDIT_GID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_EGID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_GID_TO_EGID;
 				break;
 			case AUDIT_OBJ_GID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_OBJ_GID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_EGID_TO_OBJ_GID;
 				break;
 			case AUDIT_SGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_SGID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_EGID_TO_SGID;
 				break;
 			default:
 				return -1;
@@ -1048,16 +1161,20 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 		case AUDIT_FSGID:
 			switch(field2) {
 			case AUDIT_SGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_SGID_TO_FSGID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_SGID_TO_FSGID;
 				break;
 			case AUDIT_GID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_FSGID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_GID_TO_FSGID;
 				break;
 			case AUDIT_OBJ_GID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_FSGID_TO_OBJ_GID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_FSGID_TO_OBJ_GID;
 				break;
 			case AUDIT_EGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_FSGID;
+				rule->values[rule->field_count] =
+						 AUDIT_COMPARE_EGID_TO_FSGID;
 				break;
 			default:
 				return -1;
@@ -1066,16 +1183,20 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 		case AUDIT_GID:
 			switch(field2) {
 			case AUDIT_EGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_EGID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_GID_TO_EGID;
 				break;
 			case AUDIT_FSGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_FSGID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_GID_TO_FSGID;
 				break;
 			case AUDIT_OBJ_GID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_OBJ_GID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_GID_TO_OBJ_GID;
 				break;
 			case AUDIT_SGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_SGID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_GID_TO_SGID;
 				break;
 			default:
 				return -1;
@@ -1084,16 +1205,20 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 		case AUDIT_OBJ_GID:
 			switch(field2) {
 			case AUDIT_EGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_OBJ_GID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_EGID_TO_OBJ_GID;
 				break;
 			case AUDIT_FSGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_FSGID_TO_OBJ_GID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_FSGID_TO_OBJ_GID;
 				break;
 			case AUDIT_GID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_OBJ_GID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_GID_TO_OBJ_GID;
 				break;
 			case AUDIT_SGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_SGID_TO_OBJ_GID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_SGID_TO_OBJ_GID;
 				break;
 			default:
 				return -1;
@@ -1102,16 +1227,20 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 		case AUDIT_SGID:
 			switch(field2) {
 			case AUDIT_FSGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_SGID_TO_FSGID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_SGID_TO_FSGID;
 				break;
 			case AUDIT_GID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_GID_TO_SGID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_GID_TO_SGID;
 				break;
 			case AUDIT_OBJ_GID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_SGID_TO_OBJ_GID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_SGID_TO_OBJ_GID;
 				break;
 			case AUDIT_EGID:
-				rule->values[rule->field_count] = AUDIT_COMPARE_EGID_TO_SGID;
+				rule->values[rule->field_count] =
+						AUDIT_COMPARE_EGID_TO_SGID;
 				break;
 			default:
 				return -1;
@@ -1186,18 +1315,19 @@ int audit_determine_machine(const char *arch)
 #ifdef WITH_ARM
 		case MACH_ARM:
 			if (bits == __AUDIT_ARCH_64BIT)
-				return -6;
+				return -6; // Deadcode - just incase of mistake
 			break;
 #endif
 #ifdef WITH_AARCH64
 		case MACH_AARCH64:
-			if (bits != __AUDIT_ARCH_64BIT)
-				return -6;
+			if (bits && bits != __AUDIT_ARCH_64BIT)
+				return -6; // Deadcode - just incase of mistake
 			break;
 #endif
-		case MACH_86_64: /* fallthrough */
-		case MACH_PPC64: /* fallthrough */
-		case MACH_S390X: /* fallthrough */
+		case MACH_86_64:   /* fallthrough */
+		case MACH_PPC64:   /* fallthrough */
+		case MACH_PPC64LE: /* fallthrough */
+		case MACH_S390X:   /* fallthrough */
 			break;
 		default:
 			return -6;
@@ -1283,7 +1413,6 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 		case AUDIT_FSUID:
 		case AUDIT_LOGINUID:
 		case AUDIT_OBJ_UID:
-		case AUDIT_OBJ_GID:
 			// Do positive & negative separate for 32 bit systems
 			vlen = strlen(v);
 			if (isdigit((char)*(v))) 
@@ -1309,6 +1438,7 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 		case AUDIT_EGID:
 		case AUDIT_SGID:
 		case AUDIT_FSGID:
+		case AUDIT_OBJ_GID:
 			if (isdigit((char)*(v))) 
 				rule->values[rule->field_count] = 
 					strtol(v, NULL, 0);
@@ -1376,7 +1506,18 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 		case AUDIT_SUBJ_SEN:
 		case AUDIT_SUBJ_CLR:
 		case AUDIT_FILTERKEY:
-			if (field == AUDIT_FILTERKEY && !(_audit_syscalladded || _audit_permadded))
+		case AUDIT_EXE:
+			if (field == AUDIT_EXE) {
+				uint32_t features = audit_get_features();
+				if ((features & AUDIT_FEATURE_BITMAP_EXECUTABLE_PATH) == 0)
+					return -30;
+				if (op != AUDIT_EQUAL)
+					return -29;
+				_audit_exeadded = 1;
+			}
+			if (field == AUDIT_FILTERKEY &&
+				!(_audit_syscalladded || _audit_permadded ||
+				_audit_exeadded))
                                 return -19;
 			vlen = strlen(v);
 			if (field == AUDIT_FILTERKEY &&
@@ -1465,7 +1606,8 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 			}
 			break;
 		case AUDIT_FILETYPE:
-			if (!(flags == AUDIT_FILTER_EXIT || flags == AUDIT_FILTER_ENTRY))
+			if (!(flags == AUDIT_FILTER_EXIT ||
+						flags == AUDIT_FILTER_ENTRY))
 				return -17;
 			rule->values[rule->field_count] = 
 				audit_name_to_ftype(v);
@@ -1521,6 +1663,8 @@ void audit_rule_free_data(struct audit_rule_data *rule)
 	free(rule);
 }
 
+// This use is OK because its creating rules for the local
+// machine and is looking up a local user.
 static int audit_name_to_uid(const char *name, uid_t *uid)
 {
 	struct passwd *pw;
@@ -1554,7 +1698,6 @@ int audit_detect_machine(void)
 		return audit_name_to_machine(uts.machine);
 	return -1;
 }
-hidden_def(audit_detect_machine)
 
 #ifndef NO_TABLES
 void audit_number_to_errmsg(int errnumber, const char *opt)
@@ -1585,3 +1728,43 @@ void audit_number_to_errmsg(int errnumber, const char *opt)
 	}
 }
 #endif
+
+int audit_can_control(void)
+{
+#ifdef HAVE_LIBCAP_NG
+	void *state = capng_save_state();
+	int rc = capng_have_capability(CAPNG_EFFECTIVE, CAP_AUDIT_CONTROL);
+	capng_restore_state(&state);
+
+	return rc;
+#else
+	return (geteuid() == 0);
+#endif
+}
+
+int audit_can_write(void)
+{
+#ifdef HAVE_LIBCAP_NG
+	void *state = capng_save_state();
+	int rc = capng_have_capability(CAPNG_EFFECTIVE, CAP_AUDIT_WRITE);
+	capng_restore_state(&state);
+
+	return rc;
+#else
+	return (geteuid() == 0);
+#endif
+}
+
+int audit_can_read(void)
+{
+#if defined ( HAVE_LIBCAP_NG ) && ( CAP_AUDIT_READ )
+	void *state = capng_save_state();
+	int rc = capng_have_capability(CAPNG_EFFECTIVE, CAP_AUDIT_READ);
+	capng_restore_state(&state);
+
+	return rc;
+#else
+	return (geteuid() == 0);
+#endif
+}
+

@@ -1,5 +1,5 @@
 # Makefile.am --
-# Copyright 2004-09,2012,2014 Red Hat Inc., Durham, North Carolina.
+# Copyright 2004-09,2012,2014-16 Red Hat Inc., Durham, North Carolina.
 # All Rights Reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -36,7 +36,8 @@ audit_request_signal_info.3 audit_request_status.3 audit.rules.7 \
 audit_set_backlog_limit.3 audit_set_enabled.3 audit_set_failure.3 \
 audit_setloginuid.3 audit_set_pid.3 audit_set_rate_limit.3 \
 audit_update_watch_perms.3 auparse_add_callback.3 \
-auparse_destroy.3 auparse_feed.3 auparse_feed_has_data.3 auparse_find_field.3 \
+auparse_destroy.3 auparse_feed.3 auparse_feed_age_events.3 \
+auparse_feed_has_data.3 auparse_find_field.3 \
 auparse_find_field_next.3 auparse_first_field.3 auparse_first_record.3 \
 auparse_flush_feed.3 auparse_get_field_int.3 auparse_get_field_name.3 \
 auparse_get_field_str.3 auparse_get_field_type.3 auparse_get_filename.3 \
@@ -44,16 +45,17 @@ auparse_get_line_number.3 auparse_get_milli.3 \
 auparse_get_node.3 auparse_get_num_fields.3 \
 auparse_get_num_records.3 auparse_get_record_text.3 \
 auparse_get_serial.3 auparse_get_time.3 auparse_get_timestamp.3 \
-auparse_get_type.3 auparse_init.3 auparse_interpret_field.3 \
+auparse_get_type.3 auparse_get_type_name.3 auparse_init.3 \
+auparse_interpret_field.3 \
 auparse_next_event.3 auparse_next_field.3 auparse_next_record.3 \
-auparse_node_compare.3 auparse_reset.3 auparse_timestamp_compare.3 \
-ausearch-expression.5 \
+auparse_node_compare.3 auparse_reset.3 auparse_set_escape_mode.3 \
+auparse_timestamp_compare.3 ausearch-expression.5 \
 aureport.8 ausearch.8 ausearch_add_item.3 ausearch_add_interpreted_item.3 \
 ausearch_add_expression.3 ausearch_add_timestamp_item.3 ausearch_add_regex.3 \
 ausearch_add_timestamp_item_ex.3 ausearch_clear.3 \
 ausearch_next_event.3 ausearch_set_stop.3 \
 autrace.8 get_auditfail_action.3 set_aumessage_mode.3 \
 audispd.8 audispd.conf.5 audispd-zos-remote.8 libaudit.conf.5 \
-augenrules.8 \
+augenrules.8 audit_set_backlog_wait_time.3 \
 zos-remote.conf.5 
 

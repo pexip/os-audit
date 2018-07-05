@@ -1,21 +1,21 @@
 /*
 * ellist.c - Minimal linked list library
-* Copyright (c) 2006-08 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2006-08,2014,2016 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
-* This software may be freely redistributed and/or modified under the
-* terms of the GNU General Public License as published by the Free
-* Software Foundation; either version 2, or (at your option) any
-* later version.
+* This library is free software; you can redistribute it and/or
+* modify it under the terms of the GNU Lesser General Public
+* License as published by the Free Software Foundation; either
+* version 2.1 of the License, or (at your option) any later version.
 *
-* This program is distributed in the hope that it will be useful,
+* This library is distributed in the hope that it will be useful,
 * but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+* Lesser General Public License for more details.
 *
-* You should have received a copy of the GNU General Public License
-* along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* You should have received a copy of the GNU Lesser General Public
+* License along with this library; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -103,8 +103,15 @@ static int parse_up_record(rnode* r)
 	char *ptr, *buf, *saved=NULL;
 	int offset = 0;
 
+	// Potentially cut the record in two
+	ptr = strchr(r->record, AUDIT_INTERP_SEPARATOR);
+	if (ptr) {
+		*ptr = 0;
+		ptr++;
+	}
+	r->interp = ptr;
 	buf = strdup(r->record);
-	ptr = strtok_r(buf, " ", &saved);
+	ptr = audit_strsplit_r(buf, &saved);
 	if (ptr == NULL) {
 		free(buf);
 		return -1;
@@ -166,7 +173,7 @@ static int parse_up_record(rnode* r)
 				if (*n.val == '"')
 					nvlist_append(&r->nv, &n);
 				else {
-					char *key, *ptr, *saved2 = NULL;
+					char *key, *ptr, *saved2;
 
 					key = (char *)au_unescape(n.val);
 					if (key == NULL) {
@@ -240,7 +247,7 @@ static int parse_up_record(rnode* r)
 					char tmpctx[256], *to;
 					tmpctx[0] = 0;
 					to = tmpctx;
-					ptr = strtok_r(NULL, " ", &saved);
+					ptr = audit_strsplit_r(NULL, &saved);
 					while (ptr && *ptr != '}') {
 						len = strlen(ptr);
 						if ((len+1) >= (256-total)) {
@@ -253,7 +260,7 @@ static int parse_up_record(rnode* r)
 						}
 						to = stpcpy(to, ptr);
 						total += len;
-						ptr = strtok_r(NULL, " ",
+						ptr = audit_strsplit_r(NULL,
 								 &saved);
 					}
 					n.name = strdup("seperms");
@@ -267,7 +274,7 @@ static int parse_up_record(rnode* r)
 			nvlist_append(&r->nv, &n);
 		}
 		// FIXME: There should be an else here to catch ancillary data
-	} while((ptr = strtok_r(NULL, " ", &saved)));
+	} while((ptr = audit_strsplit_r(NULL, &saved)));
 
 	free(buf);
 	r->nv.cur = r->nv.head;	// reset to beginning
@@ -288,6 +295,7 @@ int aup_list_append(event_list_t *l, char *record, int list_idx,
 		return -1;
 
 	r->record = record;
+	r->interp = NULL;
 	r->type = 0;
 	r->a0 = 0LL;
 	r->a1 = 0LL;
@@ -419,7 +427,7 @@ rnode *aup_list_find_rec_range(event_list_t *l, int low, int high)
 
 int aup_list_first_field(event_list_t *l)
 {
-	if (l->cur) {
+	if (l && l->cur) {
 		nvlist_first(&l->cur->nv);
 		return 1;
 	} else

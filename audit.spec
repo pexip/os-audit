@@ -1,15 +1,8 @@
 %{!?python_sitearch: %define python_sitearch %(%{__python} -c "from distutils.sysconfig import get_python_lib; print get_python_lib(1)")}
 
-# Do we want systemd?
-%if 0%{?!nosystemd:1}
-%define WITH_SYSTEMD 1
-%else
-%define WITH_SYSTEMD 0
-%endif
-
 Summary: User space tools for 2.6 kernel auditing
 Name: audit
-Version: 2.4
+Version: 2.6.7
 Release: 1
 License: GPLv2+
 Group: System Environment/Daemons
@@ -20,14 +13,10 @@ BuildRequires: swig python-devel golang
 BuildRequires: tcp_wrappers-devel krb5-devel libcap-ng-devel
 BuildRequires: kernel-headers >= 2.6.29
 Requires: %{name}-libs = %{version}-%{release}
-%if %{WITH_SYSTEMD}
 BuildRequires: systemd-units
 Requires(post): systemd-units systemd-sysv chkconfig coreutils
 Requires(preun): systemd-units
 Requires(postun): systemd-units coreutils
-%else
-Requires: chkconfig
-%endif
 
 %description
 The audit package contains the user space utilities for
@@ -47,7 +36,7 @@ applications to use the audit framework.
 Summary: Header files for libaudit
 License: LGPLv2+
 Group: Development/Libraries
-Requires: %{name}-libs = %{version}-%{release}
+Requires: %{name}-libs%{?_isa}  = %{version}-%{release}
 Requires: kernel-headers >= 2.6.29
 
 %description libs-devel
@@ -69,11 +58,22 @@ framework libraries
 Summary: Python bindings for libaudit
 License: LGPLv2+
 Group: Development/Libraries
-Requires: %{name}-libs = %{version}-%{release}
+Requires: %{name}-libs%{?_isa} = %{version}-%{release}
 
 %description libs-python
 The audit-libs-python package contains the bindings so that libaudit
 and libauparse can be used by python.
+
+%package libs-python3
+Summary: Python3 bindings for libaudit
+License: LGPLv2+
+Group: Development/Libraries
+BuildRequires: python3-devel swig
+Requires: %{name}-libs%{?_isa} = %{version}-%{release}
+
+%description libs-python3
+The audit-libs-python3 package contains the bindings so that libaudit
+and libauparse can be used by python3.
 
 %package -n audispd-plugins
 Summary: Plugins for the audit event dispatcher
@@ -81,7 +81,7 @@ License: GPLv2+
 Group: System Environment/Daemons
 BuildRequires: openldap-devel
 Requires: %{name} = %{version}-%{release}
-Requires: %{name}-libs = %{version}-%{release}
+Requires: %{name}-libs%{?_isa} = %{version}-%{release}
 Requires: openldap
 
 %description -n audispd-plugins
@@ -94,23 +94,17 @@ behavior.
 %setup -q
 
 %build
-%configure --sbindir=/sbin --libdir=/%{_lib} --with-python=yes --with-golang --with-libwrap --enable-gssapi-krb5=yes --with-libcap-ng=yes \
-%if %{WITH_SYSTEMD}
-	--enable-systemd
-%endif
+%configure --sbindir=/sbin --libdir=/%{_lib} --with-python=yes --with-python3=yes --with-golang --with-libwrap --enable-gssapi-krb5=yes --enable-zos-remote --with-libcap-ng=yes --enable-systemd
 
 make %{?_smp_mflags}
 
 %install
 rm -rf $RPM_BUILD_ROOT
-mkdir -p $RPM_BUILD_ROOT/{sbin,etc/audispd/plugins.d}
-%if !%{WITH_SYSTEMD}
-mkdir -p $RPM_BUILD_ROOT/{etc/{sysconfig,rc.d/init.d}}
-%endif
+mkdir -p $RPM_BUILD_ROOT/{sbin,etc/audispd/plugins.d,etc/audit/rules.d}
 mkdir -p $RPM_BUILD_ROOT/%{_mandir}/{man5,man8}
 mkdir -p $RPM_BUILD_ROOT/%{_lib}
 mkdir -p $RPM_BUILD_ROOT/%{_libdir}/audit
-mkdir -p $RPM_BUILD_ROOT/%{_var}/log/audit
+mkdir --mode=0700 -p $RPM_BUILD_ROOT/%{_var}/log/audit
 mkdir -p $RPM_BUILD_ROOT/%{_var}/spool/audit
 make DESTDIR=$RPM_BUILD_ROOT install
 
@@ -128,14 +122,8 @@ cd $curdir
 # Remove these items so they don't get picked up.
 rm -f $RPM_BUILD_ROOT/%{_lib}/libaudit.so
 rm -f $RPM_BUILD_ROOT/%{_lib}/libauparse.so
-rm -f $RPM_BUILD_ROOT/%{_lib}/libaudit.la
-rm -f $RPM_BUILD_ROOT/%{_lib}/libauparse.la
-rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/_audit.a
-rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/_audit.la
-rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/_auparse.a
-rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/_auparse.la
-rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/auparse.a
-rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/auparse.la
+find $RPM_BUILD_ROOT -name '*.la' -delete
+find $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages -name '*.a' -delete
 
 # Move the pkgconfig file
 mv $RPM_BUILD_ROOT/%{_lib}/pkgconfig $RPM_BUILD_ROOT%{_libdir}
@@ -146,6 +134,8 @@ touch -r ./audit.spec $RPM_BUILD_ROOT/usr/share/man/man5/libaudit.conf.5.gz
 
 %check
 make check
+# Get rid of make files that they don't get packaged.
+rm -f rules/Makefile*
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -154,24 +144,15 @@ rm -rf $RPM_BUILD_ROOT
 
 %post
 # Copy default rules into place on new installation
-if [ ! -e /etc/audit/audit.rules ] ; then
-	cp /etc/audit/rules.d/audit.rules /etc/audit/audit.rules
+files=`ls /etc/audit/rules.d/ 2>/dev/null | wc -w`
+if [ "$files" -eq 0 ] ; then
+	cp /usr/share/doc/audit/rules/10-base-config.rules /etc/audit/rules.d/audit.rules
+	chmod 0600 /etc/audit/rules.d/audit.rules
 fi
-%if %{WITH_SYSTEMD}
 %systemd_post auditd.service
-%else
-/sbin/chkconfig --add auditd
-%endif
 
 %preun
-%if %{WITH_SYSTEMD}
 %systemd_preun auditd.service
-%else
-if [ $1 -eq 0 ]; then
-   /sbin/service auditd stop > /dev/null 2>&1
-   /sbin/chkconfig --del auditd
-fi
-%endif
 
 %postun libs -p /sbin/ldconfig
 
@@ -197,7 +178,9 @@ fi
 %{_includedir}/libaudit.h
 %{_includedir}/auparse.h
 %{_includedir}/auparse-defs.h
+%{_datadir}/aclocal/audit.m4
 %{_libdir}/pkgconfig/audit.pc
+%{_libdir}/pkgconfig/auparse.pc
 %{_mandir}/man3/*
 
 %files libs-static
@@ -211,9 +194,13 @@ fi
 %attr(755,root,root) %{python_sitearch}/auparse.so
 %{python_sitearch}/audit.py*
 
+%files libs-python3
+%defattr(-,root,root,-)
+%attr(755,root,root) %{python3_sitearch}/*
+
 %files
 %defattr(-,root,root,-)
-%doc  README COPYING ChangeLog contrib/capp.rules contrib/nispom.rules contrib/lspp.rules contrib/stig.rules init.d/auditd.cron
+%doc  README COPYING ChangeLog rules init.d/auditd.cron
 %attr(644,root,root) %{_mandir}/man8/audispd.8.gz
 %attr(644,root,root) %{_mandir}/man8/auditctl.8.gz
 %attr(644,root,root) %{_mandir}/man8/auditd.8.gz
@@ -229,8 +216,8 @@ fi
 %attr(644,root,root) %{_mandir}/man5/auditd.conf.5.gz
 %attr(644,root,root) %{_mandir}/man5/audispd.conf.5.gz
 %attr(644,root,root) %{_mandir}/man5/ausearch-expression.5.gz
-%attr(750,root,root) /sbin/auditctl
-%attr(750,root,root) /sbin/auditd
+%attr(755,root,root) /sbin/auditctl
+%attr(755,root,root) /sbin/auditd
 %attr(755,root,root) /sbin/ausearch
 %attr(755,root,root) /sbin/aureport
 %attr(750,root,root) /sbin/autrace
@@ -240,26 +227,22 @@ fi
 %attr(755,root,root) %{_bindir}/aulastlog
 %attr(755,root,root) %{_bindir}/ausyscall
 %attr(755,root,root) %{_bindir}/auvirt
-%if %{WITH_SYSTEMD}
-%attr(640,root,root) %{_unitdir}/auditd.service
+%attr(644,root,root) %{_unitdir}/auditd.service
 %attr(750,root,root) %dir %{_libexecdir}/initscripts/legacy-actions/auditd
 %attr(750,root,root) %{_libexecdir}/initscripts/legacy-actions/auditd/resume
 %attr(750,root,root) %{_libexecdir}/initscripts/legacy-actions/auditd/rotate
 %attr(750,root,root) %{_libexecdir}/initscripts/legacy-actions/auditd/stop
 %attr(750,root,root) %{_libexecdir}/initscripts/legacy-actions/auditd/restart
 %attr(750,root,root) %{_libexecdir}/initscripts/legacy-actions/auditd/condrestart
-%else
-%attr(755,root,root) /etc/rc.d/init.d/auditd
-%config(noreplace) %attr(640,root,root) /etc/sysconfig/auditd
-%endif
-%attr(750,root,root) %dir %{_var}/log/audit
+%attr(-,root,-) %dir %{_var}/log/audit
 %attr(750,root,root) %dir /etc/audit
 %attr(750,root,root) %dir /etc/audit/rules.d
 %attr(750,root,root) %dir /etc/audisp
 %attr(750,root,root) %dir /etc/audisp/plugins.d
 %config(noreplace) %attr(640,root,root) /etc/audit/auditd.conf
-%config(noreplace) %attr(640,root,root) /etc/audit/rules.d/audit.rules
+%ghost %config(noreplace) %attr(640,root,root) /etc/audit/rules.d/audit.rules
 %ghost %config(noreplace) %attr(640,root,root) /etc/audit/audit.rules
+%config(noreplace) %attr(640,root,root) /etc/audit/audit-stop.rules
 %config(noreplace) %attr(640,root,root) /etc/audisp/audispd.conf
 %config(noreplace) %attr(640,root,root) /etc/audisp/plugins.d/af_unix.conf
 %config(noreplace) %attr(640,root,root) /etc/audisp/plugins.d/syslog.conf
@@ -280,6 +263,6 @@ fi
 
 
 %changelog
-* Sun Aug 24 2014 Steve Grubb <sgrubb@redhat.com> 2.4-1
+* Sun Sep 11 2016 Steve Grubb <sgrubb@redhat.com> 2.6.7-1
 - New upstream release
 
