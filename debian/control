@@ -22,7 +22,7 @@ Homepage: http://people.redhat.com/sgrubb/audit/
 Vcs-Git: git://anonscm.debian.org/collab-maint/audit.git
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=collab-maint/audit.git
 X-Python-Version: >= 2.5
-XS-Pexip-Upstream: http://ftp.debian.org/debian/ jessie
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ stretch
 
 Package: auditd
 Section: admin
