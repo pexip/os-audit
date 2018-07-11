@@ -1,3 +1,9 @@
+audit (1:2.4-1+b1pexip3) pexip; urgency=low
+
+  * Reinstate dh_systemd support
+
+ -- John-Mark Bell <jmb@pexip.com>  Mon, 23 Jul 2018 16:42:30 +0100
+
 audit (1:2.4-1+b1pexip2) pexip; urgency=low
 
   * debian/patches/use-augenrules.patch: Invoke augenrules from
