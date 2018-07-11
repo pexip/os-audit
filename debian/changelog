@@ -1,6 +1,7 @@
 audit (1:2.6.7-2pexip1) pexip; urgency=medium
 
   * Migrate to Stretch
+  * debian/patches/custom-config.diff: refresh
 
  -- John-Mark Bell <jmb@pexip.com>  Wed, 11 Jul 2018 18:07:57 +0100
 
