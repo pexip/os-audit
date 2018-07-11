@@ -1,5 +1,5 @@
 /* auditd-event.c -- 
- * Copyright 2004-08,2011,2013 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-08,2011,2013,2015-16 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -31,54 +31,45 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <string.h>
+#include <time.h>
 #include <sys/time.h>
 #include <sys/vfs.h>
 #include <limits.h>     /* POSIX_HOST_NAME_MAX */
+#include <ctype.h>	/* toupper */
+#include <libgen.h>	/* dirname */
 #include "auditd-event.h"
 #include "auditd-dispatch.h"
 #include "auditd-listen.h"
 #include "libaudit.h"
 #include "private.h"
+#include "auparse.h"
 
 /* This is defined in auditd.c */
 extern volatile int stop;
 
-struct auditd_consumer_data {
-    struct daemon_conf *config;
-    pthread_mutex_t queue_lock;
-    pthread_cond_t queue_nonempty;
-    struct auditd_reply_list *head;
-    struct auditd_reply_list *tail;
-    int log_fd;
-    FILE *log_file;
-};
-
 /* Local function prototypes */
-static void *event_thread_main(void *arg); 
-static void handle_event(struct auditd_consumer_data *data);
-static void write_to_log(const char *buf, struct auditd_consumer_data *data);
-static void check_log_file_size(struct auditd_consumer_data *data);
-static void check_space_left(int lfd, struct daemon_conf *config);
-static void do_space_left_action(struct daemon_conf *config, int admin);
-static void do_disk_full_action(struct daemon_conf *config);
-static void do_disk_error_action(const char *func, struct daemon_conf *config,
-	int err);
-static void check_excess_logs(struct auditd_consumer_data *data); 
-static void rotate_logs_now(struct auditd_consumer_data *data);
-static void rotate_logs(struct auditd_consumer_data *data, 
-		unsigned int num_logs);
-static void shift_logs(struct auditd_consumer_data *data);
-static int  open_audit_log(struct auditd_consumer_data *data);
+static void write_to_log(const struct auditd_event *e);
+static void check_log_file_size(void);
+static void check_space_left(void);
+static void do_space_left_action(int admin);
+static void do_disk_full_action(void);
+static void do_disk_error_action(const char *func, int err);
+static void fix_disk_permissions(void);
+static void check_excess_logs(void); 
+static void rotate_logs_now(void);
+static void rotate_logs(unsigned int num_logs);
+static void shift_logs(void);
+static int  open_audit_log(void);
 static void change_runlevel(const char *level);
 static void safe_exec(const char *exe);
-static char *format_raw(const struct audit_reply *rep, 
-		struct daemon_conf *config);
-static void reconfigure(struct auditd_consumer_data *data);
+static void reconfigure(struct auditd_event *e);
+static void init_flush_thread(void);
 
 
 /* Local Data */
-static struct auditd_consumer_data consumer_data;
-static pthread_t event_thread;
+static struct daemon_conf *config;
+static int log_fd;
+static FILE *log_file;
 static unsigned int disk_err_warning = 0;
 static int fs_space_warning = 0;
 static int fs_admin_space_warning = 0;
@@ -88,177 +79,475 @@ static const char *SINGLE = "1";
 static const char *HALT = "0";
 static char *format_buf = NULL;
 static off_t log_size = 0;
+static pthread_t flush_thread;
+static pthread_mutex_t flush_lock;
+static pthread_cond_t do_flush;
+static volatile int flush;
 
+/* Local definitions */
+#define FORMAT_BUF_LEN (MAX_AUDIT_MESSAGE_LENGTH + _POSIX_HOST_NAME_MAX)
+#define MIN_SPACE_LEFT 24
+
+int dispatch_network_events(void)
+{
+	return config->distribute_network_events;
+}
 
 void shutdown_events(void)
 {
 	/* Give it 5 seconds to clear the queue */
 	alarm(5);
-	pthread_join(event_thread, NULL);	
+
+	// Nudge the flush thread
+	pthread_cond_signal(&do_flush);
+	pthread_join(flush_thread, NULL);
+
 	free((void *)format_buf);
-	fclose(consumer_data.log_file);
+	fclose(log_file);
 }
 
-int init_event(struct daemon_conf *config)
+int init_event(struct daemon_conf *conf)
 {
 	/* Store the netlink descriptor and config info away */
-	consumer_data.config = config;
-	consumer_data.log_fd = -1;
-
-	/* Setup IPC mechanisms */
-	pthread_mutex_init(&consumer_data.queue_lock, NULL);
-	pthread_cond_init(&consumer_data.queue_nonempty, NULL);
-
-	/* Reset the queue */
-	consumer_data.head = consumer_data.tail = NULL;
+	config = conf;
+	log_fd = -1;
 
 	/* Now open the log */
 	if (config->daemonize == D_BACKGROUND) {
-		if (open_audit_log(&consumer_data))
+		fix_disk_permissions();
+		if (open_audit_log())
 			return 1;
 	} else {
-		consumer_data.log_fd = 1; // stdout
-		consumer_data.log_file = fdopen(consumer_data.log_fd, "a");
-		if (consumer_data.log_file == NULL) {
+		log_fd = 1; // stdout
+		log_file = fdopen(log_fd, "a");
+		if (log_file == NULL) {
 			audit_msg(LOG_ERR, 
 				"Error setting up stdout descriptor (%s)", 
 				strerror(errno));
 			return 1;
 		}
 		/* Set it to line buffering */
-		setlinebuf(consumer_data.log_file);
-	}
-
-	/* Create the worker thread */
-	if (pthread_create(&event_thread, NULL,
-			event_thread_main, &consumer_data) < 0) {
-		audit_msg(LOG_ERR, "Couldn't create event thread, exiting");
-		fclose(consumer_data.log_file);
-		return 1;
+		setlinebuf(log_file);
 	}
 
 	if (config->daemonize == D_BACKGROUND) {
-		check_log_file_size(&consumer_data);
-		check_excess_logs(&consumer_data);
-		check_space_left(consumer_data.log_fd, config);
+		check_log_file_size();
+		check_excess_logs();
+		check_space_left();
 	}
-	format_buf = (char *)malloc(MAX_AUDIT_MESSAGE_LENGTH +
-						 _POSIX_HOST_NAME_MAX);
+	format_buf = (char *)malloc(FORMAT_BUF_LEN);
 	if (format_buf == NULL) {
 		audit_msg(LOG_ERR, "No memory for formatting, exiting");
-		fclose(consumer_data.log_file);
+		fclose(log_file);
 		return 1;
 	}
+	init_flush_thread();
 	return 0;
 }
 
-/* This function takes a malloc'd rep and places it on the queue. The 
-   dequeue'r is responsible for freeing the memory. */
-void enqueue_event(struct auditd_reply_list *rep)
+/* This tells the OS that pending writes need to get going.
+ * Its only used when flush == incremental_async. */
+static void *flush_thread_main(void *arg)
 {
-	char *buf = NULL;
-	int len;
+	sigset_t sigs;
 
-	rep->ack_func = 0;
-	rep->ack_data = 0;
-	rep->sequence_id = 0;
+	/* This is a worker thread. Don't handle signals. */
+	sigemptyset(&sigs);
+	sigaddset(&sigs, SIGALRM);
+	sigaddset(&sigs, SIGTERM);
+	sigaddset(&sigs, SIGHUP);
+	sigaddset(&sigs, SIGUSR1);
+	sigaddset(&sigs, SIGUSR2);
+	pthread_sigmask(SIG_SETMASK, &sigs, NULL);
 
-	if (rep->reply.type != AUDIT_DAEMON_RECONFIG) {
-		switch (consumer_data.config->log_format)
-		{
-		case LF_RAW:
-			buf = format_raw(&rep->reply, consumer_data.config);
-			break;
-		case LF_NOLOG:
-			// We need the rotate event to get enqueued
-			if (rep->reply.type != AUDIT_DAEMON_ROTATE ) {
-				// Internal DAEMON messages should be free'd
-				if (rep->reply.type >= AUDIT_FIRST_DAEMON &&
-				    rep->reply.type <= AUDIT_LAST_DAEMON)
-					free((void *)rep->reply.message);
-				free(rep);
-				return;
-			}
-			break;
-		default:
-			audit_msg(LOG_ERR, 
-				  "Illegal log format detected %d", 
-				  consumer_data.config->log_format);
-			// Internal DAEMON messages should be free'd
-			if (rep->reply.type >= AUDIT_FIRST_DAEMON &&
-			    rep->reply.type <= AUDIT_LAST_DAEMON)
-				free((void *)rep->reply.message);
-			free(rep);
-			return;
+	while (!stop) {
+		pthread_mutex_lock(&flush_lock);
+
+		// In the event that the logging thread requests another
+		// flush before the first completes, this simply turns
+		// into a loop of fsyncs.
+		while (flush == 0) {
+			pthread_cond_wait(&do_flush, &flush_lock);
+			if (stop)
+				return NULL;
 		}
+		flush = 0;
+		pthread_mutex_unlock(&flush_lock);
 
-		if (buf) {
-			len = strlen(buf);
-			if (len < MAX_AUDIT_MESSAGE_LENGTH - 1)
-				memcpy(rep->reply.msg.data, buf, len+1);
-			else {
-				// FIXME: is truncation the right thing to do?
-				memcpy(rep->reply.msg.data, buf,
-						MAX_AUDIT_MESSAGE_LENGTH-1);
-				rep->reply.msg.data[MAX_AUDIT_MESSAGE_LENGTH-1] = 0;
-			}
-		}
+		fsync(log_fd);
 	}
-
-	rep->next = NULL; /* new packet goes at end - so zero this */
-
-	pthread_mutex_lock(&consumer_data.queue_lock);
-	if (consumer_data.head == NULL) {
-		consumer_data.head = consumer_data.tail = rep;
-		pthread_cond_signal(&consumer_data.queue_nonempty);
-	} else {
-		/* FIXME: wait for room on the queue */
-
-		/* OK there's room...add it in */
-		consumer_data.tail->next = rep; /* link in at end */
-		consumer_data.tail = rep; /* move end to newest */
-	}
-	pthread_mutex_unlock(&consumer_data.queue_lock);
+	return NULL;
 }
 
-/* This function takes a preformatted message and places it on the
-   queue. The dequeue'r is responsible for freeing the memory. */
-void enqueue_formatted_event(char *msg, ack_func_type ack_func, void *ack_data, uint32_t sequence_id)
+/* We setup the flush thread no matter what. This is incase a reconfig
+ * changes from non incremental to incremental or vise versa. */
+static void init_flush_thread(void)
 {
-	int len;
-	struct auditd_reply_list *rep;
+	pthread_mutex_init(&flush_lock, NULL);
+	pthread_cond_init(&do_flush, NULL);
+	flush = 0;
+	pthread_create(&flush_thread, NULL, flush_thread_main, NULL);
+}
 
-	rep = (struct auditd_reply_list *) calloc (1, sizeof (*rep));
-	if (rep == NULL) {
-		audit_msg(LOG_ERR, "Cannot allocate audit reply");
-		return;
+static void replace_event_msg(struct auditd_event *e, const char *buf)
+{
+	if (buf) {
+		size_t len = strlen(buf);
+
+		if (len < MAX_AUDIT_MESSAGE_LENGTH - 1)
+			e->reply.message = strdup(buf);
+		else {
+			// If too big, we must truncate the event due to API
+			e->reply.message = strndup(buf, MAX_AUDIT_MESSAGE_LENGTH-1);
+			len = MAX_AUDIT_MESSAGE_LENGTH;
+		}
+		e->reply.msg.nlh.nlmsg_len = e->reply.len;
+		e->reply.len = len;
 	}
+}
 
-	rep->ack_func = ack_func;
-	rep->ack_data = ack_data;
-	rep->sequence_id = sequence_id;
+/*
+* This function will take an audit structure and return a
+* text buffer that's formatted for writing to disk. If there
+* is an error the return value is NULL.
+*/
+static const char *format_raw(const struct audit_reply *rep)
+{
+        char *ptr;
 
-	len = strlen (msg);
-	if (len < MAX_AUDIT_MESSAGE_LENGTH - 1)
-		memcpy (rep->reply.msg.data, msg, len+1);
-	else {
-		/* FIXME: is truncation the right thing to do?  */
-		memcpy (rep->reply.msg.data, msg, MAX_AUDIT_MESSAGE_LENGTH-1);
-		rep->reply.msg.data[MAX_AUDIT_MESSAGE_LENGTH-1] = 0;
-	}
-
-	pthread_mutex_lock(&consumer_data.queue_lock);
-	if (consumer_data.head == NULL) {
-		consumer_data.head = consumer_data.tail = rep;
-		pthread_cond_signal(&consumer_data.queue_nonempty);
+        if (rep == NULL) {
+		if (config->node_name_format != N_NONE)
+			snprintf(format_buf, FORMAT_BUF_LEN - 32,
+		"node=%s type=DAEMON_ERR op=format-raw msg=NULL res=failed",
+                                config->node_name);
+		else
+	        	snprintf(format_buf, MAX_AUDIT_MESSAGE_LENGTH,
+			  "type=DAEMON_ERR op=format-raw msg=NULL res=failed");
 	} else {
-		/* FIXME: wait for room on the queue */
+		int len, nlen;
+		const char *type, *message;
+		char unknown[32];
+		type = audit_msg_type_to_name(rep->type);
+		if (type == NULL) {
+			snprintf(unknown, sizeof(unknown), 
+				"UNKNOWN[%d]", rep->type);
+			type = unknown;
+		}
+		if (rep->message == NULL) {
+			message = "lost";
+			len = 4;
+		} else {
+			message = rep->message;
+			len = rep->len;
+		}
 
-		/* OK there's room...add it in */
-		consumer_data.tail->next = rep; /* link in at end */
-		consumer_data.tail = rep; /* move end to newest */
+		// Note: This can truncate messages if 
+		// MAX_AUDIT_MESSAGE_LENGTH is too small
+		if (config->node_name_format != N_NONE)
+			nlen = snprintf(format_buf, FORMAT_BUF_LEN - 32,
+				"node=%s type=%s msg=%.*s\n",
+                                config->node_name, type, len, message);
+		else
+		        nlen = snprintf(format_buf,
+				MAX_AUDIT_MESSAGE_LENGTH - 32,
+				"type=%s msg=%.*s", type, len, message);
+
+	        /* Replace \n with space so it looks nicer. */
+        	ptr = format_buf;
+	        while ((ptr = strchr(ptr, 0x0A)) != NULL)
+        	        *ptr = ' ';
+
+		/* Trim trailing space off since it wastes space */
+		if (format_buf[nlen-1] == ' ')
+			format_buf[nlen-1] = 0;
 	}
-	pthread_mutex_unlock(&consumer_data.queue_lock);
+        return format_buf;
+}
+
+static int sep_done = 0;
+static int add_separator(unsigned int len_left)
+{
+	if (sep_done == 0) {
+		format_buf[FORMAT_BUF_LEN - len_left] = AUDIT_INTERP_SEPARATOR;
+		sep_done++;
+		return 1;
+	}
+	sep_done++;
+	return 0;
+}
+
+// returns length used, 0 on error
+#define NAME_SIZE 64
+static int add_simple_field(auparse_state_t *au, size_t len_left, int encode)
+{
+	const char *value, *nptr;
+	char *enc = NULL;
+	char *ptr, field_name[NAME_SIZE];
+	size_t nlen, vlen, tlen;
+	unsigned int i;
+	int num;
+
+	// prepare field name
+	i = 0;
+	nptr = auparse_get_field_name(au);
+	while (*nptr && i < (NAME_SIZE - 1)) {
+		field_name[i] = toupper(*nptr);
+		i++;
+		nptr++;
+	}
+	field_name[i] = 0;
+	nlen = i;
+	
+	// get the translated value
+	value = auparse_interpret_field(au);
+	if (value == NULL)
+		value = "?";
+	vlen = strlen(value);
+
+	if (encode) {
+		enc = audit_encode_nv_string(field_name, value, vlen);
+		if (enc == NULL)
+			return 0;
+		tlen = 1 + strlen(enc) + 1;
+	} else
+		// calculate length to use
+		tlen = 1 + nlen + 1 + vlen + 1;
+
+	// If no room, do not truncate - just do nothing
+	if (tlen >= len_left) {
+		free(enc);
+		return 0;
+	}
+
+	// Setup pointer
+	ptr = &format_buf[FORMAT_BUF_LEN - len_left];
+	if (sep_done > 1) {
+		*ptr = ' ';
+		ptr++;
+		num = 1;
+	} else
+		num = 0;
+
+	// Add the field
+	if (encode) {
+		num += snprintf(ptr, tlen, "%s", enc);
+		free(enc);
+	} else
+		num += snprintf(ptr, tlen, "%s=%s", field_name, value);
+
+	return num;
+}
+
+/*
+* This function will take an audit structure and return a
+* text buffer that's formatted and enriched. If there is an
+* error the return value is NULL.
+*/
+static const char *format_enrich(const struct audit_reply *rep)
+{
+        if (rep == NULL) {
+		if (config->node_name_format != N_NONE)
+			snprintf(format_buf, FORMAT_BUF_LEN - 32,
+	    "node=%s type=DAEMON_ERR op=format-enriched msg=NULL res=failed",
+                                config->node_name);
+		else
+	        	snprintf(format_buf, MAX_AUDIT_MESSAGE_LENGTH,
+		    "type=DAEMON_ERR op=format-enriched msg=NULL res=failed");
+	} else {
+		int rc;
+		size_t mlen, len;
+		auparse_state_t *au;
+		char *message;
+		// Do raw format to get event started
+		format_raw(rep);
+
+		// How much room is left?
+		mlen = strlen(format_buf);
+		len = FORMAT_BUF_LEN - mlen;
+		if (len <= MIN_SPACE_LEFT)
+			return format_buf;
+
+		// create copy to parse up
+		format_buf[mlen] = 0x0A;
+		format_buf[mlen+1] = 0;
+		message = strdup(format_buf);
+		format_buf[mlen] = 0;
+
+		// init auparse
+		au = auparse_init(AUSOURCE_BUFFER, message);
+		if (au == NULL) {
+			free(message);
+			return format_buf;
+		}
+		auparse_set_escape_mode(NULL, AUPARSE_ESC_RAW);
+		sep_done = 0;
+
+		// Loop over all fields while possible to add field
+		rc = auparse_first_record(au);
+		while (rc > 0 && len > MIN_SPACE_LEFT) {
+			// See what kind of field we have
+			size_t vlen;
+			int type = auparse_get_field_type(au);
+			switch (type)
+			{
+				case AUPARSE_TYPE_UID:
+				case AUPARSE_TYPE_GID:
+					if (add_separator(len))
+						len--;
+					vlen = add_simple_field(au, len, 1);
+					len -= vlen;
+					break;
+				case AUPARSE_TYPE_SYSCALL:
+				case AUPARSE_TYPE_ARCH:
+				case AUPARSE_TYPE_SOCKADDR:
+					if (add_separator(len))
+						len--;
+					vlen = add_simple_field(au, len, 0);
+					len -= vlen;
+					break;
+				default:
+					break;
+			}
+			rc = auparse_next_field(au);
+		}
+
+		auparse_destroy(au);
+		free(message);
+	}
+        return format_buf;
+}
+
+void format_event(struct auditd_event *e)
+{
+	const char *buf;
+
+	switch (config->log_format)
+	{
+		case LF_RAW:
+			buf = format_raw(&e->reply);
+			break;
+		case LF_ENRICHED:
+			buf = format_enrich(&e->reply);
+			break;
+		default:
+			buf = NULL;
+			break;
+	}
+
+	replace_event_msg(e, buf);
+}
+
+/* This function free's all memory associated with events */
+void cleanup_event(struct auditd_event *e)
+{
+	free((void *)e->reply.message);
+	free(e);
+}
+
+/* This function takes a  reconfig event and sends it to the handler */
+void enqueue_event(struct auditd_event *e)
+{
+	e->ack_func = NULL;
+	e->ack_data = NULL;
+	e->sequence_id = 0;
+
+        handle_event(e);
+	cleanup_event(e);
+}
+
+/* This function allocates memory and fills the event fields with
+   passed arguements. Caller must free memory. */
+struct auditd_event *create_event(char *msg, ack_func_type ack_func,
+	 void *ack_data, uint32_t sequence_id)
+{
+	struct auditd_event *e;
+
+	e = (struct auditd_event *)calloc(1, sizeof (*e));
+	if (e == NULL) {
+		audit_msg(LOG_ERR, "Cannot allocate audit reply");
+		return NULL;
+	}
+
+	e->ack_func = ack_func;
+	e->ack_data = ack_data;
+	e->sequence_id = sequence_id;
+
+	/* Network originating events need things adjusted to mimic netlink. */
+	if (e->ack_func)
+		replace_event_msg(e, msg);
+
+	return e;
+}
+
+/* This function takes the event and handles it. */
+static unsigned int count = 0L;
+void handle_event(struct auditd_event *e)
+{
+	if (e->reply.type == AUDIT_DAEMON_RECONFIG && e->ack_func == NULL) {
+		reconfigure(e);
+		if (config->write_logs == 0)
+                        return;
+                format_event(e);
+	} else if (e->reply.type == AUDIT_DAEMON_ROTATE) {
+		rotate_logs_now();
+		if (config->write_logs == 0)
+			return;
+	}
+	if (!logging_suspended) {
+		write_to_log(e);
+
+		/* See if we need to flush to disk manually */
+		if (config->flush == FT_INCREMENTAL ||
+			config->flush == FT_INCREMENTAL_ASYNC) {
+			count++;
+			if ((count % config->freq) == 0) {
+				int rc;
+				errno = 0;
+				do {
+					rc = fflush_unlocked(log_file);
+				} while (rc < 0 && errno == EINTR);
+		                if (errno) {
+		                	if (errno == ENOSPC && 
+					     fs_space_left == 1) {
+					     fs_space_left = 0;
+					     do_disk_full_action();
+		        	        } else
+					     //EIO is only likely failure mode
+					     do_disk_error_action("flush", 
+						errno);
+				}
+
+				if (config->daemonize == D_BACKGROUND) {
+					if (config->flush == FT_INCREMENTAL) {
+						/* EIO is only likely failure */
+						if (fsync(log_fd) != 0) {
+						     do_disk_error_action(
+							"fsync",
+							errno);
+						}
+					} else {
+						pthread_mutex_lock(&flush_lock);
+						flush = 1;
+						pthread_cond_signal(&do_flush);
+						pthread_mutex_unlock(&flush_lock);
+					}
+				}
+			}
+		}
+	}
+}
+
+static void send_ack(const struct auditd_event *e, int ack_type,
+			const char *msg)
+{
+	if (e->ack_func) {
+		unsigned char header[AUDIT_RMW_HEADER_SIZE];
+
+		AUDIT_RMW_PACK_HEADER(header, 0, ack_type, strlen(msg),
+					e->sequence_id);
+
+		e->ack_func(e->ack_data, header, msg);
+	}
 }
 
 void resume_logging(void)
@@ -271,157 +560,32 @@ void resume_logging(void)
 	audit_msg(LOG_ERR, "Audit daemon is attempting to resume logging.");
 }
 
-static void *event_thread_main(void *arg) 
-{
-	struct auditd_consumer_data *data = arg;
-	sigset_t sigs;
-
-	/* This is a worker thread. Don't handle signals. */
-	sigemptyset(&sigs);
-	sigaddset(&sigs, SIGALRM);
-	sigaddset(&sigs, SIGTERM);
-	sigaddset(&sigs, SIGHUP);
-	sigaddset(&sigs, SIGUSR1);
-	sigaddset(&sigs, SIGUSR2);
-	pthread_sigmask(SIG_SETMASK, &sigs, NULL);
-
-	while (1) {
-		struct auditd_reply_list *cur;
-		int stop_req = 0;
-// FIXME: wait for data 
-		pthread_mutex_lock(&data->queue_lock);
-		while (data->head == NULL) {
-			pthread_cond_wait(&data->queue_nonempty, 
-				&data->queue_lock);
-		}
-// FIXME: at this point we can use data->head unlocked since it won't change.
-		handle_event(data);
-		cur = data->head;
-// FIXME: relock at this point
-		if (data->tail == data->head)
-			data->tail = NULL;
-		data->head = data->head->next;
-		if (data->head == NULL && stop && 
-				( cur->reply.type == AUDIT_DAEMON_END ||
-				cur->reply.type == AUDIT_DAEMON_ABORT) )
-			stop_req = 1;
-		pthread_mutex_unlock(&data->queue_lock);
-
-		/* Internal DAEMON messages should be free'd */
-		if (cur->reply.type >= AUDIT_FIRST_DAEMON &&
-				cur->reply.type <= AUDIT_LAST_DAEMON) {
-			free((void *)cur->reply.message);
-		} 
-		free(cur);
-		if (stop_req)
-			break;
-	}
-	return NULL;
-}
-
-
-/* This function takes the newly dequeued event and handles it. */
-static unsigned int count = 0L;
-static void handle_event(struct auditd_consumer_data *data)
-{
-	char *buf = data->head->reply.msg.data;
-
-	if (data->head->reply.type == AUDIT_DAEMON_RECONFIG) {
-		reconfigure(data);
-		switch (consumer_data.config->log_format)
-		{
-		case LF_RAW:
-			buf = format_raw(&data->head->reply, consumer_data.config);
-			break;
-		case LF_NOLOG:
-			return;
-		default:
-			audit_msg(LOG_ERR, 
-				  "Illegal log format detected %d", 
-				  consumer_data.config->log_format);
-			return;
-		}
-	} else if (data->head->reply.type == AUDIT_DAEMON_ROTATE) {
-		rotate_logs_now(data);
-		if (consumer_data.config->log_format == LF_NOLOG)
-			return;
-	}
-	if (!logging_suspended) {
-
-		write_to_log(buf, data);
-
-		/* See if we need to flush to disk manually */
-		if (data->config->flush == FT_INCREMENTAL) {
-			count++;
-			if ((count % data->config->freq) == 0) {
-				int rc;
-				errno = 0;
-				do {
-					rc = fflush(data->log_file);
-				} while (rc < 0 && errno == EINTR);
-		                if (errno) {
-		                	if (errno == ENOSPC && 
-					     fs_space_left == 1) {
-					     fs_space_left = 0;
-					     do_disk_full_action(data->config);
-		        	        } else
-					     //EIO is only likely failure mode
-					     do_disk_error_action("flush", 
-						data->config, errno);
-				}
-
-				/* EIO is only likely failure mode */
-				if ((data->config->daemonize == D_BACKGROUND)&& 
-						(fsync(data->log_fd) != 0)) {
-				     do_disk_error_action("fsync",
-					data->config, errno);
-				}
-			}
-		}
-	}
-}
-
-static void send_ack(struct auditd_consumer_data *data, int ack_type,
-			const char *msg)
-{
-	if (data->head->ack_func) {
-		unsigned char header[AUDIT_RMW_HEADER_SIZE];
-
-		AUDIT_RMW_PACK_HEADER(header, 0, ack_type, strlen(msg),
-					data->head->sequence_id);
-
-		data->head->ack_func(data->head->ack_data, header, msg);
-	}
-}
-
 /* This function writes the given buf to the current log file */
-static void write_to_log(const char *buf, struct auditd_consumer_data *data)
+static void write_to_log(const struct auditd_event *e)
 {
 	int rc;
-	FILE *f = data->log_file;
-	struct daemon_conf *config = data->config;
 	int ack_type = AUDIT_RMW_TYPE_ACK;
 	const char *msg = "";
 
 	/* write it to disk */
-	rc = fprintf(f, "%s\n", buf);
+	rc = fprintf(log_file, "%s\n", e->reply.message);
 
 	/* error? Handle it */
 	if (rc < 0) {
 		if (errno == ENOSPC) {
 			ack_type = AUDIT_RMW_TYPE_DISKFULL;
 			msg = "disk full";
-			send_ack(data, ack_type, msg);
+			send_ack(e, ack_type, msg);
 			if (fs_space_left == 1) {
 				fs_space_left = 0;
-				do_disk_full_action(config);
+				do_disk_full_action();
 			}
 		} else  {
 			int saved_errno = errno;
 			ack_type = AUDIT_RMW_TYPE_DISKERROR;
 			msg = "disk write error";
-			send_ack(data, ack_type, msg);
-			do_disk_error_action("write", config, saved_errno);
+			send_ack(e, ack_type, msg);
+			do_disk_error_action("write", saved_errno);
 		}
 	} else {
 		/* check log file size & space left on partition */
@@ -432,21 +596,21 @@ static void write_to_log(const char *buf, struct auditd_consumer_data *data)
 			// that the system recovers from. The real error
 			// occurs on write.
 			log_size += rc;
-			check_log_file_size(data);
-			check_space_left(data->log_fd, config);
+			check_log_file_size();
+			// Keep loose tabs on the free space
+			if ((log_size % 3) < 2)
+				check_space_left();
 		}
 
 		if (fs_space_warning)
 			ack_type = AUDIT_RMW_TYPE_DISKLOW;
-		send_ack(data, ack_type, msg);
+		send_ack(e, ack_type, msg);
 		disk_err_warning = 0;
 	}
 }
 
-static void check_log_file_size(struct auditd_consumer_data *data)
+static void check_log_file_size(void)
 {
-	struct daemon_conf *config = data->config;
-
 	/* did we cross the size limit? */
 	off_t sz = log_size / MEGABYTE;
 
@@ -465,16 +629,16 @@ static void check_log_file_size(struct auditd_consumer_data *data)
 				logging_suspended = 1;
 				break;
 			case SZ_ROTATE:
-				if (data->config->num_logs > 1) {
+				if (config->num_logs > 1) {
 					audit_msg(LOG_NOTICE,
 					    "Audit daemon rotating log files");
-						rotate_logs(data, 0);
+					rotate_logs(0);
 				}
 				break;
 			case SZ_KEEP_LOGS:
 				audit_msg(LOG_NOTICE,
 			    "Audit daemon rotating log files with keep option");
-					shift_logs(data);
+					shift_logs();
 				break;
 			default:
 				audit_msg(LOG_ALERT, 
@@ -484,24 +648,24 @@ static void check_log_file_size(struct auditd_consumer_data *data)
 	}
 }
 
-static void check_space_left(int lfd, struct daemon_conf *config)
+static void check_space_left(void)
 {
 	int rc;
 	struct statfs buf;
 
-        rc = fstatfs(lfd, &buf);
+        rc = fstatfs(log_fd, &buf);
         if (rc == 0) {
 		if (buf.f_bavail < 5) {
 			/* we won't consume the last 5 blocks */
 			fs_space_left = 0;
-			do_disk_full_action(config);
+			do_disk_full_action();
 		} else {
 			unsigned long blocks;
 			unsigned long block_size = buf.f_bsize;
 		        blocks = config->space_left * (MEGABYTE/block_size);
         		if (buf.f_bavail < blocks) {
 				if (fs_space_warning == 0) {
-					do_space_left_action(config, 0);
+					do_space_left_action(0);
 					fs_space_warning = 1;
 				}
 			} else if (fs_space_warning &&
@@ -512,7 +676,7 @@ static void check_space_left(int lfd, struct daemon_conf *config)
 		        blocks=config->admin_space_left * (MEGABYTE/block_size);
         		if (buf.f_bavail < blocks) {
 				if (fs_admin_space_warning == 0) {
-					do_space_left_action(config, 1);
+					do_space_left_action(1);
 					fs_admin_space_warning = 1;
 				}
 			} else if (fs_admin_space_warning &&
@@ -528,9 +692,10 @@ static void check_space_left(int lfd, struct daemon_conf *config)
 
 extern int sendmail(const char *subject, const char *content, 
 	const char *mail_acct);
-static void do_space_left_action(struct daemon_conf *config, int admin)
+static void do_space_left_action(int admin)
 {
 	int action;
+
 	if (admin)
 		action = config->admin_space_left_action;
 	else
@@ -543,6 +708,13 @@ static void do_space_left_action(struct daemon_conf *config, int admin)
 		case FA_SYSLOG:
 			audit_msg(LOG_ALERT, 
 			    "Audit daemon is low on disk space for logging");
+			break;
+		case FA_ROTATE:
+			if (config->num_logs > 1) {
+				audit_msg(LOG_NOTICE,
+					"Audit daemon rotating log files");
+				rotate_logs(0);
+			}
 			break;
 		case FA_EMAIL:
 			if (admin == 0) {
@@ -587,13 +759,21 @@ static void do_space_left_action(struct daemon_conf *config, int admin)
 	}
 }
 
-static void do_disk_full_action(struct daemon_conf *config)
+static void do_disk_full_action(void)
 {
-	audit_msg(LOG_ALERT, "Audit daemon has no space left on logging partition");
+	audit_msg(LOG_ALERT,
+			"Audit daemon has no space left on logging partition");
 	switch (config->disk_full_action)
 	{
 		case FA_IGNORE:
 		case FA_SYSLOG: /* Message is syslogged above */
+			break;
+		case FA_ROTATE:
+			if (config->num_logs > 1) {
+				audit_msg(LOG_NOTICE,
+					"Audit daemon rotating log files");
+				rotate_logs(0);
+			}
 			break;
 		case FA_EXEC:
 			safe_exec(config->disk_full_exe);
@@ -619,8 +799,7 @@ static void do_disk_full_action(struct daemon_conf *config)
 	} 
 }
 
-static void do_disk_error_action(const char * func, struct daemon_conf *config,
-	int err)
+static void do_disk_error_action(const char *func, int err)
 {
 	char text[128];
 
@@ -662,18 +841,16 @@ static void do_disk_error_action(const char * func, struct daemon_conf *config,
 	} 
 }
 
-static void rotate_logs_now(struct auditd_consumer_data *data)
+static void rotate_logs_now(void)
 {
-	struct daemon_conf *config = data->config;
-
 	if (config->max_log_size_action == SZ_KEEP_LOGS) 
-		shift_logs(data);
+		shift_logs();
 	else
-		rotate_logs(data, 0);
+		rotate_logs(0);
 }
 
 /* Check for and remove excess logs so that we don't run out of room */
-static void check_excess_logs(struct auditd_consumer_data *data)
+static void check_excess_logs(void)
 {
 	int rc;
 	unsigned int i, len;
@@ -681,11 +858,11 @@ static void check_excess_logs(struct auditd_consumer_data *data)
 
 	// Only do this if rotate is the log size action
 	// and we actually have a limit
-	if (data->config->max_log_size_action != SZ_ROTATE ||
-			data->config->num_logs < 2)
+	if (config->max_log_size_action != SZ_ROTATE ||
+			config->num_logs < 2)
 		return;
 	
-	len = strlen(data->config->log_file) + 16;
+	len = strlen(config->log_file) + 16;
 	name = (char *)malloc(len);
 	if (name == NULL) { /* Not fatal - just messy */
 		audit_msg(LOG_ERR, "No memory checking excess logs");
@@ -693,10 +870,10 @@ static void check_excess_logs(struct auditd_consumer_data *data)
 	}
 
 	// We want 1 beyond the normal logs	
-	i=data->config->num_logs;
-	rc=0;
+	i = config->num_logs;
+	rc = 0;
 	while (rc == 0) {
-		snprintf(name, len, "%s.%d", data->config->log_file, i++);
+		snprintf(name, len, "%s.%d", config->log_file, i++);
 		rc=unlink(name);
 		if (rc == 0)
 			audit_msg(LOG_NOTICE,
@@ -705,34 +882,68 @@ static void check_excess_logs(struct auditd_consumer_data *data)
 	}
 	free(name);
 }
+
+static void fix_disk_permissions(void)
+{
+	char *path, *dir;
+	unsigned int i, len;
+
+	if (config == NULL || config->log_file == NULL)
+		return;
+
+	len = strlen(config->log_file) + 16;
+
+	path = malloc(len);
+	if (path == NULL)
+		return;
+
+	// Start with the directory
+	strcpy(path, config->log_file);
+	dir = dirname(path);
+	chmod(dir, config->log_group ? S_IRWXU|S_IRGRP|S_IXGRP : S_IRWXU);
+	chown(dir, 0, config->log_group ? config->log_group : 0);
+
+	// Now, for each file...
+	for (i = 1; i < config->num_logs; i++) {
+		int rc;
+		snprintf(path, len, "%s.%d", config->log_file, i);
+		rc = chmod(path, config->log_group ? S_IRUSR|S_IRGRP : S_IRUSR);
+		if (rc && errno == ENOENT)
+			break;
+	}
+
+	// Now the current file
+	chmod(config->log_file, config->log_group ? S_IWUSR|S_IRUSR|S_IRGRP :
+			S_IWUSR|S_IRUSR);
+
+	free(path);
+}
  
-static void rotate_logs(struct auditd_consumer_data *data, 
-		unsigned int num_logs)
+static void rotate_logs(unsigned int num_logs)
 {
 	int rc;
 	unsigned int len, i;
 	char *oldname, *newname;
 
-	if (data->config->max_log_size_action == SZ_ROTATE &&
-				data->config->num_logs < 2)
+	if (config->max_log_size_action == SZ_ROTATE &&
+				config->num_logs < 2)
 		return;
 
 	/* Close audit file. fchmod and fchown errors are not fatal because we
 	 * already adjusted log file permissions and ownership when opening the
 	 * log file. */
-	if (fchmod(data->log_fd, data->config->log_group ? S_IRUSR|S_IRGRP :
-								S_IRUSR) < 0) {
+	if (fchmod(log_fd, config->log_group ? S_IRUSR|S_IRGRP : S_IRUSR) < 0){
 		audit_msg(LOG_NOTICE, "Couldn't change permissions while "
 			"rotating log file (%s)", strerror(errno));
 	}
-	if (fchown(data->log_fd, 0, data->config->log_group) < 0) {
+	if (fchown(log_fd, 0, config->log_group) < 0) {
 		audit_msg(LOG_NOTICE, "Couldn't change ownership while "
 			"rotating log file (%s)", strerror(errno));
 	}
-	fclose(data->log_file);
+	fclose(log_file);
 	
 	/* Rotate */
-	len = strlen(data->config->log_file) + 16;
+	len = strlen(config->log_file) + 16;
 	oldname = (char *)malloc(len);
 	if (oldname == NULL) { /* Not fatal - just messy */
 		audit_msg(LOG_ERR, "No memory rotating logs");
@@ -749,15 +960,15 @@ static void rotate_logs(struct auditd_consumer_data *data,
 
 	/* If we are rotating, get number from config */
 	if (num_logs == 0)
-		num_logs = data->config->num_logs;
+		num_logs = config->num_logs;
 
 	/* Handle this case first since it will not enter the for loop */
 	if (num_logs == 2) 
-		snprintf(oldname, len, "%s.1", data->config->log_file);
+		snprintf(oldname, len, "%s.1", config->log_file);
 
 	for (i=num_logs - 1; i>1; i--) {
-		snprintf(oldname, len, "%s.%d", data->config->log_file, i-1);
-		snprintf(newname, len, "%s.%d", data->config->log_file, i);
+		snprintf(oldname, len, "%s.%d", config->log_file, i-1);
+		snprintf(newname, len, "%s.%d", config->log_file, i);
 		/* if the old file exists */
 		rc = rename(oldname, newname);
 		if (rc == -1 && errno != ENOENT) {
@@ -768,50 +979,48 @@ static void rotate_logs(struct auditd_consumer_data *data,
 				oldname, newname, strerror(errno));
 			if (saved_errno == ENOSPC && fs_space_left == 1) {
 				fs_space_left = 0;
-				do_disk_full_action(data->config);
+				do_disk_full_action();
 			} else
-				do_disk_error_action("rotate", data->config,
-							saved_errno);
+				do_disk_error_action("rotate", saved_errno);
 		}
 	}
 	free(newname);
 
 	/* At this point, oldname should point to lowest number - use it */
 	newname = oldname;
-	rc = rename(data->config->log_file, newname);
+	rc = rename(config->log_file, newname);
 	if (rc == -1 && errno != ENOENT) {
 		// Likely errors: ENOSPC, ENOMEM, EBUSY
 		int saved_errno = errno;
 		audit_msg(LOG_ERR, "Error rotating logs from %s to %s (%s)",
-			data->config->log_file, newname, strerror(errno));
+			config->log_file, newname, strerror(errno));
 		if (saved_errno == ENOSPC && fs_space_left == 1) {
 			fs_space_left = 0;
-			do_disk_full_action(data->config);
+			do_disk_full_action();
 		} else
-			do_disk_error_action("rotate2", data->config,
-						saved_errno);
+			do_disk_error_action("rotate2", saved_errno);
 
 		/* At this point, we've failed to rotate the original log.
 		 * So, let's make the old log writable and try again next
 		 * time */
-		chmod(data->config->log_file, 
-			data->config->log_group ? S_IWUSR|S_IRUSR|S_IRGRP :
+		chmod(config->log_file, 
+			config->log_group ? S_IWUSR|S_IRUSR|S_IRGRP :
 			S_IWUSR|S_IRUSR);
 	}
 	free(newname);
 
 	/* open new audit file */
-	if (open_audit_log(data)) {
+	if (open_audit_log()) {
 		int saved_errno = errno;
 		audit_msg(LOG_NOTICE, 
 			"Could not reopen a log after rotating.");
 		logging_suspended = 1;
-		do_disk_error_action("reopen", data->config, saved_errno);
+		do_disk_error_action("reopen", saved_errno);
 	}
 }
 
 static int last_log = 1;
-static void shift_logs(struct auditd_consumer_data *data)
+static void shift_logs(void)
 {
 	// The way this has to work is to start scanning from .1 up until
 	// no file is found. Then do the rotate algorithm using that number
@@ -819,7 +1028,7 @@ static void shift_logs(struct auditd_consumer_data *data)
 	unsigned int num_logs, len;
 	char *name;
 
-	len = strlen(data->config->log_file) + 16;
+	len = strlen(config->log_file) + 16;
 	name = (char *)malloc(len);
 	if (name == NULL) { /* Not fatal - just messy */
 		audit_msg(LOG_ERR, "No memory shifting logs");
@@ -829,7 +1038,7 @@ static void shift_logs(struct auditd_consumer_data *data)
 	// Find last log
 	num_logs = last_log;
 	while (num_logs) {
-		snprintf(name, len, "%s.%d", data->config->log_file, 
+		snprintf(name, len, "%s.%d", config->log_file, 
 						num_logs);
 		if (access(name, R_OK) != 0)
 			break;
@@ -841,7 +1050,7 @@ static void shift_logs(struct auditd_consumer_data *data)
 		audit_msg(LOG_WARNING, "Last known log disappeared (%s)", name);
 		num_logs = last_log = 1;
 		while (num_logs) {
-			snprintf(name, len, "%s.%d", data->config->log_file, 
+			snprintf(name, len, "%s.%d", config->log_file, 
 							num_logs);
 			if (access(name, R_OK) != 0)
 				break;
@@ -850,7 +1059,7 @@ static void shift_logs(struct auditd_consumer_data *data)
 		audit_msg(LOG_INFO, "Next log to use will be %s", name);
 	}
 	last_log = num_logs;
-	rotate_logs(data, num_logs+1);
+	rotate_logs(num_logs+1);
 	free(name);
 }
 
@@ -859,27 +1068,32 @@ static void shift_logs(struct auditd_consumer_data *data)
  * file and ensuring the correct options are applied to the descriptor.
  * It returns 0 on success and 1 on failure.
  */
-static int open_audit_log(struct auditd_consumer_data *data)
+static int open_audit_log(void)
 {
 	int flags, lfd;
+
+	flags = O_WRONLY|O_APPEND|O_NOFOLLOW;
+	if (config->flush == FT_DATA)
+		flags |= O_DSYNC;
+	else if (config->flush == FT_SYNC)
+		flags |= O_SYNC;
 
 	// Likely errors for open: Almost anything
 	// Likely errors on rotate: ENFILE, ENOMEM, ENOSPC
 retry:
-	lfd = open(data->config->log_file, O_WRONLY|O_APPEND|O_NOFOLLOW);
+	lfd = open(config->log_file, flags);
 	if (lfd < 0) {
 		if (errno == ENOENT) {
-			lfd = create_log_file(data->config->log_file);
+			lfd = create_log_file(config->log_file);
 			if (lfd < 0) {
 				audit_msg(LOG_ERR,
 					"Couldn't create log file %s (%s)",
-					data->config->log_file,
+					config->log_file,
 					strerror(errno));
 				return 1;
 			}
 			close(lfd);
-			lfd = open(data->config->log_file, 
-				O_WRONLY|O_APPEND|O_NOFOLLOW);
+			lfd = open(config->log_file, flags);
 			log_size = 0;
 		} else if (errno == ENFILE) {
 			// All system descriptors used, try again...
@@ -887,7 +1101,7 @@ retry:
 		}
 		if (lfd < 0) {
 			audit_msg(LOG_ERR, "Couldn't open log file %s (%s)",
-				data->config->log_file, strerror(errno));
+				config->log_file, strerror(errno));
 			return 1;
 		}
 	} else {
@@ -904,44 +1118,12 @@ retry:
 	}
 
 	if (fcntl(lfd, F_SETFD, FD_CLOEXEC) == -1) {
-		close(lfd);
 		audit_msg(LOG_ERR, "Error setting log file CLOEXEC flag (%s)",
 			strerror(errno));
+		close(lfd);
 		return 1;
 	}
-	if (data->config->flush == FT_DATA) {
-		flags = fcntl(lfd, F_GETFL);
-		if (flags < 0) {
-			audit_msg(LOG_ERR, "Couldn't get log file flags (%s)",
-				strerror(errno));
-			close(lfd);
-			return 1;
-		}
-		if (fcntl(lfd, F_SETFL, flags|O_DSYNC) < 0) {
-			audit_msg(LOG_ERR,
-				"Couldn't set data sync mode on log file (%s)",
-				strerror(errno));
-			close(lfd);
-			return 1;
-		}
-	}
-	else if (data->config->flush == FT_SYNC){
-		flags = fcntl(lfd, F_GETFL);
-		if (flags < 0) {
-			audit_msg(LOG_ERR, "Couldn't get log file flags (%s)",
-				strerror(errno));
-			close(lfd);
-			return 1;
-		}
-		if (fcntl(lfd, F_SETFL, flags|O_SYNC) < 0) {
-			audit_msg(LOG_ERR,
-				"Couldn't set sync mode on log file (%s)",
-				strerror(errno));
-			close(lfd);
-			return 1;
-		}
-	}
-	if (fchmod(lfd, data->config->log_group ? S_IRUSR|S_IWUSR|S_IRGRP :
+	if (fchmod(lfd, config->log_group ? S_IRUSR|S_IWUSR|S_IRGRP :
 							S_IRUSR|S_IWUSR) < 0) {
 		audit_msg(LOG_ERR,
 			"Couldn't change permissions of log file (%s)",
@@ -949,16 +1131,16 @@ retry:
 		close(lfd);
 		return 1;
 	}
-	if (fchown(lfd, 0, data->config->log_group) < 0) {
+	if (fchown(lfd, 0, config->log_group) < 0) {
 		audit_msg(LOG_ERR, "Couldn't change ownership of log file (%s)",
 			strerror(errno));
 		close(lfd);
 		return 1;
 	}
 
-	data->log_fd = lfd;
-	data->log_file = fdopen(lfd, "a");
-	if (data->log_file == NULL) {
+	log_fd = lfd;
+	log_file = fdopen(lfd, "a");
+	if (log_file == NULL) {
 		audit_msg(LOG_ERR, "Error setting up log descriptor (%s)",
 			strerror(errno));
 		close(lfd);
@@ -966,7 +1148,7 @@ retry:
 	}
 
 	/* Set it to line buffering */
-	setlinebuf(consumer_data.log_file);
+	setlinebuf(log_file);
 	return 0;
 }
 
@@ -1028,71 +1210,10 @@ static void safe_exec(const char *exe)
 	exit(1);
 }
 
-/*
-* This function will take an audit structure and return a
-* text buffer that's unformatted for writing to disk. If there
-* is an error the return value is NULL.
-*/
-static char *format_raw(const struct audit_reply *rep, 
-	struct daemon_conf *config)
+static void reconfigure(struct auditd_event *e)
 {
-        char *ptr;
-
-        if (rep==NULL) {
-		if (config->node_name_format != N_NONE)
-			snprintf(format_buf, MAX_AUDIT_MESSAGE_LENGTH +
-				_POSIX_HOST_NAME_MAX - 32,
-				"node=%s type=DAEMON msg=NULL reply",
-                                config->node_name);
-		else
-	        	snprintf(format_buf, MAX_AUDIT_MESSAGE_LENGTH,
-				"type=DAEMON msg=NULL reply");
-	} else {
-		int len, nlen;
-		const char *type, *message;
-		char unknown[32];
-		type = audit_msg_type_to_name(rep->type);
-		if (type == NULL) {
-			snprintf(unknown, sizeof(unknown), 
-				"UNKNOWN[%d]", rep->type);
-			type = unknown;
-		}
-		if (rep->message == NULL) {
-			message = "msg lost";
-			len = 8;
-		} else {
-			message = rep->message;
-			len = rep->len;
-		}
-
-		// Note: This can truncate messages if 
-		// MAX_AUDIT_MESSAGE_LENGTH is too small
-		if (config->node_name_format != N_NONE)
-			nlen = snprintf(format_buf, MAX_AUDIT_MESSAGE_LENGTH +
-				_POSIX_HOST_NAME_MAX - 32,
-				"node=%s type=%s msg=%.*s\n",
-                                config->node_name, type, len, message);
-		else
-		        nlen = snprintf(format_buf,
-				MAX_AUDIT_MESSAGE_LENGTH - 32,
-				"type=%s msg=%.*s", type, len, message);
-
-	        /* Replace \n with space so it looks nicer. */
-        	ptr = format_buf;
-	        while ((ptr = strchr(ptr, 0x0A)) != NULL)
-        	        *ptr = ' ';
-
-		/* Trim trailing space off since it wastes space */
-		if (format_buf[nlen-1] == ' ')
-			format_buf[nlen-1] = 0;
-	}
-        return format_buf;
-}
-
-static void reconfigure(struct auditd_consumer_data *data)
-{
-	struct daemon_conf *nconf = data->head->reply.conf;
-	struct daemon_conf *oconf = data->config;
+	struct daemon_conf *nconf = e->reply.conf;
+	struct daemon_conf *oconf = config;
 	uid_t uid = nconf->sender_uid;
 	pid_t pid = nconf->sender_pid;
 	const char *ctx = nconf->sender_ctx;
@@ -1117,7 +1238,7 @@ static void reconfigure(struct auditd_consumer_data *data)
 	oconf->disk_error_exe = nconf->disk_error_exe;
 	disk_err_warning = 0;
 
-	// numlogs is next
+	// number of logs
 	oconf->num_logs = nconf->num_logs;
 
 	// flush freq
@@ -1137,6 +1258,17 @@ static void reconfigure(struct auditd_consumer_data *data)
 
 	// log format
 	oconf->log_format = nconf->log_format;
+
+	if (oconf->write_logs != nconf->write_logs) {
+		oconf->write_logs = nconf->write_logs;
+		need_reopen = 1;
+	}
+
+	// log_group
+	if (oconf->log_group != nconf->log_group) {
+		oconf->log_group = nconf->log_group;
+		need_reopen = 1;
+	}
 
 	// action_mail_acct
 	if (strcmp(oconf->action_mail_acct, nconf->action_mail_acct)) {
@@ -1168,8 +1300,7 @@ static void reconfigure(struct auditd_consumer_data *data)
 					"Could not allocate dispatcher memory"
 					" in reconfigure");
 				// Likely errors: ENOMEM
-				do_disk_error_action("reconfig", data->config,
-							saved_errno);
+				do_disk_error_action("reconfig", saved_errno);
 			}
 			if(init_dispatcher(oconf)) {// dispatcher & qos is used
 				int saved_errno = errno;
@@ -1177,8 +1308,7 @@ static void reconfigure(struct auditd_consumer_data *data)
 					"Could not start dispatcher %s"
 					" in reconfigure", oconf->dispatcher);
 				// Likely errors: Socketpairs or exec perms
-				do_disk_error_action("reconfig", data->config,
-							saved_errno);
+				do_disk_error_action("reconfig", saved_errno);
 			}
 		} 
 		// have one, but none after this
@@ -1198,8 +1328,7 @@ static void reconfigure(struct auditd_consumer_data *data)
 					"Could not allocate dispatcher memory"
 					" in reconfigure");
 				// Likely errors: ENOMEM
-				do_disk_error_action("reconfig", data->config,
-							saved_errno);
+				do_disk_error_action("reconfig", saved_errno);
 			}
 			if(init_dispatcher(oconf)) {// dispatcher & qos is used
 				int saved_errno = errno;
@@ -1207,8 +1336,7 @@ static void reconfigure(struct auditd_consumer_data *data)
 					"Could not start dispatcher %s"
 					" in reconfigure", oconf->dispatcher);
 				// Likely errors: Socketpairs or exec perms
-				do_disk_error_action("reconfig", data->config,
-							saved_errno);
+				do_disk_error_action("reconfig", saved_errno);
 			}
 		}
 		// they are the same app - just signal it
@@ -1221,7 +1349,10 @@ static void reconfigure(struct auditd_consumer_data *data)
 
 	// network listener
 	auditd_tcp_listen_reconfigure(nconf, oconf);
-	
+
+	// distribute network events	
+	oconf->distribute_network_events = nconf->distribute_network_events;
+
 	/* At this point we will work on the items that are related to 
 	 * a single log file. */
 
@@ -1239,7 +1370,7 @@ static void reconfigure(struct auditd_consumer_data *data)
 
 	if (need_size_check) {
 		logging_suspended = 0;
-		check_log_file_size(data);
+		check_log_file_size();
 	}
 
 	// flush technique
@@ -1258,18 +1389,18 @@ static void reconfigure(struct auditd_consumer_data *data)
 		free((void *)nconf->log_file);
 
 	if (need_reopen) {
-		fclose(data->log_file);
-		if (open_audit_log(data)) {
+		fclose(log_file);
+		fix_disk_permissions();
+		if (open_audit_log()) {
 			int saved_errno = errno;
 			audit_msg(LOG_NOTICE, 
 				"Could not reopen a log after reconfigure");
 			logging_suspended = 1;
 			// Likely errors: ENOMEM, ENOSPC
-			do_disk_error_action("reconfig", data->config,
-						saved_errno);
+			do_disk_error_action("reconfig", saved_errno);
 		} else {
 			logging_suspended = 0;
-			check_log_file_size(data);
+			check_log_file_size();
 		}
 	}
 
@@ -1353,8 +1484,8 @@ static void reconfigure(struct auditd_consumer_data *data)
 		fs_admin_space_warning = 0;
 		fs_space_left = 1;
 		logging_suspended = 0;
-		check_excess_logs(data);
-		check_space_left(data->log_fd, oconf);
+		check_excess_logs();
+		check_space_left();
 		if (logging_suspended == 0)
 			logging_suspended = saved_suspend;
 	}
@@ -1371,17 +1502,12 @@ static void reconfigure(struct auditd_consumer_data *data)
 			 0, seq_num);
         }
 
-	data->head->reply.len = snprintf(txt, sizeof(txt), 
-		"%s config changed, auid=%u pid=%d subj=%s res=success", date, 
-		uid, pid, ctx );
-	audit_msg(LOG_NOTICE, "%s", txt);
-	data->head->reply.type = AUDIT_DAEMON_CONFIG;
-	data->head->reply.message = strdup(txt);
-	if (!data->head->reply.message) {
-		data->head->reply.len = 0;
-		audit_msg(LOG_ERR, "Cannot allocate config message");
-		// FIXME: Should call some error handler
-	}
+	e->reply.type = AUDIT_DAEMON_CONFIG;
+	e->reply.len = snprintf(e->reply.msg.data, MAX_AUDIT_MESSAGE_LENGTH-2, 
+	"%s op=reconfigure state=changed auid=%u pid=%d subj=%s res=success",
+		date, uid, pid, ctx );
+	e->reply.message = e->reply.msg.data;
+	audit_msg(LOG_NOTICE, "%s", e->reply.message);
 	free((char *)ctx);
 }
 

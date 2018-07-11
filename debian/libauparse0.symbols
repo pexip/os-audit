@@ -1,8 +1,13 @@
 libauparse.so.0 libauparse0 #MINVER#
+* Build-Depends-Package: libauparse-dev
+ _auparse_free_interpretations@Base 1:2.6
+ _auparse_load_interpretations@Base 1:2.6
+ _auparse_lookup_interpretation@Base 1:2.6.1
  auparse_add_callback@Base 1:2.2.1
  auparse_destroy@Base 1:2.2.1
  auparse_do_interpretation@Base 1:2.3.1
  auparse_feed@Base 1:2.2.1
+ auparse_feed_age_events@Base 1:2.5.1
  auparse_feed_has_data@Base 1:2.2.2
  auparse_find_field@Base 1:2.2.1
  auparse_find_field_next@Base 1:2.2.1
@@ -19,6 +24,7 @@ libauparse.so.0 libauparse0 #MINVER#
  auparse_get_node@Base 1:2.2.1
  auparse_get_num_fields@Base 1:2.2.1
  auparse_get_num_records@Base 1:2.2.1
+ auparse_get_record_interpretations@Base 1:2.6
  auparse_get_record_text@Base 1:2.2.1
  auparse_get_serial@Base 1:2.2.1
  auparse_get_time@Base 1:2.2.1
@@ -34,6 +40,7 @@ libauparse.so.0 libauparse0 #MINVER#
  auparse_next_record@Base 1:2.2.1
  auparse_node_compare@Base 1:2.2.1
  auparse_reset@Base 1:2.2.1
+ auparse_set_escape_mode@Base 1:2.4.4
  auparse_timestamp_compare@Base 1:2.2.1
  ausearch_add_expression@Base 1:2.2.1
  ausearch_add_interpreted_item@Base 1:2.2.1

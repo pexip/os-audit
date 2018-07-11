@@ -28,6 +28,7 @@ case "$1" in
 	rm -rf /var/log/audit
 	rm -f /var/run/audit_events
 	rm -f /etc/audit/audit.rules
+	rm -f /etc/audit/audit.rules.prev
         ;;
     remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
         ;;

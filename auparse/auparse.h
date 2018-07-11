@@ -1,5 +1,5 @@
 /* auparse.h --
- * Copyright 2006-08,2012,2014 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-08,2012,2014-16 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -42,10 +42,12 @@ typedef void (*auparse_callback_ptr)(auparse_state_t *au,
 /* General functions that affect operation of the library */
 auparse_state_t *auparse_init(ausource_t source, const void *b);
 int auparse_feed(auparse_state_t *au, const char *data, size_t data_len);
+void auparse_feed_age_events(auparse_state_t *au);
 int auparse_flush_feed(auparse_state_t *au);
-int auparse_feed_has_data(const auparse_state_t *au);
+int auparse_feed_has_data(auparse_state_t *au);
 void auparse_add_callback(auparse_state_t *au, auparse_callback_ptr callback,
 			void *user_data, user_destroy user_destroy_func);
+void auparse_set_escape_mode(auparse_state_t *au, auparse_esc_t mode);
 int auparse_reset(auparse_state_t *au);
 void auparse_destroy(auparse_state_t *au);
 
@@ -92,6 +94,7 @@ int auparse_first_field(auparse_state_t *au);
 int auparse_next_field(auparse_state_t *au);
 unsigned int auparse_get_num_fields(auparse_state_t *au);
 const char *auparse_get_record_text(auparse_state_t *au);
+const char *auparse_get_record_interpretations(auparse_state_t *au);
 const char *auparse_find_field(auparse_state_t *au, const char *name);
 const char *auparse_find_field_next(auparse_state_t *au);
 

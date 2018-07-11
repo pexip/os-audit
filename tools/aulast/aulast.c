@@ -1,6 +1,6 @@
 /*
  * aulast.c - A last program based on audit logs 
- * Copyright (c) 2008-2009,2011 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2008-2009,2011,2016 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
@@ -27,7 +27,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
-#include <pwd.h>
 #include <stdlib.h>
 #include "libaudit.h"
 #include "auparse.h"
@@ -39,13 +38,13 @@ static FILE *f = NULL;
 static char *kernel = NULL;
 
 /* command line params */
-static int cuid = -1, bad = 0, proof = 0, debug = 0;
-static char *cterm = NULL;
+static int bad = 0, proof = 0, debug = 0;
+static char *cterm = NULL, *user = NULL;
 
 void usage(void)
 {
 	fprintf(stderr,
- "usage: aulast [--stdin] [--proof] [--extract] [-f file] [user name] [tty]\n");
+ "usage: aulast [--stdin] [--proof] [--extract] [-f file] [--user name] [--tty tty]\n");
 }
 
 /* This outputs a line of text reporting the login/out times */
@@ -67,13 +66,9 @@ static void report_session(lnode* cur)
 			cur->end = time(NULL);
 			notime = 1;
 		}
-	} else {
-		struct passwd *p = getpwuid(cur->auid);
-		if (p)
-			printf("%-8.8s ", p->pw_name);
-		else
-			printf("%-8.u ", cur->auid);
-	}
+	} else
+		printf("%-8.u ", cur->auid);
+
 	if (strncmp("/dev/", cur->term, 5) == 0)
 		printf("%-12.12s ", cur->term+5);
 	else
@@ -155,9 +150,9 @@ static void extract_record(auparse_state_t *au)
 
 static void create_new_session(auparse_state_t *au)
 {
-	const char *tpid, *tses, *tauid;
+	const char *tpid, *tses, *tauid, *tacct = NULL;
 	int pid = -1, auid = -1, ses = -1;
-	lnode *cur;
+	lnode *n;
 
 	// Get pid
 	tpid = auparse_find_field(au, "pid");
@@ -174,8 +169,10 @@ static void create_new_session(auparse_state_t *au)
 		auparse_next_field(au);
 		tauid = auparse_find_field(au, "auid");
 	}
-	if (tauid)
+	if (tauid) {
 		auid = auparse_get_field_int(au);
+		tacct = auparse_interpret_field(au);
+	}
 
 	// Get second ses field
 	tses = auparse_find_field(au, "old-ses");
@@ -200,26 +197,44 @@ static void create_new_session(auparse_state_t *au)
 
 	// See if this session is already open
 	//cur = list_find_auid(&l, auid, pid, ses);
-	cur = list_find_session(&l, ses);
-	if (cur) {
+	n = list_find_session(&l, ses);
+	if (n) {
 		// This means we have an open session close it out
-		cur->status = GONE;
-		cur->end = auparse_get_time(au);
-		report_session(cur);
+		n->status = GONE;
+		n->end = auparse_get_time(au);
+		report_session(n);
 		list_delete_cur(&l);
 	}
 
 	// If this is supposed to be limited to a specific
 	// uid and we don't have that record, skip creating it
-	if (cuid != -1 && cuid != auid) {
-		if (debug)
-			fprintf(stderr,
-			    "login reporting limited to %d for event: %lu\n",
-				cuid, auparse_get_serial(au));
-		return;
+	if (user) {
+		if ((tacct && strcmp(user, tacct)) || tacct == NULL) {
+			if (debug)
+				fprintf(stderr,
+			    "login reporting limited to %s for event: %lu\n",
+					user, auparse_get_serial(au));
+			return;
+		}
 	}
 
-	list_create_session(&l, auid, pid, ses, auparse_get_serial(au));
+	n = malloc(sizeof(lnode));
+	if (n == NULL)
+		return;
+	n->session = ses;
+	n->start = auparse_get_time(au);
+	n->end = 0;
+	n->auid = auid;
+	n->pid = pid;
+	n->result = -1;
+	n->name = tacct ? strdup(tacct) : NULL;
+	n->term = NULL;
+	n->host = NULL;
+	n->status = LOG_IN;
+	n->loginuid_proof = auparse_get_serial(au);
+	n->user_login_proof = 0;
+	n->user_end_proof = 0;
+	list_create_session_simple(&l, n);
 }
 
 static void update_session_login(auparse_state_t *au)
@@ -249,17 +264,7 @@ static void update_session_login(auparse_state_t *au)
 		tuid = auparse_find_field(au, "id");
 		if (tuid)
 			uid = auparse_get_field_int(au);
-		else {
-			auparse_first_record(au);
-			tuid = auparse_find_field(au, "acct");
-			if (tuid) {
-				const char *tacct = auparse_interpret_field(au);
-				struct passwd *pw = getpwnam (tacct);
-				if (pw != NULL)
-					uid = pw->pw_uid;
-			} else
-				auparse_first_record(au);
-		}
+		auparse_first_record(au);
 	}
 
 	start = auparse_get_time(au);
@@ -316,7 +321,7 @@ static void update_session_login(auparse_state_t *au)
 		}
 
 		// This means we have an open session - update it
-		list_update_start(&l, start, host, term, result,
+		list_update_start(&l, host, term, result,
 				auparse_get_serial(au));
 
 		// If the results were failed, we can close it out
@@ -472,57 +477,53 @@ static void process_shutdown(auparse_state_t *au)
 int main(int argc, char *argv[])
 {
 	int i, use_stdin = 0;
-	char *user = NULL, *file = NULL;
-	struct passwd *p;
+	char *file = NULL;
         auparse_state_t *au;
 
 	setlocale (LC_ALL, "");
 	for (i=1; i<argc; i++) {
-		if (argv[i][0] != '-') {
-			//take input and lookup as if it were a user name
-			//if that fails assume its a tty
-			if (user == NULL) {
-				p = getpwnam(argv[i]);
-				if (p) {
-					cuid = p->pw_uid;
-					user = argv[i];
-					continue;
-				}
+		if (strcmp(argv[i], "-f") == 0) {
+			if (use_stdin == 0) {
+				i++;
+				file = argv[i];
+			} else {
+				fprintf(stderr,"stdin already given\n");
+				return 1;
 			}
+		} else if (strcmp(argv[i], "--bad") == 0) {
+			bad = 1;
+		} else if (strcmp(argv[i], "--proof") == 0) {
+			proof = 1;
+		} else if (strcmp(argv[i], "--extract") == 0) {
+			f = fopen("aulast.log", "wt");
+		} else if (strcmp(argv[i], "--stdin") == 0) {
+			if (file == NULL)
+				use_stdin = 1;
+			else {
+				fprintf(stderr, "file already given\n");
+				return 1;
+			}
+		} else if (strcmp(argv[i], "--user") == 0) {
+			if (user == NULL) {
+				i++;
+				user = argv[i];
+			} else {
+				usage();
+				return 1;
+			}
+		} else if (strcmp(argv[i], "--tty") == 0) {
 			if (cterm == NULL) {
+				i++;
 				cterm = argv[i];
 			} else {
 				usage();
 				return 1;
 			}
+		} else if (strcmp(argv[i], "--debug") == 0) {
+			debug = 1;
 		} else {
-			if (strcmp(argv[i], "-f") == 0) {
-				if (use_stdin == 0) {
-					i++;
-					file = argv[i];
-				} else {
-					fprintf(stderr,"stdin already given\n");
-					return 1;
-				}
-			} else if (strcmp(argv[i], "--bad") == 0) {
-				bad = 1;
-			} else if (strcmp(argv[i], "--proof") == 0) {
-				proof = 1;
-			} else if (strcmp(argv[i], "--extract") == 0) {
-				f = fopen("aulast.log", "wt");
-			} else if (strcmp(argv[i], "--stdin") == 0) {
-				if (file == NULL)
-					use_stdin = 1;
-				else {
-					fprintf(stderr, "file already given\n");
-					return 1;
-				}
-			} else if (strcmp(argv[i], "--debug") == 0) {
-				debug = 1;
-			} else {
-				usage();
-				return 1;
-			}
+			usage();
+			return 1;
 		}
 	}
 	list_create(&l);
@@ -534,7 +535,8 @@ int main(int argc, char *argv[])
 		au = auparse_init(AUSOURCE_FILE_POINTER, stdin);
 	else {
 		if (getuid()) {
-			fprintf(stderr, "You probably need to be root for this to work\n");
+			fprintf(stderr,
+			  "You probably need to be root for this to work\n");
 		}
 		au = auparse_init(AUSOURCE_LOGS, NULL);
 	}

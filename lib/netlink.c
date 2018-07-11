@@ -1,5 +1,5 @@
 /* netlink.c --
- * Copyright 2004, 2005, 2009, 2013 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004,2005,2009,2013,2016 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -130,7 +130,6 @@ retry:
 		len = -errno;
 	return len; 
 }
-hidden_def(audit_get_reply)
 
 
 /* 
@@ -148,6 +147,10 @@ static int adjust_reply(struct audit_reply *rep, int len)
 	rep->error    = NULL;
 	rep->signal_info = NULL;
 	rep->conf     = NULL;
+#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
+    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+	rep->features = NULL;
+#endif
 	if (!NLMSG_OK(rep->nlh, (unsigned int)len)) {
 		if (len == sizeof(rep->msg)) {
 			audit_msg(LOG_ERR, 
@@ -170,6 +173,12 @@ static int adjust_reply(struct audit_reply *rep, int len)
 		case AUDIT_GET:   
 			rep->status  = NLMSG_DATA(rep->nlh); 
 			break;
+#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
+    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+		case AUDIT_GET_FEATURE:
+			rep->features =  NLMSG_DATA(rep->nlh);
+			break;
+#endif
 		case AUDIT_LIST_RULES:  
 			rep->ruledata = NLMSG_DATA(rep->nlh); 
 			break;
@@ -243,7 +252,6 @@ int audit_send(int fd, int type, const void *data, unsigned int size)
 
 	return 0;
 }
-hidden_def(audit_send)
 
 /*
  * This function will take a peek into the next packet and see if there's

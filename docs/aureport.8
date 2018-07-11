@@ -1,4 +1,4 @@
-.TH AUREPORT: "8" "Sept 2014" "Red Hat" "System Administration Utilities"
+.TH AUREPORT: "8" "July 2016" "Red Hat" "System Administration Utilities"
 .SH NAME
 aureport \- a tool that produces summary reports of audit daemon logs
 .SH SYNOPSIS
@@ -15,6 +15,9 @@ Report about authentication attempts
 .BR \-a ,\  \-\-avc
 Report about avc messages
 .TP
+.BR \-\-comm
+Report about commands run
+.TP
 .BR \-c ,\  \-\-config
 Report about config changes
 .TP
@@ -25,7 +28,7 @@ Report about crypto events
 Report about events
 .TP
 .BR \-f ,\  \-\-file
-Report about files
+Report about files and af_unix sockets
 .TP
 .B \-\-failed
 Only select failed events for processing in the reports. The default is both success and failed events.
@@ -44,6 +47,9 @@ Use the given \fIfile\fP or \fIdirectory\fP instead of the logs. This is to aid 
 .TP
 .B \-\-input\-logs
 Use the log file location from auditd.conf as input for analysis. This is needed if you are using aureport from a cron job.
+.TP
+.BR \-\-integrity
+Report about integrity events
 .TP
 .BR \-k ,\  \-\-key
 Report about audit rule keys
@@ -113,6 +119,9 @@ Report about users
 .TP
 .BR \-v ,\  \-\-version
 Print the version and exit
+.TP
+.BR \-\-virt
+Report about Virtualization events
 .TP
 .BR \-x ,\  \-\-executable
 Report about executables

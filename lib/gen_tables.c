@@ -33,18 +33,19 @@
 #include <sys/stat.h>
 #include <sys/personality.h>
 #include <sys/mount.h>
-#if !HAVE_DECL_MS_DIRSYNC
+#ifndef MS_DIRSYNC
 #include <linux/fs.h>
 #endif
 #include "gen_tables.h"
 #include "libaudit.h"
-#include "interpret.h"
+#include "auparse-defs.h"
 
 /* This is from asm/ipc.h. Copying it for now as some platforms
  *  * have broken headers. */
 #define SEMOP            1
 #define SEMGET           2
 #define SEMCTL           3
+#define SEMTIMEDOP       4
 #define MSGSND          11
 #define MSGRCV          12
 #define MSGGET          13
@@ -53,6 +54,14 @@
 #define SHMDT           22
 #define SHMGET          23
 #define SHMCTL          24
+
+/*
+ * Defines EHWPOISON to the value found in uapi/asm-generic/errno.h,
+ * which is correct for most (but not all architectures).
+ */
+#ifndef EHWPOISON
+#define EHWPOISON      133
+#endif
 
 
 /* The ratio of table size to number of non-empty elements allowed for a

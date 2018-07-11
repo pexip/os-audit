@@ -5,6 +5,8 @@ XSBC-Pexip-Original-Maintainer: Laurent Bigonville <bigon@debian.org>
 Build-Depends: debhelper (>= 9),
                dh-autoreconf,
                dh-systemd (>= 1.4),
+               dh-python <!nopython>,
+#               dh-golang,
                dpkg-dev (>= 1.16.1~),
                intltool,
                libcap-ng-dev,
@@ -14,14 +16,19 @@ Build-Depends: debhelper (>= 9),
                libldap2-dev,
 #               libprelude-dev,
                libwrap0-dev,
-               python-all-dev (>= 2.6.6-3~),
+               python-all-dev:any (>= 2.6.6-3~) <!nopython>,
+               libpython-all-dev (>= 2.6.6-3~) <!nopython>,
+               python3-all-dev:any <!nopython>,
+               libpython3-all-dev <!nopython>,
                swig
-Standards-Version: 3.9.5
+Build-Depends-Indep: golang-go
+Standards-Version: 3.9.8
 Section: libs
-Homepage: http://people.redhat.com/sgrubb/audit/
-Vcs-Git: git://anonscm.debian.org/collab-maint/audit.git
-Vcs-Browser: http://anonscm.debian.org/gitweb/?p=collab-maint/audit.git
+Homepage: https://people.redhat.com/sgrubb/audit/
+Vcs-Git: https://anonscm.debian.org/git/collab-maint/audit.git
+Vcs-Browser: https://anonscm.debian.org/gitweb/?p=collab-maint/audit.git
 X-Python-Version: >= 2.5
+X-Python3-Version: >= 3.2
 XS-Pexip-Upstream: http://ftp.debian.org/debian/ stretch
 
 Package: auditd
@@ -94,7 +101,7 @@ Description: Dynamic library for security auditing - common files
 Package: libaudit-dev
 Section: libdevel
 Architecture: linux-any
-Depends: libaudit1 (= ${binary:Version}), ${misc:Depends}
+Depends: libaudit1 (= ${binary:Version}), libcap-ng-dev, ${misc:Depends}
 Multi-arch: same
 Description: Header files and static library for security auditing
  The audit-libs-devel package contains the static libraries and header
@@ -106,10 +113,33 @@ Section: python
 Architecture: linux-any
 Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}
 Provides: ${python:Provides}
+Build-Profiles: <!nopython>
 Description: Python bindings for security auditing
  The package contains the Python bindings for libaudit and libauparse, which
  are used to monitor systems for security related events. Python can be used to
  parse and process the security event messages.
+
+Package: python3-audit
+Section: python
+Architecture: linux-any
+Depends: ${misc:Depends}, ${python3:Depends}, ${shlibs:Depends}
+Provides: ${python3:Provides}
+Build-Profiles: <!nopython>
+Description: Python3 bindings for security auditing
+ The package contains the Python3 bindings for libaudit and libauparse, which
+ are used to monitor systems for security related events. Python can be used to
+ parse and process the security event messages.
+
+Package: golang-redhat-audit-dev
+Section: devel
+Architecture: all
+Depends: ${misc:Depends}
+Built-Using: ${misc:Built-Using}
+Description: Go client bindings for the libaudit library
+ The package contains the Go bindings to libaudit that only allows for logging
+ audit events.
+ .
+ This package contains the source.
 
 Package: audispd-plugins
 Section: admin

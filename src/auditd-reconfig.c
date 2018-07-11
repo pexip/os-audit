@@ -33,9 +33,12 @@
 #include "auditd-config.h"
 #include "private.h"
 
+/* externs we need to know about */
+extern void reconfig_ready(void);
+
 /* This is the configuration manager code */
 static pthread_t config_thread;
-static pthread_mutex_t config_lock;
+static pthread_mutex_t config_lock; // Only let one run at a time
 static void *config_thread_main(void *arg);
 
 void init_config_manager(void)
@@ -44,7 +47,7 @@ void init_config_manager(void)
 	audit_msg(LOG_DEBUG, "config_manager init complete");
 }
 
-int start_config_manager(struct auditd_reply_list *rep)
+int start_config_manager(struct auditd_event *e)
 {
 	int retval, rc = 0;
 	
@@ -57,10 +60,10 @@ int start_config_manager(struct auditd_reply_list *rep)
 			PTHREAD_CREATE_DETACHED);
 
 	        if (pthread_create(&config_thread, &detached,
-        	                config_thread_main, rep) < 0) {
+        	                config_thread_main, e) < 0) {
                 	audit_msg(LOG_ERR,
 			"Couldn't create config thread, no config changes");
-			free(rep);
+			free(e);
 			pthread_mutex_unlock(&config_lock);
         	        rc = 1;
 	        }
@@ -68,7 +71,7 @@ int start_config_manager(struct auditd_reply_list *rep)
 	} else {
                	audit_msg(LOG_ERR, 
 			"Config thread already running, no config changes");
-		free(rep);
+		free(e);
        	        rc = 1;
 	}
 	return rc;
@@ -82,7 +85,7 @@ void shutdown_config(void)
 static void *config_thread_main(void *arg)
 {
 	sigset_t sigs;
-	struct auditd_reply_list *rep = (struct auditd_reply_list *)arg;
+	struct auditd_event *e = (struct auditd_event *)arg;
 	struct daemon_conf new_config;
 	extern int send_audit_event(int type, const char *str);
 
@@ -97,29 +100,30 @@ static void *config_thread_main(void *arg)
 
 	if (load_config(&new_config, TEST_AUDITD) == 0) {
 		/* We will re-use the current reply */
-		new_config.sender_uid = rep->reply.signal_info->uid;
-		new_config.sender_pid = rep->reply.signal_info->pid;
-		if (rep->reply.len > 24)
+		new_config.sender_uid = e->reply.signal_info->uid;
+		new_config.sender_pid = e->reply.signal_info->pid;
+		if (e->reply.len > 24)
 			new_config.sender_ctx = 
-				strdup(rep->reply.signal_info->ctx);
+				strdup(e->reply.signal_info->ctx);
 		else
 			new_config.sender_ctx = strdup("?"); 
-		memcpy(rep->reply.msg.data, &new_config, sizeof(new_config));
-		rep->reply.conf = (struct daemon_conf *)rep->reply.msg.data;
-		rep->reply.type = AUDIT_DAEMON_RECONFIG;
-		enqueue_event(rep);
+		memcpy(e->reply.msg.data, &new_config, sizeof(new_config));
+		e->reply.conf = (struct daemon_conf *)e->reply.msg.data;
+		e->reply.type = AUDIT_DAEMON_RECONFIG;
+		reconfig_ready();
 	} else {
 		// need to send a failed event message
 		char txt[MAX_AUDIT_MESSAGE_LENGTH];
 		snprintf(txt, sizeof(txt),
-	    "reconfig aborted, sending auid=%u pid=%d subj=%s res=failed",
-			rep->reply.signal_info->uid,
-			rep->reply.signal_info->pid,
-			(rep->reply.len > 24) ? 
-				rep->reply.signal_info->ctx : "?");
-		send_audit_event(AUDIT_DAEMON_CONFIG, txt);
+	    "op=reconfigure state=no-change auid=%u pid=%d subj=%s res=failed",
+			e->reply.signal_info->uid,
+			e->reply.signal_info->pid,
+			(e->reply.len > 24) ? 
+				e->reply.signal_info->ctx : "?");
+		// FIXME: need to figure out sending this
+		//send_audit_event(AUDIT_DAEMON_CONFIG, txt);
 		free_config(&new_config);
-		free(rep);
+		free(e);
 	}
 
 	pthread_mutex_unlock(&config_lock);

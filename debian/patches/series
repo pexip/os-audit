@@ -1,3 +1,5 @@
 01-no-refusemanualstop.patch
+02-restorecon-path.patch
+03-fix-segfault-sock.patch
 custom-config.diff
 use-augenrules.patch

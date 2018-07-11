@@ -1,6 +1,6 @@
 /*
 * ausearch-lol.c - linked list of linked lists library
-* Copyright (c) 2008,2010 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2008,2010,2014,2016 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -27,6 +27,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "ausearch-common.h"
+#include "private.h"
 
 #define ARRAY_LIMIT 80
 static int ready = 0;
@@ -137,12 +138,12 @@ static int extract_timestamp(const char *b, event *e)
 		tmp = strndupa(b, 340);
 	else
 		tmp = strndupa(b, 80);
-	ptr = strtok(tmp, " ");
+	ptr = audit_strsplit(tmp);
 	if (ptr) {
 		// Check to see if this is the node info
 		if (*ptr == 'n') {
 			tnode = ptr+5;
-			ptr = strtok(NULL, " ");
+			ptr = audit_strsplit(NULL);
 		} else
 			tnode = NULL;
 
@@ -150,7 +151,7 @@ static int extract_timestamp(const char *b, event *e)
 		ttype = ptr+5;
 
 		// Now should be pointing to msg=
-		ptr = strtok(NULL, " ");
+		ptr = audit_strsplit(NULL);
 		if (ptr) {
 			if (*(ptr+9) == '(')
 				ptr+=9;
@@ -199,7 +200,8 @@ static void check_events(lol *lo, time_t sec)
 			if (cur->l->e.sec + 2 < sec) { 
 				cur->status = L_COMPLETE;
 				ready++;
-			} else if (cur->l->e.type < AUDIT_FIRST_EVENT ||
+			} else if (cur->l->e.type == AUDIT_PROCTITLE ||
+				    cur->l->e.type < AUDIT_FIRST_EVENT ||
 				    cur->l->e.type >= AUDIT_FIRST_ANOM_MSG) {
 				// If known to be 1 record event, we are done
 				cur->status = L_COMPLETE;
@@ -223,11 +225,27 @@ int lol_add_record(lol *lo, char *buff)
 	if (extract_timestamp(buff, &e) == 0)
 		return 0;
 
-	ptr = strrchr(buff, 0x0a);
-	if (ptr)
-		*ptr = 0;
-	n.message=strdup(buff);
 	n.type = e.type;
+	n.message = strdup(buff);
+	ptr = strchr(n.message, AUDIT_INTERP_SEPARATOR);
+	if (ptr) {
+		n.interp = ptr;
+		n.mlen = ptr - n.message;
+		*ptr = 0;
+		n.interp = ptr + 1;
+		// since we are most of the way down the string, scan from there
+		ptr = strrchr(n.interp, 0x0a);
+		if (ptr)
+			*ptr = 0;
+	} else {
+		ptr = strrchr(n.message, 0x0a);
+		if (ptr) {
+			*ptr = 0;
+			n.mlen = ptr - n.message;
+		} else
+			n.mlen = MAX_AUDIT_MESSAGE_LENGTH;
+		n.interp = NULL;
+	}
 
 	// Now see where this belongs
 	for (i=0; i<=lo->maxi; i++) {

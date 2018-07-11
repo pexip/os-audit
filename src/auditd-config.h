@@ -1,5 +1,5 @@
 /* auditd-config.h -- 
- * Copyright 2004-2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-2009,2014,2016 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -30,9 +30,9 @@
 #define MEGABYTE 1048576UL
 
 typedef enum { D_FOREGROUND, D_BACKGROUND } daemon_t;
-typedef enum { LF_RAW, LF_NOLOG } logging_formats;
-typedef enum { FT_NONE, FT_INCREMENTAL, FT_DATA, FT_SYNC } flush_technique;
-typedef enum { FA_IGNORE, FA_SYSLOG, FA_EMAIL, FA_EXEC, FA_SUSPEND,
+typedef enum { LF_RAW, LF_NOLOG, LF_ENRICHED } logging_formats;
+typedef enum { FT_NONE, FT_INCREMENTAL, FT_INCREMENTAL_ASYNC, FT_DATA, FT_SYNC } flush_technique;
+typedef enum { FA_IGNORE, FA_SYSLOG, FA_ROTATE, FA_EMAIL, FA_EXEC, FA_SUSPEND,
 		FA_SINGLE, FA_HALT } failure_action_t;
 typedef enum { SZ_IGNORE, SZ_SYSLOG, SZ_SUSPEND, SZ_ROTATE, 
 		SZ_KEEP_LOGS } size_action;
@@ -43,10 +43,12 @@ typedef enum { N_NONE, N_HOSTNAME, N_FQD, N_NUMERIC, N_USER } node_t;
 struct daemon_conf
 {
 	daemon_t daemonize;
+	unsigned int local_events;
 	qos_t qos;		/* use blocking/non-blocking sockets */
 	uid_t sender_uid;	/* the uid for sender of sighup */
 	pid_t sender_pid;	/* the pid for sender of sighup */
 	const char *sender_ctx;	/* the context for the sender of sighup */
+	unsigned int write_logs;
 	const char *log_file;
 	logging_formats log_format;
 	gid_t log_group;
@@ -80,6 +82,7 @@ struct daemon_conf
 	int enable_krb5;
 	const char *krb5_principal;
 	const char *krb5_key_file;
+	int distribute_network_events;
 };
 
 void set_allow_links(int allow);
@@ -91,7 +94,7 @@ int resolve_node(struct daemon_conf *config);
 
 void init_config_manager(void);
 #ifdef AUDITD_EVENT_H
-int start_config_manager(struct auditd_reply_list *rep);
+int start_config_manager(struct auditd_event *e);
 #endif
 void shutdown_config(void);
 void free_config(struct daemon_conf *config);

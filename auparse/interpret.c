@@ -1,21 +1,21 @@
 /*
 * interpret.c - Lookup values to something more readable
-* Copyright (c) 2007-09,2011-14 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2007-09,2011-16 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
-* This software may be freely redistributed and/or modified under the
-* terms of the GNU General Public License as published by the Free
-* Software Foundation; either version 2, or (at your option) any
-* later version.
+* This library is free software; you can redistribute it and/or
+* modify it under the terms of the GNU Lesser General Public
+* License as published by the Free Software Foundation; either
+* version 2.1 of the License, or (at your option) any later version.
 *
-* This program is distributed in the hope that it will be useful,
+* This library is distributed in the hope that it will be useful,
 * but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+* Lesser General Public License for more details.
 *
-* You should have received a copy of the GNU General Public License
-* along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* You should have received a copy of the GNU Lesser General Public
+* License along with this library; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -28,6 +28,7 @@
 #include "internal.h"
 #include "interpret.h"
 #include "auparse-idata.h"
+#include "nvlist.h"
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,6 +54,10 @@
 #include "auparse-defs.h"
 #include "gen_tables.h"
 
+#if !HAVE_DECL_ADDR_NO_RANDOMIZE
+# define ADDR_NO_RANDOMIZE       0x0040000
+#endif
+
 /* This is from asm/ipc.h. Copying it for now as some platforms
  * have broken headers. */
 #define SEMOP            1
@@ -67,6 +72,7 @@
 #define SHMDT           22
 #define SHMGET          23
 #define SHMCTL          24
+#define DIPC            25
 
 #include "captabs.h"
 #include "clone-flagtabs.h"
@@ -104,12 +110,19 @@
 #include "tcpoptnametabs.h"
 #include "pktoptnametabs.h"
 #include "umounttabs.h"
+#include "ioctlreqtabs.h"
+#include "inethooktabs.h"
+#include "netactiontabs.h"
 
 typedef enum { AVC_UNSET, AVC_DENIED, AVC_GRANTED } avc_t;
 typedef enum { S_UNSET=-1, S_FAILED, S_SUCCESS } success_t;
 
+static char *print_escaped(const char *val);
 static const char *print_signals(const char *val, unsigned int base);
 
+// FIXME: move next two declarations to auparse_state_t
+static auparse_esc_t escape_mode = AUPARSE_ESC_TTY;
+static nvlist il;  // Interpretations list
 
 /*
  * This function will take a pointer to a 2 byte Ascii character buffer and
@@ -129,6 +142,175 @@ static unsigned char x2c(const unsigned char *buf)
                 total += (unsigned char)((ptr-AsciiArray) & 0x0F);
 
         return total;
+}
+
+// Check if any characters need tty escaping. Returns how many found.
+static unsigned int need_tty_escape(const unsigned char *s, unsigned int len)
+{
+	unsigned int i = 0, cnt = 0;
+	while (i < len) {
+		if (s[i] < 32)
+			cnt++;
+		i++;
+	}
+	return cnt;
+}
+
+// TTY escaping s string into dest.
+static void tty_escape(const char *s, char *dest, unsigned int len)
+{
+	unsigned int i = 0, j = 0;
+	while (i < len) {
+		if ((unsigned char)s[i] < 32) {
+			dest[j++] = ('\\');
+			dest[j++] = ('0' + ((s[i] & 0300) >> 6));
+			dest[j++] = ('0' + ((s[i] & 0070) >> 3));
+			dest[j++] = ('0' + (s[i] & 0007));
+		} else
+			dest[j++] = s[i];
+		i++;
+	}
+	dest[j] = '\0';	/* terminate string */
+}
+
+static const char sh_set[] = "\"'`$\\";
+static unsigned int need_shell_escape(const char *s, unsigned int len)
+{
+	unsigned int i = 0, cnt = 0;
+	while (i < len) {
+		if (s[i] < 32)
+			cnt++;
+		else if (strchr(sh_set, s[i]))
+			cnt++;
+		i++;
+	}
+	return cnt;
+}
+
+static void shell_escape(const char *s, char *dest, unsigned int len)
+{
+	unsigned int i = 0, j = 0;
+	while (i < len) {
+		if ((unsigned char)s[i] < 32) {
+			dest[j++] = ('\\');
+			dest[j++] = ('0' + ((s[i] & 0300) >> 6));
+			dest[j++] = ('0' + ((s[i] & 0070) >> 3));
+			dest[j++] = ('0' + (s[i] & 0007));
+		} else if (strchr(sh_set, s[i])) {
+			dest[j++] = ('\\');
+			dest[j++] = s[i];
+		} else
+			dest[j++] = s[i];
+		i++;
+	}
+	dest[j] = '\0';	/* terminate string */
+}
+
+static const char quote_set[] = ";'\"`#$&*?[]<>{}\\";
+static unsigned int need_shell_quote_escape(const unsigned char *s, unsigned int len)
+{
+	unsigned int i = 0, cnt = 0;
+	while (i < len) {
+		if (s[i] < 32)
+			cnt++;
+		else if (strchr(quote_set, s[i]))
+			cnt++;
+		i++;
+	}
+	return cnt;
+}
+
+static void shell_quote_escape(const char *s, char *dest, unsigned int len)
+{
+	unsigned int i = 0, j = 0;
+	while (i < len) {
+		if ((unsigned char)s[i] < 32) {
+			dest[j++] = ('\\');
+			dest[j++] = ('0' + ((s[i] & 0300) >> 6));
+			dest[j++] = ('0' + ((s[i] & 0070) >> 3));
+			dest[j++] = ('0' + (s[i] & 0007));
+		} else if (strchr(quote_set, s[i])) {
+			dest[j++] = ('\\');
+			dest[j++] = s[i];
+		} else
+			dest[j++] = s[i];
+		i++;
+	}
+	dest[j] = '\0';	/* terminate string */
+}
+
+/* This should return the count of what needs escaping */
+static unsigned int need_escaping(const char *s, unsigned int len)
+{
+	switch (escape_mode)
+	{
+		case AUPARSE_ESC_RAW:
+			break;
+		case AUPARSE_ESC_TTY:
+			return need_tty_escape(s, len);
+		case AUPARSE_ESC_SHELL:
+			return need_shell_escape(s, len);
+		case AUPARSE_ESC_SHELL_QUOTE:
+			return need_shell_quote_escape(s, len);;
+	}
+	return 0;
+}
+
+static void escape(const char *s, char *dest, unsigned int len)
+{
+	switch (escape_mode)
+	{
+		case AUPARSE_ESC_RAW:
+			return;
+		case AUPARSE_ESC_TTY:
+			return tty_escape(s, dest, len);
+		case AUPARSE_ESC_SHELL:
+			return shell_escape(s, dest, len);
+		case AUPARSE_ESC_SHELL_QUOTE:
+			return shell_quote_escape(s, dest, len);
+	}
+}
+
+static void key_escape(char *orig, char *dest)
+{
+	const char *optr = orig;
+	char *str, *dptr = dest, tmp;
+	while (*optr) {
+		unsigned int klen, cnt;
+		// Find the separator or the end
+		str = strchr(optr, AUDIT_KEY_SEPARATOR);
+		if (str == NULL)
+			str = strchr(optr, 0);
+		klen = str - optr;
+		tmp = *str;
+		*str = 0;
+		cnt = need_escaping(optr, klen);
+		if (cnt == 0)
+			dptr = stpcpy(dptr, optr);
+		else {
+			escape(optr, dptr, klen);
+			dptr = strchr(dest, 0);
+			if (dptr == NULL)
+				return; // Something is really messed up
+		}
+		// Put the separator back
+		*str = tmp;
+		*dptr = tmp;
+		optr = str;
+		// If we are not at the end...
+		if (tmp) {
+			optr++;
+			dptr++;
+		}
+	}
+}
+
+int set_escape_mode(auparse_esc_t mode)
+{
+	if (mode < 0 || mode > AUPARSE_ESC_SHELL_QUOTE)
+		return 1;
+	escape_mode = mode;
+	return 0;
 }
 
 static int is_hex_string(const char *str)
@@ -184,6 +366,112 @@ char *au_unescape(char *buf)
         return str;
 }
 
+/////////// Interpretation list functions ///////////////
+void init_interpretation_list(void)
+{
+	nvlist_create(&il);
+}
+
+/*
+ * Returns 0 on error and 1 on success
+ */
+int load_interpretation_list(const char *buffer)
+{
+	char *saved = NULL, *ptr;
+	char *buf, *val;
+	nvnode n;
+
+	if (buffer == NULL)
+		return 0;
+
+	buf = strdup(buffer);
+	if (strncmp(buf, "SADDR=", 6) == 0) {
+		// We have SOCKADDR record. It has no other values.
+		// Handle it by itself.
+		ptr = strchr(buf+6, '{');
+		if (ptr) {
+			val = ptr;
+			ptr = strchr(val, '}');
+			if (ptr) {
+				n.name = strdup("saddr");
+				n.val = strdup(val);
+				nvlist_append(&il, &n);
+				nvlist_interp_fixup(&il);
+				free(buf);
+				return 1;
+			}
+		}
+		free(buf);
+		return 0;
+	} else {
+		// We handle everything else in this branch
+		ptr = audit_strsplit_r(buf, &saved);
+		if (ptr == NULL) {
+			free(buf);
+			return 0;
+		}
+
+		do {
+			char tmp;
+
+			val = strchr(ptr, '=');
+			if (val) {
+				*val = 0;
+				val++;
+			} else	// Malformed - skip
+				continue;
+			n.name = strdup(ptr);
+			char *c = n.name;
+			while (*c) {
+				*c = tolower(*c);
+				c++;
+			}
+			ptr = strchr(val, ' ');
+			if (ptr) {
+				tmp = *ptr;
+				*ptr = 0;
+			} else
+				tmp = 0;
+
+			n.val = strdup(val);
+			nvlist_append(&il, &n);
+			nvlist_interp_fixup(&il);
+			if (ptr)
+				*ptr = tmp;
+		} while((ptr = audit_strsplit_r(NULL, &saved)));
+	}
+	free(buf);
+	return 1;
+}
+
+/*
+ * Returns malloc'ed buffer on success and NULL if no match
+ */
+const char *_auparse_lookup_interpretation(const char *name)
+{
+	nvnode *n;
+
+	nvlist_first(&il);
+	if (nvlist_find_name(&il, name)) {
+		n = nvlist_get_cur(&il);
+		// This is only called from src/ausearch-lookup.c
+		// it only looks up auid and syscall. One needs
+		// escape, the other does not.
+		if (strstr(name, "id"))
+			return print_escaped(n->interp_val);
+		else
+			return strdup(n->interp_val);
+	}
+	return NULL;
+}
+
+void free_interpretation_list(void)
+{
+	nvlist_clear(&il);
+}
+
+//////////// Start Field Value Interpretations /////////////
+
 static const char *success[3]= { "unset", "no", "yes" };
 static const char *aulookup_success(int s)
 {
@@ -223,6 +511,7 @@ static const char *aulookup_uid(uid_t uid, char *buf, size_t size)
 	if (rc) {
 		name = uid_nvl.cur->name;
 	} else {
+		// This getpw use is OK because its for protocol 1 compatibility
 		// Add it to cache
 		struct passwd *pw;
 		pw = getpwuid(uid);
@@ -383,7 +672,7 @@ static const char *print_ipccall(const char *val, unsigned int base)
 	if (func)
 		return strdup(func);
 	else {
-		if (asprintf(&out, "unknown ipccall(%d)", val) < 0)
+		if (asprintf(&out, "unknown ipccall(%s)", val) < 0)
 			out = NULL;
                 return out;
 	}
@@ -407,15 +696,15 @@ static const char *print_socketcall(const char *val, unsigned int base)
 	if (func)
 		return strdup(func);
 	else {
-		if (asprintf(&out, "unknown socketcall(%d)", val) < 0)
+		if (asprintf(&out, "unknown socketcall(%s)", val) < 0)
 			out = NULL;
                 return out;
 	}
 }
 
-static const char *print_syscall(const char *val, const idata *id)
+static const char *print_syscall(const idata *id)
 {
-        const char *sys;
+	const char *sys;
 	char *out;
 	int machine = id->machine, syscall = id->syscall;
 	unsigned long long a0 = id->a0;
@@ -423,7 +712,7 @@ static const char *print_syscall(const char *val, const idata *id)
         if (machine < 0)
                 machine = audit_detect_machine();
         if (machine < 0) {
-                out = strdup(val);
+                out = strdup(id->val);
                 return out;
         }
         sys = audit_syscall_to_name(syscall, machine);
@@ -462,14 +751,15 @@ static const char *print_exit(const char *val)
         }
 
         if (ival < 0) {
-		if (asprintf(&out, "%lld(%s)", ival, strerror(-ival)) < 0)
+		if (asprintf(&out, "%s(%s)", audit_errno_to_name(-ival),
+					strerror(-ival)) < 0)
 			out = NULL;
 		return out;
         }
         return strdup(val);
 }
 
-static const char *print_escaped(const char *val)
+static char *print_escaped(const char *val)
 {
 	const char *out;
 
@@ -494,12 +784,29 @@ static const char *print_escaped(const char *val)
                 *term = 0;
                 printf("%s ", val); */
         } else if (val[0] == '0' && val[1] == '0')
-                out = au_unescape((char *)&val[2]); // Abstract name
+                out = au_unescape((char *)&val[2]); // Abstract name af_unix
 	else
                 out = au_unescape((char *)val);
 	if (out)
 		return out;
 	return strdup(val); // Something is wrong with string, just send as is
+}
+
+static const char *print_proctitle(const char *val)
+{
+	char *out = (char *)print_escaped(val);
+	if (*val != '"') {
+		size_t len = strlen(val) / 2;
+		const char *end = out + len;
+		char *ptr = out;
+		while ((ptr  = rawmemchr(ptr, '\0'))) {
+			if (ptr >= end)
+				break;
+			*ptr = ' ';
+			ptr++;
+		}
+	}
+	return out;
 }
 
 static const char *print_perm(const char *val)
@@ -596,11 +903,17 @@ static const char *print_mode_short_int(unsigned int ival)
         // check on special bits
         buf[0] = 0;
         if (S_ISUID & ival)
-                strcat(buf, ",suid");
-        if (S_ISGID & ival)
-                strcat(buf, ",sgid");
-        if (S_ISVTX & ival)
-                strcat(buf, ",sticky");
+                strcat(buf, "suid");
+        if (S_ISGID & ival) {
+                if (buf[0])
+			strcat(buf, ",");
+		strcat(buf, "sgid");
+	}
+        if (S_ISVTX & ival) {
+                if (buf[0])
+			strcat(buf, ",");
+                strcat(buf, "sticky");
+	}
 
 	// and the read, write, execute flags in octal
 	if (buf[0] == 0) {
@@ -729,34 +1042,40 @@ static const char *print_sockaddr(const char *val)
                                 const struct sockaddr_un *un =
                                         (struct sockaddr_un *)saddr;
                                 if (un->sun_path[0])
-					rc = asprintf(&out, "%s %s", str,
+					rc = asprintf(&out,
+						"{ fam=%s path=%s }", str,
 						      un->sun_path);
                                 else // abstract name
-					rc = asprintf(&out, "%s %.108s", str,
-						      &un->sun_path[1]);
+					rc = asprintf(&out,
+						"{ fam=%s path=%.108s }",
+							str, &un->sun_path[1]);
                         }
                         break;
                 case AF_INET:
                         if (slen < sizeof(struct sockaddr_in)) {
-				rc = asprintf(&out, "%s sockaddr len too short",
-					      str);
+				rc = asprintf(&out,
+					    "{ fam=%s sockaddr len too short }",
+					     str);
 				break;
                         }
                         slen = sizeof(struct sockaddr_in);
                         if (getnameinfo(saddr, slen, name, NI_MAXHOST, serv,
                                 NI_MAXSERV, NI_NUMERICHOST |
                                         NI_NUMERICSERV) == 0 ) {
-				rc = asprintf(&out, "%s host:%s serv:%s", str,
-					      name, serv);
+				rc = asprintf(&out,
+					      "{ fam=%s laddr=%s lport=%s }",
+					      str, name, serv);
                         } else
-				rc = asprintf(&out, "%s (error resolving addr)",
-					      str);
+				rc = asprintf(&out,
+					    "{ fam=%s (error resolving addr) }",
+					    str);
                         break;
                 case AF_AX25:
                         {
                                 const struct sockaddr_ax25 *x =
                                                 (struct sockaddr_ax25 *)saddr;
-				rc = asprintf(&out, "%s call:%c%c%c%c%c%c%c",
+				rc = asprintf(&out,
+					      "{ fam=%s call=%c%c%c%c%c%c%c }",
 					      str,
 					      x->sax25_call.ax25_call[0],
 					      x->sax25_call.ax25_call[1],
@@ -771,15 +1090,16 @@ static const char *print_sockaddr(const char *val)
                         {
                                 const struct sockaddr_ipx *ip =
                                                 (struct sockaddr_ipx *)saddr;
-				rc = asprintf(&out, "%s port:%d net:%u", str,
-					      ip->sipx_port, ip->sipx_network);
+				rc = asprintf(&out,
+					"{ fam=%s lport=%d ipx-net=%u }",
+					str, ip->sipx_port, ip->sipx_network);
                         }
                         break;
                 case AF_ATMPVC:
                         {
                                 const struct sockaddr_atmpvc* at =
                                         (struct sockaddr_atmpvc *)saddr;
-				rc = asprintf(&out, "%s int:%d", str,
+				rc = asprintf(&out, "{ fam=%s int=%d }", str,
 					      at->sap_addr.itf);
                         }
                         break;
@@ -787,33 +1107,36 @@ static const char *print_sockaddr(const char *val)
                         {
                                 const struct sockaddr_x25* x =
                                         (struct sockaddr_x25 *)saddr;
-				rc = asprintf(&out, "%s addr:%.15s", str,
-					      x->sx25_addr.x25_addr);
+				rc = asprintf(&out, "{ fam=%s laddr=%.15s }",
+					      str, x->sx25_addr.x25_addr);
                         }
                         break;
                 case AF_INET6:
                         if (slen < sizeof(struct sockaddr_in6)) {
 				rc = asprintf(&out,
-					      "%s sockaddr6 len too short",
-					      str);
+					   "{ fam=%s sockaddr6 len too short }",
+					   str);
 				break;
                         }
                         slen = sizeof(struct sockaddr_in6);
                         if (getnameinfo(saddr, slen, name, NI_MAXHOST, serv,
                                 NI_MAXSERV, NI_NUMERICHOST |
                                         NI_NUMERICSERV) == 0 ) {
-				rc = asprintf(&out, "%s host:%s serv:%s", str,
-					      name, serv);
+				rc = asprintf(&out,
+						"{ fam=%s laddr=%s lport=%s }",
+						str, name, serv);
                         } else
-				rc = asprintf(&out, "%s (error resolving addr)",
-					      str);
+				rc = asprintf(&out,
+					    "{ fam=%s (error resolving addr) }",
+					    str);
                         break;
                 case AF_NETLINK:
                         {
                                 const struct sockaddr_nl *n =
                                                 (struct sockaddr_nl *)saddr;
-				rc = asprintf(&out, "%s pid:%u", str,
-					      n->nl_pid);
+				rc = asprintf(&out,
+					  "{ fam=%s nlnk-fam=%u nlnk-pid=%u }",
+					  str, n->nl_family, n->nl_pid);
                         }
                         break;
         }
@@ -1707,6 +2030,41 @@ static const char *print_umount(const char *val)
 	return strdup(buf);
 }
 
+static const char *print_ioctl_req(const char *val)
+{
+	int req;
+	char *out;
+	const char *r;
+
+	errno = 0;
+	req = strtoul(val, NULL, 16);
+	if (errno) {
+		if (asprintf(&out, "conversion error(%s)", val) < 0)
+			out = NULL;
+                return out;
+	}
+
+	r = ioctlreq_i2s(req);
+	if (r != NULL)
+		return strdup(r);
+	if (asprintf(&out, "0x%s", val) < 0)
+		out = NULL;
+	return out;
+}
+
+static const char *print_exit_syscall(const char *val)
+{
+	char *out;
+
+	if (strcmp(val, "0") == 0)
+		out = strdup("EXIT_SUCCESS");
+	else if (strcmp(val, "1") == 0)
+		out = strdup("EXIT_FAILURE");
+	else
+		out = strdup("UNKNOWN");
+	return out;
+}
+
 static const char *print_a0(const char *val, const idata *id)
 {
 	char *out;
@@ -1787,6 +2145,8 @@ static const char *print_a0(const char *val, const idata *id)
 			return print_dirfd(val);
                	else if (strcmp(sys, "ipccall") == 0)
 			return print_ipccall(val, 16);
+		else if (strncmp(sys, "exit", 4) == 0)
+			return print_exit_syscall(val);
 	}
 	if (asprintf(&out, "0x%s", val) < 0)
 			out = NULL;
@@ -1856,6 +2216,8 @@ static const char *print_a1(const char *val, const idata *id)
 			return print_signals(val, 16);
 		else if (strcmp(sys, "umount2") == 0)
 			return print_umount(val);
+		else if (strcmp(sys, "ioctl") == 0)
+			return print_ioctl_req(val);
 	}
 	if (asprintf(&out, "0x%s", val) < 0)
 			out = NULL;
@@ -2082,6 +2444,71 @@ static const char *print_protocol(const char *val)
 	return out;
 }
 
+/* FIXME - this assumes inet hook. Could also be an arp hook */
+static const char *print_hook(const char *val)
+{
+	int hook;
+	char *out;
+	const char *str;
+
+	errno = 0;
+	hook = strtoul(val, NULL, 16);
+	if (errno) {
+		if (asprintf(&out, "conversion error(%s)", val) < 0)
+			out = NULL;
+		return out;
+	}
+	str = inethook_i2s(hook);
+	if (str == NULL) {
+		if (asprintf(&out, "unknown hook(%s)", val) < 0)
+			out = NULL;
+		return out;
+	} else
+		return strdup(str);
+}
+
+static const char *print_netaction(const char *val)
+{
+	int action;
+	char *out;
+	const char *str;
+
+	errno = 0;
+	action = strtoul(val, NULL, 16);
+	if (errno) {
+		if (asprintf(&out, "conversion error(%s)", val) < 0)
+			out = NULL;
+		return out;
+	}
+	str = netaction_i2s(action);
+	if (str == NULL) {
+		if (asprintf(&out, "unknown action(%s)", val) < 0)
+			out = NULL;
+		return out;
+	} else
+		return strdup(str);
+}
+
+/* Ethernet packet types */
+static const char *print_macproto(const char *val)
+{
+	int type;
+	char *out;
+
+	errno = 0;
+	type = strtoul(val, NULL, 16);
+	if (errno) {
+		if (asprintf(&out, "conversion error(%s)", val) < 0)
+			out = NULL;
+		return out;
+	}
+	if (type == 0x0800)
+		return strdup("IP");
+	else if (type == 0x0806)
+		return strdup("ARP");
+	return strdup("UNKNOWN");
+}
+
 static const char *print_addr(const char *val)
 {
 	char *out = strdup(val);
@@ -2272,6 +2699,10 @@ int lookup_type(const char *name)
 	return AUPARSE_TYPE_UNCLASSIFIED;
 }
 
+/*
+ * This is the main entry point for the auparse library. Call chain is:
+ * auparse_interpret_field -> nvlist_interp_cur_val -> interpret
+ */
 const char *interpret(const rnode *r)
 {
 	const nvlist *nv = &r->nv;
@@ -2330,16 +2761,40 @@ int auparse_interp_adjust_type(int rtype, const char *name, const char *val)
 		type = AUPARSE_TYPE_MODE_SHORT;
 	else if (rtype == AUDIT_CRYPTO_KEY_USER && strcmp(name, "fp") == 0)
 		type = AUPARSE_TYPE_UNCLASSIFIED;
+	else if ((strcmp(name, "id") == 0) &&
+		(rtype == AUDIT_ADD_GROUP || rtype == AUDIT_GRP_MGMT ||
+			rtype == AUDIT_DEL_GROUP))
+		type = AUPARSE_TYPE_GID;
 	else
 		type = lookup_type(name);
 
 	return type;
 }
-hidden_def(auparse_interp_adjust_type)
 
-const char *auparse_do_interpretation(int type, const idata *id)
+/*
+ * This can be called by either interpret() or from ausearch-report or
+ * auditctl-listing.c. Returns a malloc'ed buffer that the caller must free.
+ */
+char *auparse_do_interpretation(int type, const idata *id)
 {
 	const char *out;
+
+	// Check the interpretations list first
+	if (il.head) {
+		nvlist_first(&il);
+		if (nvlist_find_name(&il, id->name)) {
+			const char *val = il.cur->interp_val;
+
+			if (val) {
+				if (type == AUPARSE_TYPE_UID ||
+						type == AUPARSE_TYPE_GID)
+					return print_escaped(val);
+				else
+					return strdup(val);
+			}
+		}
+	}
+
 	switch(type) {
 		case AUPARSE_TYPE_UID:
 			out = print_uid(id->val, 10);
@@ -2348,7 +2803,7 @@ const char *auparse_do_interpretation(int type, const idata *id)
 			out = print_gid(id->val, 10);
 			break;
 		case AUPARSE_TYPE_SYSCALL:
-			out = print_syscall(id->val, id);
+			out = print_syscall(id);
 			break;
 		case AUPARSE_TYPE_ARCH:
 			out = print_arch(id->val, id->machine);
@@ -2357,6 +2812,7 @@ const char *auparse_do_interpretation(int type, const idata *id)
 			out = print_exit(id->val);
 			break;
 		case AUPARSE_TYPE_ESCAPED:
+		case AUPARSE_TYPE_ESCAPED_KEY:
 			out = print_escaped(id->val);
                         break;
 		case AUPARSE_TYPE_PERM:
@@ -2434,6 +2890,21 @@ const char *auparse_do_interpretation(int type, const idata *id)
 		case AUPARSE_TYPE_MMAP:
 			out = print_mmap(id->val);
 			break;
+		case AUPARSE_TYPE_PROCTITLE:
+			out = print_proctitle(id->val);
+			break;
+		case AUPARSE_TYPE_HOOK:
+			out = print_hook(id->val);
+			break;
+		case AUPARSE_TYPE_NETACTION:
+			out = print_netaction(id->val);
+			break;
+		case AUPARSE_TYPE_MACPROTO:
+			out = print_macproto(id->val);
+			break;
+		case AUPARSE_TYPE_IOCTL_REQ:
+			out = print_ioctl_req(id->val);
+			break;
 		case AUPARSE_TYPE_MAC_LABEL:
 		case AUPARSE_TYPE_UNCLASSIFIED:
 		default:
@@ -2441,7 +2912,57 @@ const char *auparse_do_interpretation(int type, const idata *id)
 			break;
         }
 
+	if (escape_mode != AUPARSE_ESC_RAW) {
+		char *str = NULL;
+		unsigned int len = strlen(out);
+		if (type == AUPARSE_TYPE_ESCAPED_KEY) {
+			// The audit key separator causes a false
+			// positive in deciding to escape.
+			str = strchr(out, AUDIT_KEY_SEPARATOR);
+		}
+		if (str == NULL) {
+			// This is the normal path
+			unsigned int cnt = need_escaping(out, len);
+			if (cnt) {
+				char *dest = malloc(len + 1 + (3*cnt));
+				if (dest)
+					escape(out, dest, len);
+				free((void *)out);
+				out = dest;
+			}
+		} else {
+			// We have multiple keys. Need to look at each one.
+			unsigned int cnt = 0;
+			char *ptr = out;
+
+ 			while (*ptr) {
+				unsigned int klen = str - ptr;
+				char tmp = *str;
+				*str = 0;
+				cnt += need_escaping(ptr, klen);
+				*str = tmp;
+				ptr = str;
+				// If we are not at the end...
+				if (tmp) {
+					ptr++;
+					str = strchr(ptr, AUDIT_KEY_SEPARATOR);
+					// If we don't have anymore, just
+					// point to the end
+					if (str == NULL)
+						str = strchr(ptr, 0);
+				}
+			}
+			if (cnt) {
+				// I expect this code to never get used.
+				// Its here just in the off chance someone
+				// actually put a control character in a key.
+				char *dest = malloc(len + 1 + (3*cnt));
+				if (dest)
+					key_escape(out, dest);
+				free((void *)out);
+				out = dest;
+			}
+		}
+	}
 	return out;
 }
-hidden_def(auparse_do_interpretation)
-

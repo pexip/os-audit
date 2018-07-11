@@ -1,5 +1,5 @@
 /* ausearch-options.c - parse commandline options and configure ausearch
- * Copyright 2005-08,2010-11,2014 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-08,2010-11,2014,2016 Red Hat Inc., Durham, North Carolina.
  * Copyright (c) 2011 IBM Corp.
  * All Rights Reserved.
  *
@@ -49,6 +49,7 @@ pid_t event_pid = -1, event_ppid = -1;
 success_t event_success = S_UNSET;
 int event_exact_match = 0;
 uid_t event_uid = -1, event_euid = -1, event_loginuid = -2;
+const char *event_tuid = NULL, *event_teuid = NULL, *event_tauid = NULL;
 int event_syscall = -1, event_machine = -1;
 int event_ua = 0, event_ga = 0, event_se = 0;
 int just_one = 0;
@@ -260,17 +261,18 @@ static int convert_str_to_msg(const char *optarg)
 static int parse_msg(const char *optarg)
 {
 	int retval = 0;
+	char *saved;
 
 	if (strchr(optarg, ',')) {
 		char *ptr, *tmp = strdup(optarg);
 		if (tmp == NULL)
 			return -1;
-		ptr = strtok(tmp, ",");
+		ptr = strtok_r(tmp, ",", &saved);
 		while (ptr) {
 			retval = convert_str_to_msg(ptr);
 			if (retval != 0)
 				break;
-			ptr = strtok(NULL, ",");
+			ptr = strtok_r(NULL, ",", &saved);
 		}
 		free(tmp);
 		return retval;
@@ -941,6 +943,7 @@ int check_params(int count, char *vars[])
 					break;
 				}
 				event_uid = pw->pw_uid;
+				event_tuid = strdup(optarg);
                 	}
 			c++;
 			break;
@@ -973,6 +976,7 @@ int check_params(int count, char *vars[])
 					break;
 				}
 				event_euid = pw->pw_uid;
+				event_teuid = strdup(optarg);
                 	}
 			c++;
 			break;
@@ -1005,6 +1009,9 @@ int check_params(int count, char *vars[])
 					break;
 				}
 				event_uid = pw->pw_uid;
+				event_tuid = strdup(optarg);
+				event_teuid = strdup(optarg);
+				event_tauid = strdup(optarg);
                 	}
 			event_ua = 1;
 			event_euid = event_uid;
@@ -1055,6 +1062,7 @@ int check_params(int count, char *vars[])
 					break;
 				}
 				event_loginuid = pw->pw_uid;
+				event_tauid = strdup(optarg);
                         }
 			}
 			c++;

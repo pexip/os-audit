@@ -1,6 +1,6 @@
 /*
 * ausearch-lookup.c - Lookup values to something more readable
-* Copyright (c) 2005-06,2011-12 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-06,2011-12,2015-16 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -30,6 +30,7 @@
 #include "ausearch-lookup.h"
 #include "ausearch-options.h"
 #include "ausearch-nvpair.h"
+#include "auparse-idata.h"
 
 /* This is the name/value pair used by search tables */
 struct nv_pair {
@@ -75,6 +76,14 @@ const char *aulookup_syscall(llist *l, char *buf, size_t size)
 		snprintf(buf, size, "%d", l->s.syscall);
 		return buf;
 	}
+
+	sys = _auparse_lookup_interpretation("syscall");
+	if (sys) {
+		snprintf(buf, size, "%s", sys);
+		free(sys);
+		return buf;
+	}
+
 	machine = audit_elf_to_machine(l->s.arch);
 	if (machine < 0)
 		return Q;
@@ -92,7 +101,8 @@ const char *aulookup_syscall(llist *l, char *buf, size_t size)
 			snprintf(buf, size, "%s(%s)", sys, func);
 			return buf;
 		}
-		return sys;
+		snprintf(buf, size, "%s", sys);
+		return buf;
 	}
 	snprintf(buf, size, "%d", l->s.syscall);
 	return buf;
@@ -183,7 +193,7 @@ static nvlist uid_nvl;
 static int uid_list_created=0;
 const char *aulookup_uid(uid_t uid, char *buf, size_t size)
 {
-	char *name = NULL;
+	const char *name;
 	int rc;
 
 	if (report_format <= RPT_DEFAULT) {
@@ -192,6 +202,13 @@ const char *aulookup_uid(uid_t uid, char *buf, size_t size)
 	}
 	if (uid == -1) {
 		snprintf(buf, size, "unset");
+		return buf;
+	}
+
+	name = _auparse_lookup_interpretation("auid");
+	if (name) {
+		snprintf(buf, size, "%s", name);
+		free(name);
 		return buf;
 	}
 
@@ -205,6 +222,7 @@ const char *aulookup_uid(uid_t uid, char *buf, size_t size)
 	if (rc) {
 		name = uid_nvl.cur->name;
 	} else {
+		// This getpw use is OK because its for protocol 1 compatibility
 		// Add it to cache
 		struct passwd *pw;
 		pw = getpwuid(uid);
@@ -230,59 +248,6 @@ void aulookup_destroy_uid_list(void)
 
 	nvlist_clear(&uid_nvl); 
 	uid_list_created = 0;
-}
-
-static nvlist gid_nvl;
-static int gid_list_created=0;
-const char *aulookup_gid(gid_t gid, char *buf, size_t size)
-{
-	char *name = NULL;
-	int rc;
-
-	if (report_format <= RPT_DEFAULT) {
-		snprintf(buf, size, "%d", gid);
-		return buf;
-	}
-	if (gid == -1) {
-		snprintf(buf, size, "unset");
-		return buf;
-	}
-
-	// Check the cache first
-	if (gid_list_created == 0) {
-		nvlist_create(&gid_nvl);
-		nvlist_clear(&gid_nvl);
-		gid_list_created = 1;
-	}
-	rc = nvlist_find_val(&gid_nvl, gid);
-	if (rc) {
-		name = gid_nvl.cur->name;
-	} else {
-		// Add it to cache
-		struct group *gr;
-		gr = getgrgid(gid);
-		if (gr) {
-			nvnode nv;
-			nv.name = strdup(gr->gr_name);
-			nv.val = gid;
-			nvlist_append(&gid_nvl, &nv);
-			name = gid_nvl.cur->name;
-		}
-	}
-	if (name != NULL)
-		snprintf(buf, size, "%s", name);
-	else
-		snprintf(buf, size, "unknown(%d)", gid);
-	return buf;
-}
-
-void aulookup_destroy_gid_list(void)
-{
-	if (gid_list_created == 0)
-		return;
-
-	nvlist_clear(&gid_nvl); 
-	gid_list_created = 0;
 }
 
 int is_hex_string(const char *str)
@@ -354,6 +319,52 @@ char *unescape(const char *buf)
 	}
 	*strptr = 0;
 	return str;
+}
+
+int need_sanitize(const unsigned char *s, unsigned int len)
+{
+	unsigned int i = 0;
+	while (i < len) {
+		if (s[i] < 32)
+			return 1;
+		i++;
+	}
+	return 0;
+}
+
+void sanitize(const char *s, unsigned int len)
+{
+	unsigned int i = 0;
+	while (i < len) {
+		if ((unsigned char)s[i] < 32) {
+			putchar('\\');
+			putchar('0' + ((s[i] & 0300) >> 6));
+			putchar('0' + ((s[i] & 0070) >> 3));
+			putchar('0' + (s[i] & 0007));
+		} else
+			putchar(s[i]);
+		i++;
+	}
+}
+
+void safe_print_string_n(const char *s, unsigned int len, int ret)
+{
+	if (len > MAX_AUDIT_MESSAGE_LENGTH)
+		len = MAX_AUDIT_MESSAGE_LENGTH;
+
+	if (need_sanitize(s, len)) {
+		sanitize(s, len);
+		if (ret)
+			putchar('\n');
+	} else if (ret)
+		puts(s);
+	else
+		printf("%s", s);
+}
+
+void safe_print_string(const char *s, int ret)
+{
+	safe_print_string_n(s, strlen(s), ret);
 }
 
 /* Represent c as a character within a quoted string, and append it to buf. */

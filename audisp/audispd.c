@@ -1,5 +1,5 @@
 /* audispd.c --
- * Copyright 2007-08,2013 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2007-08,2013,2016 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -333,13 +333,6 @@ int main(int argc, char *argv[])
 	struct sigaction sa;
 	int i;
 
-#ifndef DEBUG
-	/* Make sure we are root */
-	if (getuid() != 0) {
-		fprintf(stderr, "You must be root to run this program.\n");
-		return 4;
-	}
-#endif
 	set_aumessage_mode(MSG_SYSLOG, DBG_YES);
 
 	/* Clear any procmask set by libev */
@@ -401,7 +394,7 @@ int main(int argc, char *argv[])
 
 	/* if no plugins - exit */
 	if (plist_count(&plugin_conf) == 0) {
-		syslog(LOG_ERR, "No plugins found, exiting");
+		syslog(LOG_NOTICE, "No plugins found, exiting");
 		return 0;
 	}
 
@@ -423,7 +416,7 @@ int main(int argc, char *argv[])
 
 	/* Let the queue initialize */
 	init_queue(daemon_config.q_depth);
-	syslog(LOG_NOTICE, 
+	syslog(LOG_INFO, 
 		"audispd initialized with q_depth=%d and %d active plugins",
 		daemon_config.q_depth, i);
 
@@ -652,13 +645,19 @@ static int event_loop(void)
 				"UNKNOWN[%d]", e->hdr.type);
 			type = unknown;
 		}
-
-		if (daemon_config.node_name_format != N_NONE) {
-			len = asprintf(&v, "node=%s type=%s msg=%.*s\n", 
-				name, type, e->hdr.size, e->data);
+		// Protocol 1 is not formatted
+		if (e->hdr.ver == AUDISP_PROTOCOL_VER) {
+			if (daemon_config.node_name_format != N_NONE) {
+			    len = asprintf(&v, "node=%s type=%s msg=%.*s\n", 
+					name, type, e->hdr.size, e->data);
+			} else
+				len = asprintf(&v, "type=%s msg=%.*s\n", 
+					type, e->hdr.size, e->data);
+		// Protocol 2 events are already formatted
+		} else if (e->hdr.ver == AUDISP_PROTOCOL_VER2) {
+			len = asprintf(&v, "%.*s\n", e->hdr.size, e->data);
 		} else
-			len = asprintf(&v, "type=%s msg=%.*s\n", 
-				type, e->hdr.size, e->data);
+			len = 0;
 		if (len <= 0) {
 			v = NULL;
 			free(e); /* Either corrupted event or no memory */
@@ -685,7 +684,7 @@ static int event_loop(void)
 
 			/* Now send the event to the right child */
 			if (conf->p->type == S_SYSLOG) 
-				send_syslog(v);
+				send_syslog(v, e->hdr.ver);
 			else if (conf->p->type == S_AF_UNIX) {
 				if (conf->p->format == F_STRING)
 					send_af_unix_string(v, len);
@@ -826,12 +825,25 @@ static void process_inbound_event(int fd)
 
 	if (rc > 0) {
 		/* Sanity check */
-		if (e->hdr.ver != AUDISP_PROTOCOL_VER ||
-				e->hdr.hlen != sizeof(e->hdr) ||
-				e->hdr.size > MAX_AUDIT_MESSAGE_LENGTH) {
-			free(e);
+		if ((e->hdr.ver != AUDISP_PROTOCOL_VER &&
+				e->hdr.ver != AUDISP_PROTOCOL_VER2)) {
 			syslog(LOG_ERR,
-				"Dispatcher protocol mismatch, exiting");
+				"Unknown dispatcher protocol %u, exiting",
+					e->hdr.ver);
+			free(e);
+			exit(1);
+		}
+		if (e->hdr.hlen != sizeof(e->hdr)) {
+			syslog(LOG_ERR,
+				    "Header length mismatch %u %lu, exiting",
+					e->hdr.hlen, sizeof(e->hdr));
+			free(e);
+			exit(1);
+		}
+		if (e->hdr.size > MAX_AUDIT_MESSAGE_LENGTH) {
+			syslog(LOG_ERR,	"Header size mismatch %d, exiting",
+					e->hdr.size);
+			free(e);
 			exit(1);
 		}
 

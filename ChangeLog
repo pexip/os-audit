@@ -1,3 +1,181 @@
+2.6.7
+- Non-active log files should be read only
+- In augenrules, restore the selinux context if restorecon is installed
+- Update gitignore file and remove ltmain.sh (Richard Guy Briggs)
+- Replace Group Separator with whitespace in syslog audispd plugin
+- In auditd, check for euid rather than capabilities when local_events = no
+- If events are piped from ausearch to audisp-remote, flush queue when done
+- In auditctl, correct handling of -F key so that key is not part of value
+- In auparse, move static variables to auparse_state_t
+
+2.6.6
+- Interpret ioctlcmd fields
+- Fix the permission of the audit logging directory
+- Fix timeout in autrace better
+- Add gitignore file to ignore generated files if using git (Richard Guy Briggs)
+- audit_log_user_comm_message now resolves comm if NULL is passed
+- Update syscall table
+- Fix multi-key support in auparse which was broke in tty escape bug fix
+- Add multi-key support for syscall rules
+
+2.6.5
+- Correct the header length for dispatched events
+- Revise buffer handling in auditd to fix dispatched events
+- Fix spelling in man pages
+- Add documentation link to systemd unit file
+- Correct af_unix pathname detection in ausearch/report
+- Add remote_ended info to audisp-remote stat dump
+
+2.6.4
+- Fix interpretation of saddr fields when using enriched events
+- In netlink_handler of auditd, ensure ack_func is initialized to NULL
+- Use full path to auditctl in augenrules
+- Raise the number of log files auditd allows to 999
+- In auditd reconfig, update use_libwrap setting
+- Fix memory leak in reconfigure
+- Add EHWPOISON definition for errno lookup table if missing (Thomas Petazzoni)
+- Better detect struct audit_status existence (Thomas Petazzoni)
+- Rework dispatcher protocol 1 to be what it used to be
+
+2.6.3
+- Fix NULL pointer deref in auparse
+- Optionally add dependency to libcap-ng in audit.pc
+
+2.6.2
+- Fix ausearch segfault when using numeric uids
+- In auparse move aulol structure into auparse_state_t
+- Save and restore libcap-ng state when doing a capability check
+- Require auparse_state_t pointer on auparse_set_escape_mode
+
+2.6.1
+- Do capabilities check rather than uid
+- Auditd fixup directory and file permissions on startup
+- Add some missing config items to auditd reconfigure
+- In audisp-remote add warn_once and warn_once_continue action handlers
+- In audisp-remote only emit 1 warning when disk_full or error is reached.
+- Aulast now searches on user name as a string for enriched events
+- Ausearch now searches on user name as a string for enriched events
+- Create audit-stop.rules to clean up audit subsystem on stop
+- Adjust LDFLAGS for cross compiled helper utilities (Laurent Bigonville)
+- Fix event formatting issue in audispd
+- Fix bug causing ack to not be sent from auditd to audisp-remote
+
+2.6
+- Auditd support for enriched data: uid/gid, saddr splitting, arch, syscall
+- Make all libraries and utilities support and use enriched events
+- Define dispatcher protocol to version 2
+- Standardize all saddr interpretations in auparse
+- Fix another DST bug in ausearch time conversion (#1334772)
+- In autrace, if rule count loop times out don't assume 0 rules (#1344268)
+- In auditd, check space left a little more often (#1345854)
+
+2.5.2
+- Fix memory leak caused by unneeded reference in auparse python bindings
+- Revise function hiding technique to better protect audit ABI
+- Interpret old-auid, exit syscall parameters
+- Create local_events config option to auditd
+- Create write_logs option for auditd and deprecate NOLOG log_format option
+
+2.5.1
+- Updated and added audit rules
+- Updated errno table for 4.4 kernel
+- Change interpretation of exit to use errno define rather than a number
+- Add distribute_network configuration option to auditd
+- New aggregate only mode for auditd
+- Cleanup tmp file left by augenrules --check
+- Fix initial build from svn without golang support installed
+- Update auparse interpretations for hook, action, macproto, chardev, and net
+- Update interpretations for the 4.5 kernel
+- Fix DST bug in ausearch/report time handling
+- Add optional ExecStopPost to auditd.service to clear rules on service exit
+- Update ausearch/report buffer size for locales with large time formats
+- Add auparse_feed_age_events function to auparse library
+- Use auparse_feed_age_events in zos & prelude plugins
+
+2.5
+- Make augenrules the default method to load audit rules
+- Put rules in its own directory and break out rules into groups
+- Have auditd do a fsync before closing log
+- Make default flush setting larger
+- In auparse. terminate the generated strings (Burn Alting)
+- In auditd, add incremental_async flushing mode
+- Clean up dangling fields in DAEMON events
+- Add audit by process name support to auditctl (Richard Briggs)
+- Relax permissions on systemd files
+- Fix auparse to handle interlaced events (Burn Alting)
+- Allow more syslog facilities in audispd-syslog (Aleksander Adamowski)
+
+2.4.5
+- Fix auditd disk flushing for data and sync modes
+- Fix auditctl to not show options not supported on older OS
+- Add audit.m4 file to aid adding support to other projects
+- Fix C99 inline function build issue
+- Add account lock and unlock event types
+- Change logging loophole check to geteuid()
+- Fix ausearch to not consider AUDIT_PROCTITLE events malformed (Burn Alting)
+- Fix ausearch to parse FEATURE_CHANGE events
+
+2.4.4
+- Fix linked list correctness in ausearch/report
+- Add more cross compile fixups (Clayton Shotwell)
+- Update auparse python bindings
+- Update libev to 4.20
+- Fix CVE-2015-5186 Audit: log terminal emulator escape sequences handling
+
+2.4.3
+- Add python3 support for libaudit
+- Cleanup automake warnings
+- Add AuParser_search_add_timestamp_item_ex to python bindings
+- Add AuParser_get_type_name to python bindings
+- Correct processing of obj_gid in auditctl (Aleksander Zdyb)
+- Make plugin config file parsing more robust for long lines (#1235457)
+- Make auditctl status print lost field as unsigned number
+- Add interpretation mode for auditctl -s
+- Add python3 support to auparse library
+- Make --enable-zos-remote a build time configuration option (Clayton Shotwell)
+- Updates for cross compiling (Clayton Shotwell)
+- Add MAC_CHECK audit event type
+- Add libauparse pkgconfig file (Aleksander Zdyb)
+
+2.4.2
+- Ausearch should parse exe field in SECCOMP events
+- Improve output for short mode interpretations in auparse
+- Add CRYPTO_IKE_SA and CRYPTO_IPSEC_SA events
+- If auditctl is reading rules from a file, send messages to syslog (#1144252)
+- Correct lookup of ppc64le when determining machine type
+- Increase time buffer for wide character numbers in ausearch/report (#1200314)
+- In aureport, add USER_TTY events to tty report
+- In audispd, limit reporting of queue full messages (#1203810)
+- In auditctl, don't segfault when invalid options passed (#1206516)
+- In autrace, remove some older unimplemented syscalls for aarch64 (#1185892)
+- In auditctl, correct lookup of aarch64 in arch field (#1186313)
+- Update lookup tables for 4.1 kernel
+
+2.4.1
+- Make python3 support easier
+- Add support for ppc64le (Tony Jones)
+- Add some translations for a1 of ioctl system calls
+- Add command & virtualization reports to aureport
+- Update aureport config report for new events
+- Add account modification summary report to aureport
+- Add GRP_MGMT and GRP_CHAUTHTOK event types
+- Correct aureport account change reports
+- Add integrity event report to aureport
+- Add config change summary report to aureport
+- Adjust some syslogging level settings in audispd
+- Improve parsing performance in everything
+- When ausearch outputs a line, use the previously parsed values (Burn Alting)
+- Improve searching and interpreting groups in events
+- Fully interpret the proctitle field in auparse
+- Correct libaudit and auditctl support for kernel features
+- Add support for backlog_time_wait setting via auditctl
+- Update syscall tables for the 3.18 kernel
+- Ignore DNS failure for email validation in auditd (#1138674)
+- Allow rotate as action for space_left and disk_full in auditd.conf
+- Correct login summary report of aureport
+- Auditctl syscalls can be comma separated list now
+- Update rules for new subsystems and capabilities
+
 2.4
 - Optionally parse loginuids, (e)uids, & (e)gids in ausearch/report
 - In auvirt, anomaly events don't have uuid (#1111448)

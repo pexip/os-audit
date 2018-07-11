@@ -3,19 +3,19 @@
 * Copyright (c) 2006-07 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
-* This software may be freely redistributed and/or modified under the
-* terms of the GNU General Public License as published by the Free
-* Software Foundation; either version 2, or (at your option) any
-* later version.
+* This library is free software; you can redistribute it and/or
+* modify it under the terms of the GNU Lesser General Public
+* License as published by the Free Software Foundation; either
+* version 2.1 of the License, or (at your option) any later version.
 *
-* This program is distributed in the hope that it will be useful,
+* This library is distributed in the hope that it will be useful,
 * but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+* Lesser General Public License for more details.
 *
-* You should have received a copy of the GNU General Public License
-* along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* You should have received a copy of the GNU Lesser General Public
+* License along with this library; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -85,6 +85,17 @@ void nvlist_append(nvlist *l, nvnode *node)
 }
 
 /*
+ * Its less code to make a fixup than a new append.
+ */
+void nvlist_interp_fixup(nvlist *l)
+{
+	if (l->cur) {
+		l->cur->interp_val = l->cur->val;
+		l->cur->val = NULL;
+	}
+}
+
+/*
  * This function will start at current index and scan for a name
  */
 int nvlist_find_name(nvlist *l, const char *name)
@@ -121,6 +132,9 @@ void nvlist_clear(nvlist* l)
 {
 	nvnode* nextnode;
 	register nvnode* current;
+
+	if (l->head == NULL)
+		return;
 
 	current = l->head;
 	while (current) {

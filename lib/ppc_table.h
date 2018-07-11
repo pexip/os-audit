@@ -1,5 +1,5 @@
 /* ppc_table.h --
- * Copyright 2005-09,2011-14 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-09,2011-16 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -304,7 +304,7 @@ _S(287, "mkdirat")
 _S(288, "mknodat")
 _S(289, "fchownat")
 _S(290, "futimesat")
-_S(291, "fstatat")
+_S(291, "fstatat64")
 _S(292, "unlinkat")
 _S(293, "renameat")
 _S(294, "linkat")
@@ -371,3 +371,13 @@ _S(354, "kcmp")
 _S(355, "sched_setattr")
 _S(356, "sched_getattr")
 _S(357, "renameat2")
+_S(358, "seccomp")
+_S(359, "getrandom")
+_S(360, "memfd_create")
+_S(361, "bpf")
+_S(362, "execveat")
+_S(363, "switch_endian")
+_S(364, "userfaultfd")
+_S(365, "membarrier")
+_S(378, "mlock2")
+_S(379, "copy_file_range")

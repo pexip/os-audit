@@ -1,5 +1,5 @@
 /* auditd-event.h -- 
- * Copyright 2004, 2005, 2008 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004, 2005, 2008, 2016 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -28,9 +28,8 @@
 
 typedef void (*ack_func_type)(void *ack_data, const unsigned char *header, const char *msg);
 
-struct auditd_reply_list {
+struct auditd_event {
 	struct audit_reply reply;
-	struct auditd_reply_list *next;
 	ack_func_type ack_func;
 	void *ack_data;
 	unsigned long sequence_id;
@@ -38,12 +37,16 @@ struct auditd_reply_list {
 
 #include "auditd-config.h"
 
+int dispatch_network_events(void);
 void shutdown_events(void);
 int init_event(struct daemon_conf *config);
 void resume_logging(void);
-void enqueue_event(struct auditd_reply_list *rep);
-void enqueue_formatted_event(char *msg, ack_func_type ack_func, void *ack_data, uint32_t sequence_id);
-void *consumer_thread_main(void *arg);
+void cleanup_event(struct auditd_event *e);
+void format_event(struct auditd_event *e);
+void enqueue_event(struct auditd_event *e);
+void handle_event(struct auditd_event *e);
+struct auditd_event *create_event(char *msg, ack_func_type ack_func,
+			void *ack_data, uint32_t sequence_id);
 
 #endif
 

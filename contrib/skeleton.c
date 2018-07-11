@@ -1,8 +1,14 @@
 /* skeleton.c --
  * 
- * This is a sample program that you can customize to create your own audit
- * event handler. It will be started by auditd via the dispatcher option in
- * /etc/audit/auditd.conf. This program can be built as follows:
+ * This is a sample dispatcher program that you can customize to create your
+ * own audit event handler. It will be started by auditd via the dispatcher
+ * option in /etc/audit/auditd.conf. It is much preferred that you create
+ * and audispd plugin for real time analytical needs. But this is here just
+ * in case you really prefer to get things straight from auditd.
+ *
+ * NOTE: The dispatcher interface will be going away at some point.
+ *
+ * This program can be built as follows:
  *
  * gcc skeleton.c -o skeleton -laudit
  */
@@ -45,14 +51,6 @@ int main(int argc, char *argv[])
 	setlocale (LC_ALL, "");
 	openlog(pgm, LOG_PID, LOG_DAEMON);
 	syslog(LOG_NOTICE, "starting...");
-
-#ifndef DEBUG
-	// Make sure we are root
-	if (getuid() != 0) {
-		syslog(LOG_ERR, "You must be root to run this program.");
-		return 4;
-	}
-#endif
 
 	// register sighandlers
 	sa.sa_flags = 0 ;

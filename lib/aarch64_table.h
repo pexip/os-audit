@@ -1,5 +1,5 @@
 /* aarch64_table.h --
- * Copyright 2013,2014 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2013-16 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -281,3 +281,12 @@ _S(273, "finit_module")
 _S(274, "sched_setattr")
 _S(275, "sched_getattr")
 _S(276, "renameat2")
+_S(277, "seccomp")
+_S(278, "getrandom")
+_S(279, "memfd_create")
+_S(280, "bpf")
+_S(281, "execveat")
+_S(282, "userfaultfd")
+_S(283, "membarrier")
+_S(284, "mlock2")
+_S(285, "copy_file_range")
