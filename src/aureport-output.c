@@ -1,6 +1,6 @@
 /*
 * aureport-output.c - Print the report
-* Copyright (c) 2005-06,2008,2014 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-06,2008,2014,2017 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -15,7 +15,8 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Boston, MA 02110-1335, USA.
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -216,11 +217,11 @@ static void print_title_detailed(void)
 		case RPT_AVC:
 			printf("AVC Report\n");
 			printf(
-		  "========================================================\n");
+		  "===============================================================\n");
 			printf(
-		  "# date time comm subj syscall class permission obj event\n");
+		  "# date time comm subj syscall class permission obj result event\n");
 			printf(
-		  "========================================================\n");
+		  "===============================================================\n");
 			break;
 		case RPT_CONFIG:
 			printf("Config Change Report\n");
@@ -490,7 +491,10 @@ void print_per_event_item(llist *l)
 
 	// The beginning is common to all reports
 	tv = localtime(&l->e.sec);
-	strftime(date, sizeof(date), "%x %T", tv);
+	if (tv)
+		strftime(date, sizeof(date), "%x %T", tv);
+	else
+		strcpy(date, "?");
 	if (report_type != RPT_AVC) {
 		line_item++;
 		printf("%u. %s ", line_item, date);
@@ -537,12 +541,13 @@ void print_per_event_item(llist *l)
 			break;
 		case RPT_LOGIN:
 			// who, addr, terminal, exe, success, event
-			// Special note...uid is used here because that is
-			// the way that the message works. This is because
-			// on failed logins, loginuid is not set.
+			// Special note...loginuid can be used here for
+			// successful logins. loginuid is not set on failed
+			// logins so acct is used in that situation.
 			safe_print_string(((l->s.success == S_FAILED) &&
 				l->s.acct) ? l->s.acct :
-				aulookup_uid(l->s.uid, name, sizeof(name)), 0);
+				aulookup_uid(l->s.loginuid,
+						name, sizeof(name)), 0);
 			printf(" %s %s %s %s %lu\n", 
 				l->s.hostname, l->s.terminal,
 				l->s.exe, aulookup_success(l->s.success),
@@ -572,8 +577,17 @@ void print_per_event_item(llist *l)
 			break;
 		case RPT_FILE:	// report_detail == D_DETAILED
 			// file, syscall, success, exe, who, event
-			slist_first(l->s.filename);
-			safe_print_string(l->s.filename->cur->str,0);
+			{
+			slist *s = l->s.filename;
+			slist_first(s);
+			if (s->cnt > 1) {
+				char *key = s->cur->key;
+				while (key && strcmp(key, "PARENT") == 0) {
+					slist_next(s);
+					key = s->cur->key;
+				}
+			}
+			safe_print_string(s->cur->str,0);
 			printf(" %s %s ",
 				aulookup_syscall(l,buf,sizeof(buf)),
 				aulookup_success(l->s.success));
@@ -582,6 +596,7 @@ void print_per_event_item(llist *l)
 			safe_print_string(aulookup_uid(l->s.loginuid, name,
 					sizeof(name)), 0);
 			printf(" %lu\n", l->e.serial);
+			}
 			break;
 		case RPT_HOST:	// report_detail == D_DETAILED
 			// host, syscall, who, event
@@ -848,11 +863,17 @@ static void do_summary_output(void)
 		char tmp[48];
 
 		btm = localtime(&very_first_event.sec);
-		strftime(tmp, sizeof(tmp), "%x %T", btm);
-		printf("%s.%03d - ", tmp, very_first_event.milli);
+		if (btm)
+			strftime(tmp, sizeof(tmp), "%x %T", btm);
+		else
+			strcpy(tmp, "?");
+		printf("%s.%03u - ", tmp, very_first_event.milli);
 		btm = localtime(&very_last_event.sec);
-		strftime(tmp, sizeof(tmp), "%x %T", btm);
-		printf("%s.%03d\n", tmp, very_last_event.milli);
+		if (btm)
+			strftime(tmp, sizeof(tmp), "%x %T", btm);
+		else
+			strcpy(tmp, "?");
+		printf("%s.%03u\n", tmp, very_last_event.milli);
 	}
 	printf("Selected time for report: ");
 	{
@@ -863,17 +884,23 @@ static void do_summary_output(void)
 			btm = localtime(&start_time);
 		else
 			btm = localtime(&very_first_event.sec);
-		strftime(tmp, sizeof(tmp), "%x %T", btm);
+		if (btm)
+			strftime(tmp, sizeof(tmp), "%x %T", btm);
+		else
+			strcpy(tmp, "?");
 		printf("%s - ", tmp);
 		if (end_time) 
 			btm = localtime(&end_time);
 		else 
 			btm = localtime(&very_last_event.sec);
-		strftime(tmp, sizeof(tmp), "%x %T", btm);
+		if (btm)
+			strftime(tmp, sizeof(tmp), "%x %T", btm);
+		else
+			strcpy(tmp, "?");
 		if (end_time) 
 			printf("%s\n", tmp);
 		else 
-			printf("%s.%03d\n", tmp, very_last_event.milli);
+			printf("%s.%03u\n", tmp, very_last_event.milli);
 	}
 	printf("Number of changes in configuration: %lu\n", sd.changes);
 	printf("Number of changes to accounts, groups, or roles: %lu\n",

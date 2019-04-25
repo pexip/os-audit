@@ -16,7 +16,8 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Boston, MA 02110-1335, USA.
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -78,7 +79,8 @@ typedef struct
 typedef struct _lnode{
   char *message;		// The whole unparsed message
   char *interp;			// Beginning of interpretations within message
-  unsigned int mlen;		// Length of the message
+  unsigned int mlen;		// Length of the message up to separator
+  unsigned int tlen;		// Total message size
   int type;			// message type (KERNEL, USER, LOGIN, etc)
   unsigned long long a0;	// argv 0
   unsigned long long a1;	// argv 1
@@ -96,6 +98,7 @@ typedef struct {
 			// Data we add as 1 per event
   event e;		// event - time & serial number
   search_items s;	// items in master rec that are searchable
+  int fmt;		// The event's format (raw, enriched)
 } llist;
 
 void list_create(llist *l);

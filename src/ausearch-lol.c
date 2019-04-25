@@ -15,7 +15,8 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Boston, MA 02110-1335, USA.
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -27,10 +28,12 @@
 #include <string.h>
 #include <stdio.h>
 #include "ausearch-common.h"
+#include "auditd-config.h"
 #include "private.h"
 
 #define ARRAY_LIMIT 80
 static int ready = 0;
+event very_first_event;
 
 void lol_create(lol *lo)
 {
@@ -91,25 +94,27 @@ static int str2event(char *s, event *e)
 	char *ptr;
 
 	errno = 0;
-	ptr = strchr(s+10, ':');
+	e->sec = strtoul(s, NULL, 10);
+	if (errno)
+		return -1;
+	ptr = strchr(s, '.');
 	if (ptr) {
-		e->serial = strtoul(ptr+1, NULL, 10);
-		*ptr = 0;
+		ptr++;
+		e->milli = strtoul(ptr, NULL, 10);
+		if (errno)
+			return -1;
+		s = ptr;
+	} else
+		e->milli = 0;
+
+	ptr = strchr(s, ':');
+	if (ptr) {
+		ptr++;
+		e->serial = strtoul(ptr, NULL, 10);
 		if (errno)
 			return -1;
 	} else
 		e->serial = 0;
-	ptr = strchr(s, '.');
-	if (ptr) {
-		e->milli = strtoul(ptr+1, NULL, 10);
-		*ptr = 0;
-		if (errno)
-			return -1;
-	} else
-		e->milli = 0;
-	e->sec = strtoul(s, NULL, 10);
-	if (errno)
-		return -1;
 	return 0;
 }
 
@@ -170,9 +175,13 @@ static int extract_timestamp(const char *b, event *e)
 						ptr);
 					return 0;
 				} else if ((start_time && e->sec < start_time)
-					|| (end_time && e->sec > end_time))
+					|| (end_time && e->sec > end_time)) {
+					if (very_first_event.sec == 0) {
+						very_first_event.sec = e->sec;
+						very_first_event.milli = e->milli;
+					}
 					return 0;
-				else {
+				} else {
 					if (tnode)
 						e->node = strdup(tnode);
 					e->type = audit_name_to_msg_type(ttype);
@@ -202,7 +211,8 @@ static void check_events(lol *lo, time_t sec)
 				ready++;
 			} else if (cur->l->e.type == AUDIT_PROCTITLE ||
 				    cur->l->e.type < AUDIT_FIRST_EVENT ||
-				    cur->l->e.type >= AUDIT_FIRST_ANOM_MSG) {
+				    cur->l->e.type >= AUDIT_FIRST_ANOM_MSG ||
+				    cur->l->e.type == AUDIT_KERNEL) {
 				// If known to be 1 record event, we are done
 				cur->status = L_COMPLETE;
 				ready++;
@@ -215,7 +225,7 @@ static void check_events(lol *lo, time_t sec)
 // or creates a new one if its a new event
 int lol_add_record(lol *lo, char *buff)
 {
-	int i;
+	int i, fmt;
 	lnode n;
 	event e;
 	char *ptr;
@@ -225,26 +235,39 @@ int lol_add_record(lol *lo, char *buff)
 	if (extract_timestamp(buff, &e) == 0)
 		return 0;
 
+	n.a0 = 0L;
+	n.a1 = 0L;
 	n.type = e.type;
 	n.message = strdup(buff);
 	ptr = strchr(n.message, AUDIT_INTERP_SEPARATOR);
 	if (ptr) {
-		n.interp = ptr;
 		n.mlen = ptr - n.message;
+		if (n.mlen > MAX_AUDIT_MESSAGE_LENGTH)
+			n.mlen = MAX_AUDIT_MESSAGE_LENGTH;
 		*ptr = 0;
 		n.interp = ptr + 1;
 		// since we are most of the way down the string, scan from there
 		ptr = strrchr(n.interp, 0x0a);
-		if (ptr)
+		if (ptr) {
 			*ptr = 0;
+			n.tlen = ptr - n.message;
+			if (n.tlen > MAX_AUDIT_MESSAGE_LENGTH)
+				n.tlen = MAX_AUDIT_MESSAGE_LENGTH;
+		} else
+			n.tlen = MAX_AUDIT_MESSAGE_LENGTH;
+		fmt = LF_ENRICHED;
 	} else {
 		ptr = strrchr(n.message, 0x0a);
 		if (ptr) {
 			*ptr = 0;
 			n.mlen = ptr - n.message;
+			if (n.mlen > MAX_AUDIT_MESSAGE_LENGTH)
+				n.mlen = MAX_AUDIT_MESSAGE_LENGTH;
 		} else
 			n.mlen = MAX_AUDIT_MESSAGE_LENGTH;
 		n.interp = NULL;
+		n.tlen = n.mlen;
+		fmt = LF_RAW;
 	}
 
 	// Now see where this belongs
@@ -254,6 +277,8 @@ int lol_add_record(lol *lo, char *buff)
 			if (events_are_equal(&l->e, &e)) {
 				free((char *)e.node);
 				list_append(l, &n);
+				if (fmt > l->fmt)
+					l->fmt = fmt;
 				return 1;
 			}
 		}
@@ -266,6 +291,7 @@ int lol_add_record(lol *lo, char *buff)
 	l->e.serial = e.serial;
 	l->e.node = e.node;
 	l->e.type = e.type;
+	l->fmt = fmt;
 	list_append(l, &n);
 	lol_append(lo, l);
 	check_events(lo,  e.sec);

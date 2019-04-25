@@ -15,7 +15,8 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Boston, MA 02110-1335, USA.
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -452,7 +453,8 @@ static int per_event_summary(llist *l)
 			} else {
 				if (list_find_msg_range(l, 
 					AUDIT_FIRST_KERN_ANOM_MSG,
-						AUDIT_LAST_KERN_ANOM_MSG)) {
+						AUDIT_LAST_KERN_ANOM_MSG) ||
+					list_find_msg(l, AUDIT_SECCOMP) ) {
 					ilist_add_if_uniq(&sd.anom_list, 
 							l->head->type, 0);
 				}
@@ -729,7 +731,8 @@ static int per_event_detailed(llist *l)
 				} else {
 					if (list_find_msg_range(l, 
 						AUDIT_FIRST_KERN_ANOM_MSG,
-						AUDIT_LAST_KERN_ANOM_MSG)) {
+						AUDIT_LAST_KERN_ANOM_MSG) ||
+					list_find_msg(l, AUDIT_SECCOMP) ) {
 						print_per_event_item(l);
 						rc = 1;
 					}

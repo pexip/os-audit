@@ -1,6 +1,6 @@
 /*
 * ausearch-lookup.c - Lookup values to something more readable
-* Copyright (c) 2005-06,2011-12,2015-16 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-06,2011-12,2015-17 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -15,7 +15,8 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Boston, MA 02110-1335, USA.
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -80,7 +81,7 @@ const char *aulookup_syscall(llist *l, char *buf, size_t size)
 	sys = _auparse_lookup_interpretation("syscall");
 	if (sys) {
 		snprintf(buf, size, "%s", sys);
-		free(sys);
+		free((void *)sys);
 		return buf;
 	}
 
@@ -135,7 +136,7 @@ static struct nv_pair socktab[] = {
 
 static const char *aulookup_socketcall(long sc)
 {
-        int i;
+        unsigned int i;
 
         for (i = 0; i < SOCK_NAMES; i++)
                 if (socktab[i].value == sc)
@@ -180,7 +181,7 @@ static struct nv_pair ipctab[] = {
 
 static const char *aulookup_ipccall(long ic)
 {
-        int i;
+        unsigned int i;
 
         for (i = 0; i < IPC_NAMES; i++)
                 if (ipctab[i].value == ic)
@@ -208,7 +209,7 @@ const char *aulookup_uid(uid_t uid, char *buf, size_t size)
 	name = _auparse_lookup_interpretation("auid");
 	if (name) {
 		snprintf(buf, size, "%s", name);
-		free(name);
+		free((void *)name);
 		return buf;
 	}
 
@@ -321,7 +322,7 @@ char *unescape(const char *buf)
 	return str;
 }
 
-int need_sanitize(const unsigned char *s, unsigned int len)
+static int need_tty_escape(const unsigned char *s, unsigned int len)
 {
 	unsigned int i = 0;
 	while (i < len) {
@@ -332,7 +333,7 @@ int need_sanitize(const unsigned char *s, unsigned int len)
 	return 0;
 }
 
-void sanitize(const char *s, unsigned int len)
+static void tty_escape(const char *s, unsigned int len)
 {
 	unsigned int i = 0;
 	while (i < len) {
@@ -347,13 +348,108 @@ void sanitize(const char *s, unsigned int len)
 	}
 }
 
+static const char sh_set[] = "\"'`$\\!()| ";
+static unsigned int need_shell_escape(const char *s, unsigned int len)
+{
+	unsigned int i = 0, cnt = 0;
+	while (i < len) {
+		if (s[i] < 32)
+			cnt++;
+		else if (strchr(sh_set, s[i]))
+			cnt++;
+		i++;
+	}
+	return cnt;
+}
+
+static void shell_escape(const char *s, unsigned int len)
+{
+	unsigned int i = 0;
+	while (i < len) {
+		if ((unsigned char)s[i] < 32) {
+			putchar('\\');
+			putchar('0' + ((s[i] & 0300) >> 6));
+			putchar('0' + ((s[i] & 0070) >> 3));
+			putchar('0' + (s[i] & 0007));
+		} else if (strchr(sh_set, s[i])) {
+			putchar('\\');
+			putchar(s[i]);
+		} else
+			putchar(s[i]);
+		i++;
+	}
+}
+
+static const char quote_set[] = "\"'`$\\!()| ;#&*?[]<>{}";
+static unsigned int need_shell_quote_escape(const unsigned char *s, unsigned int len)
+{
+	unsigned int i = 0, cnt = 0;
+	while (i < len) {
+		if (s[i] < 32)
+			cnt++;
+		else if (strchr(quote_set, s[i]))
+			cnt++;
+		i++;
+	}
+	return cnt;
+}
+
+static void shell_quote_escape(const char *s, unsigned int len)
+{
+	unsigned int i = 0;
+	while (i < len) {
+		if ((unsigned char)s[i] < 32) {
+			putchar('\\');
+			putchar('0' + ((s[i] & 0300) >> 6));
+			putchar('0' + ((s[i] & 0070) >> 3));
+			putchar('0' + (s[i] & 0007));
+		} else if (strchr(quote_set, s[i])) {
+			putchar('\\');
+			putchar(s[i]);
+		} else
+			putchar(s[i]);
+		i++;
+	}
+}
+
+static unsigned int need_escaping(const char *s, unsigned int len)
+{
+	switch (escape_mode)
+	{
+		case AUPARSE_ESC_RAW:
+			break;
+		case AUPARSE_ESC_TTY:
+			return need_tty_escape(s, len);
+		case AUPARSE_ESC_SHELL:
+			return need_shell_escape(s, len);
+		case AUPARSE_ESC_SHELL_QUOTE:
+			return need_shell_quote_escape(s, len);
+	}
+	return 0;
+}
+
+static void escape(const char *s, unsigned int len)
+{
+	switch (escape_mode)
+	{
+		case AUPARSE_ESC_RAW:
+			return;
+		case AUPARSE_ESC_TTY:
+			return tty_escape(s, len);
+		case AUPARSE_ESC_SHELL:
+			return shell_escape(s, len);
+		case AUPARSE_ESC_SHELL_QUOTE:
+			return shell_quote_escape(s, len);
+	}
+}
+
 void safe_print_string_n(const char *s, unsigned int len, int ret)
 {
 	if (len > MAX_AUDIT_MESSAGE_LENGTH)
 		len = MAX_AUDIT_MESSAGE_LENGTH;
 
-	if (need_sanitize(s, len)) {
-		sanitize(s, len);
+	if (need_escaping(s, len)) {
+		escape(s, len);
 		if (ret)
 			putchar('\n');
 	} else if (ret)

@@ -11,8 +11,8 @@ CONFIGURE_FLAGS =
 ifeq ($(filter nopython,$(DEB_BUILD_PROFILES)),)
 include /usr/share/python/python.mk
 # For building bindings/swig/ and bindings/python/ for all Python version, these directories are cloned and build in addition to the main library
-PYDEFAULTVER := $(shell pyversions --default --version)                                                                                        
-PYVERS := $(shell pyversions --requested --version debian/control)                                                                             
+PYDEFAULTVER := $(shell pyversions --default --version)
+PYVERS := $(shell pyversions --requested --version debian/control)
 PYVERS := $(filter-out $(PYDEFAULTVER), $(PYVERS)) # $(PYDEFAULTVER)
 PY3DEFAULTVER := $(shell py3versions --default --version)
 PY3VERS := $(shell py3versions --requested --version debian/control)
@@ -28,6 +28,10 @@ ifeq ($(DEB_HOST_ARCH),alpha)
 endif
 ifeq ($(DEB_HOST_ARCH),hppa)
   EXTRA_ARCH_TABLE := --with-hppa
+endif
+
+ifneq ($(filter pkg.audit.noldap,$(DEB_BUILD_PROFILES)),)
+  CONFIGURE_FLAGS += --disable-zos-remote
 endif
 
 %:
@@ -125,8 +129,8 @@ override_dh_auto_install: debian/install-python-stamp $(PYVERS:%=debian/install-
 	mv debian/tmp/lib/${DEB_HOST_MULTIARCH}/pkgconfig/auparse.pc \
 		debian/tmp/usr/lib/${DEB_HOST_MULTIARCH}/pkgconfig/auparse.pc
 
-override_dh_install:
-	dh_install --list-missing
+override_dh_missing:
+	dh_missing --list-missing
 
 override_dh_installexamples:
 	dh_installexamples -XMakefile
@@ -135,7 +139,7 @@ override_dh_installlogrotate:
 	# auditd has a equivalent built-in feature
 
 override_dh_installinit:
-	dh_installinit --restart-after-upgrade -- start 37 2 3 4 5 . stop 39 0 1 6 .
+	dh_installinit --restart-after-upgrade
 
 override_dh_fixperms-arch:
 	dh_fixperms -a
@@ -145,6 +149,7 @@ override_dh_fixperms-arch:
 	#chmod o-wx debian/auditd/sbin/autrace
 	#chmod 750 debian/auditd/sbin/audispd
 	chmod -R o-rwx debian/auditd/var/log/audit
+	chgrp adm debian/auditd/var/log/audit
 	chmod -R o-rwx debian/auditd/etc/audit debian/auditd/etc/audisp debian/auditd/etc/audisp/plugins.d
 
 get-orig-source:

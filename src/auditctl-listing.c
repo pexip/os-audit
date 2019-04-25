@@ -14,7 +14,8 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+ * Boston, MA 02110-1335, USA.
  *
  * Authors:
  *     Steve Grubb <sgrubb@redhat.com>
@@ -41,7 +42,7 @@ extern const char key_sep[2];
  */
 int key_match(const struct audit_rule_data *r)
 {
-	int i;
+	unsigned int i;
 	size_t boffset = 0;
 
 	if (key[0] == 0)
@@ -77,7 +78,7 @@ int key_match(const struct audit_rule_data *r)
  */
 static int is_watch(const struct audit_rule_data *r)
 {
-	int i, perm = 0, all = 1;
+	unsigned int i, perm = 0, all = 1;
 
 	for (i = 0; i < r->field_count; i++) {
 		int field = r->fields[i] & ~AUDIT_OPERATORS;
@@ -91,7 +92,8 @@ static int is_watch(const struct audit_rule_data *r)
 
 	if (((r->flags & AUDIT_FILTER_MASK) != AUDIT_FILTER_USER) &&
 		((r->flags & AUDIT_FILTER_MASK) != AUDIT_FILTER_TASK) &&
-		((r->flags & AUDIT_FILTER_MASK) != AUDIT_FILTER_EXCLUDE)) {
+		((r->flags & AUDIT_FILTER_MASK) != AUDIT_FILTER_EXCLUDE) &&
+		((r->flags & AUDIT_FILTER_MASK) != AUDIT_FILTER_FS)) {
 		for (i = 0; i < (AUDIT_BITMASK_SIZE-1); i++) {
 			if (r->mask[i] != (uint32_t)~0) {
 				all = 0;
@@ -139,7 +141,8 @@ static int print_syscall(const struct audit_rule_data *r, unsigned int *sc)
 	/* Rules on the following filters do not take a syscall */
 	if (((r->flags & AUDIT_FILTER_MASK) == AUDIT_FILTER_USER) ||
 	    ((r->flags & AUDIT_FILTER_MASK) == AUDIT_FILTER_TASK) ||
-	    ((r->flags &AUDIT_FILTER_MASK) == AUDIT_FILTER_EXCLUDE))
+	    ((r->flags &AUDIT_FILTER_MASK) == AUDIT_FILTER_EXCLUDE) ||
+	    ((r->flags &AUDIT_FILTER_MASK) == AUDIT_FILTER_FS))
 		return 0;
 
 	/* See if its all or specific syscalls */
@@ -169,7 +172,7 @@ static int print_syscall(const struct audit_rule_data *r, unsigned int *sc)
 			if (ptr)
 				printf("%s%s", !count ? "" : ",", ptr);
 			else
-				printf("%s%d", !count ? "" : ",", i);
+				printf("%s%u", !count ? "" : ",", i);
 			count++;
 			*sc = i;
 		}
@@ -422,12 +425,14 @@ static void print_rule(const struct audit_rule_data *r)
 					id.a0 = a0;
 					id.a1 = a1;
 					id.name = name;
+					id.cwd = NULL;
 					snprintf(val, 32, "%x", r->values[i]);
 					id.val = val;
 					type = auparse_interp_adjust_type(
 						AUDIT_SYSCALL, name, val);
 					out = auparse_do_interpretation(type,
-								 &id);
+							&id,
+							AUPARSE_ESC_TTY);
 					printf(" -F %s%s%s", name,
 						audit_operator_to_symbol(op),
 								out);
@@ -445,6 +450,16 @@ static void print_rule(const struct audit_rule_data *r)
 					printf(" -F %s%s%d", name,
 						audit_operator_to_symbol(op),
 						(int)r->values[i]);
+			} else if (field == AUDIT_FSTYPE) {
+				if (!audit_fstype_to_name(r->values[i]))
+					printf(" -F %s%s%d", name,
+						audit_operator_to_symbol(op),
+						r->values[i]);
+				else
+					printf(" -F %s%s%s", name,
+						audit_operator_to_symbol(op),
+						audit_fstype_to_name(
+						r->values[i]));
 			} else {
 				// The default is signed decimal
 				printf(" -F %s%s%d", name, 
@@ -544,7 +559,9 @@ int audit_print_reply(struct audit_reply *rep, int fd)
 			rep->status->pid, rep->status->rate_limit,
 			rep->status->backlog_limit, rep->status->lost,
 			rep->status->backlog);
-#if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME
+#if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME == 1 || \
+    HAVE_DECL_AUDIT_STATUS_BACKLOG_WAIT_TIME == 1
+
 			printf("backlog_wait_time %u\n",
 				rep->status->backlog_wait_time);
 #endif

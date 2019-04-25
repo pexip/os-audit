@@ -1,5 +1,5 @@
 /* ausearch-common.h -- 
- * Copyright 2006-08,2010,2014,2016 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-08,2010,2014,2016-17 Red Hat Inc., Durham, North Carolina.
  * Copyright (c) 2011 IBM Corp.
  * All Rights Reserved.
  *
@@ -29,6 +29,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include "ausearch-string.h"
+#include "auparse-defs.h"
 
 /*
  * MAX_EVENT_DELTA_SECS is the maximum number of seconds it would take for
@@ -66,11 +67,13 @@ extern const char *event_vmname;
 typedef enum { F_BOTH, F_FAILED, F_SUCCESS } failed_t;
 typedef enum { C_NEITHER, C_ADD, C_DEL } conf_act_t;
 typedef enum { S_UNSET=-1, S_FAILED, S_SUCCESS } success_t;
-typedef enum { RPT_RAW, RPT_DEFAULT, RPT_INTERP, RPT_PRETTY } report_t;
+typedef enum { RPT_RAW, RPT_DEFAULT, RPT_INTERP, RPT_PRETTY,
+	RPT_CSV, RPT_TEXT } report_t;
 
 extern failed_t event_failed;
 extern conf_act_t event_conf_act;
 extern success_t event_success;
+extern auparse_esc_t escape_mode;
 
 #endif
 

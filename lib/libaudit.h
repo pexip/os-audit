@@ -1,5 +1,5 @@
 /* libaudit.h -- 
- * Copyright 2004-2016 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-2018 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -96,6 +96,8 @@ extern "C" {
 #define AUDIT_MAC_CHECK		1134    /* User space MAC decision results */
 #define AUDIT_ACCT_LOCK		1135    /* User's account locked by admin */
 #define AUDIT_ACCT_UNLOCK	1136    /* User's account unlocked by admin */
+#define AUDIT_USER_DEVICE	1137	/* User space hotplug device changes */
+#define AUDIT_SOFTWARE_UPDATE	1138	/* Software update event */
 
 #define AUDIT_FIRST_DAEMON	1200
 #define AUDIT_LAST_DAEMON	1299
@@ -161,6 +163,7 @@ extern "C" {
 #define AUDIT_ANOM_DEL_ACCT		2115 // Deleting an acct
 #define AUDIT_ANOM_MOD_ACCT		2116 // Changing an acct
 #define AUDIT_ANOM_ROOT_TRANS		2117 // User became root
+#define AUDIT_ANOM_LOGIN_SERVICE	2118 // Service acct attempted login
 
 #define AUDIT_FIRST_ANOM_RESP		2200
 #define AUDIT_LAST_ANOM_RESP		2299
@@ -177,6 +180,8 @@ extern "C" {
 #define AUDIT_RESP_EXEC			2210 /* Execute a script */
 #define AUDIT_RESP_SINGLE		2211 /* Go to single user mode */
 #define AUDIT_RESP_HALT			2212 /* take the system down */
+#define AUDIT_RESP_ORIGIN_BLOCK		2213 /* Address blocked by iptables */
+#define AUDIT_RESP_ORIGIN_BLOCK_TIMED	2214 /* Address blocked for time */
 
 #define AUDIT_FIRST_USER_LSPP_MSG	2300
 #define AUDIT_LAST_USER_LSPP_MSG	2399
@@ -215,6 +220,11 @@ extern "C" {
 #define AUDIT_VIRT_CONTROL		2500 /* Start, Pause, Stop VM */
 #define AUDIT_VIRT_RESOURCE		2501 /* Resource assignment */
 #define AUDIT_VIRT_MACHINE_ID		2502 /* Binding of label to VM */
+#define AUDIT_VIRT_INTEGRITY_CHECK	2503 /* Guest integrity results */
+#define AUDIT_VIRT_CREATE		2504 /* Creation of guest image */
+#define AUDIT_VIRT_DESTROY		2505 /* Destruction of guest image */
+#define AUDIT_VIRT_MIGRATE_IN		2506 /* Inbound guest migration info */
+#define AUDIT_VIRT_MIGRATE_OUT		2507 /* Outbound guest migration info */
 
 #define AUDIT_LAST_VIRT_MSG		2599
 
@@ -256,6 +266,18 @@ extern "C" {
 #define AUDIT_FEATURE_CHANGE	1328 /* Audit feature changed value */
 #endif
 
+#ifndef AUDIT_REPLACE
+#define AUDIT_REPLACE           1329 /* Auditd replaced because probe failed */
+#endif
+
+#ifndef AUDIT_KERN_MODULE
+#define AUDIT_KERN_MODULE	1330 /* Kernel Module events */
+#endif
+
+#ifndef AUDIT_FANOTIFY
+#define AUDIT_FANOTIFY		1331 /* Fanotify access decision */
+#endif
+
 #ifndef AUDIT_ANOM_LINK
 #define AUDIT_ANOM_LINK		1702 /* Suspicious use of file links */
 #endif
@@ -264,9 +286,19 @@ extern "C" {
 #define AUDIT_KEY_SEPARATOR 0x01
 
 /* These are used in filter control */
+#ifndef AUDIT_FILTER_FS
+#define AUDIT_FILTER_FS		0x06 /* FS record filter in __audit_inode_child */
+#endif
+#ifndef AUDIT_FILTER_EXCLUDE
 #define AUDIT_FILTER_EXCLUDE	AUDIT_FILTER_TYPE
+#endif
 #define AUDIT_FILTER_MASK	0x07	/* Mask to get actual filter */
 #define AUDIT_FILTER_UNSET	0x80	/* This value means filter is unset */
+
+/* Status symbol mask values */
+#ifndef AUDIT_STATUS_LOST
+#define AUDIT_STATUS_LOST               0x0040
+#endif
 
 /* These defines describe what features are in the kernel */
 #ifndef AUDIT_FEATURE_BITMAP_BACKLOG_LIMIT
@@ -277,6 +309,18 @@ extern "C" {
 #endif
 #ifndef AUDIT_FEATURE_BITMAP_EXECUTABLE_PATH
 #define AUDIT_FEATURE_BITMAP_EXECUTABLE_PATH    0x00000004
+#endif
+#ifndef AUDIT_FEATURE_BITMAP_EXCLUDE_EXTEND
+#define AUDIT_FEATURE_BITMAP_EXCLUDE_EXTEND     0x00000008
+#endif
+#ifndef AUDIT_FEATURE_BITMAP_SESSIONID_FILTER
+#define AUDIT_FEATURE_BITMAP_SESSIONID_FILTER   0x00000010
+#endif
+#ifndef AUDIT_FEATURE_BITMAP_LOST_RESET
+#define AUDIT_FEATURE_BITMAP_LOST_RESET		0x00000020
+#endif
+#ifndef AUDIT_FEATURE_BITMAP_FILTER_FS
+#define AUDIT_FEATURE_BITMAP_FILTER_FS		0x00000040
 #endif
 
 /* Defines for interfield comparison update */
@@ -291,6 +335,14 @@ extern "C" {
 #endif
 #ifndef AUDIT_EXE
 #define AUDIT_EXE 112
+#endif
+
+#ifndef AUDIT_SESSIONID
+#define AUDIT_SESSIONID 25
+#endif
+
+#ifndef AUDIT_FSTYPE
+#define AUDIT_FSTYPE 26
 #endif
 
 #ifndef AUDIT_COMPARE_UID_TO_OBJ_UID
@@ -498,6 +550,7 @@ extern int  audit_get_reply(int fd, struct audit_reply *rep, reply_t block,
 		int peek);
 extern uid_t audit_getloginuid(void);
 extern int  audit_setloginuid(uid_t uid);
+extern uint32_t audit_get_session(void);
 extern int  audit_detect_machine(void);
 extern int audit_determine_machine(const char *arch);
 
@@ -521,6 +574,8 @@ extern int        audit_name_to_errno(const char *error);
 extern const char *audit_errno_to_name(int error);
 extern int        audit_name_to_ftype(const char *name);
 extern const char *audit_ftype_to_name(int ftype); 
+extern int        audit_name_to_fstype(const char *name);
+extern const char *audit_fstype_to_name(int fstype); 
 extern void audit_number_to_errmsg(int errnumber, const char *opt);
 
 /* AUDIT_GET */
@@ -538,6 +593,7 @@ extern int  audit_set_failure(int fd, uint32_t failure);
 extern int  audit_set_rate_limit(int fd, uint32_t limit);
 extern int  audit_set_backlog_limit(int fd, uint32_t limit);
 int audit_set_backlog_wait_time(int fd, uint32_t bwt);
+int audit_reset_lost(int fd);
 extern int  audit_set_feature(int fd, unsigned feature, unsigned value, unsigned lock);
 extern int  audit_set_loginuid_immutable(int fd);
 

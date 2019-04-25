@@ -73,7 +73,8 @@ static volatile int suspend = 0;
 static volatile int dump = 0;
 static volatile int transport_ok = 0;
 static volatile int sock=-1;
-static volatile int remote_ended = 0, quiet = 0;
+// We start with remote_ended true so it retries on startup
+static volatile int remote_ended = 1, quiet = 0;
 static int ifd;
 remote_conf_t config;
 static int warned = 0;
@@ -140,11 +141,12 @@ static void user1_handler( int sig )
 static void dump_stats(struct queue *queue)
 {
 	syslog(LOG_INFO,
-		"suspend=%s, remote_ended=%s, transport_ok=%s, queue_size=%zu",
+		"suspend=%s, remote_ended=%s, transport_ok=%s, queued_items=%zu, queue_depth=%u",
 		suspend ? "yes" : "no",
 		remote_ended ? "yes" : "no",
 		transport_ok ? "yes" : "no",
-		q_queue_length(queue));
+		q_queue_length(queue),
+		config.queue_depth);
 	dump = 0;
 }
 
@@ -450,7 +452,6 @@ int main(int argc, char *argv[])
 {
 	struct sigaction sa;
 	struct queue *queue;
-	int rc;
 	size_t q_len;
 
 	/* Register sighandlers */
@@ -475,11 +476,6 @@ int main(int argc, char *argv[])
 	ifd = 0;
 	fcntl(ifd, F_SETFL, O_NONBLOCK);
 
-	/* We fail here if the transport can't be initialized because of some
-	 * permanent (i.e. operator) problem, such as misspelled host name. */
-	rc = init_transport();
-	if (rc == ET_PERMANENT)
-		return 1;
 	queue = init_queue();
 	if (queue == NULL) {
 		syslog(LOG_ERR, "Error initializing audit record queue: %m");
@@ -514,7 +510,7 @@ int main(int argc, char *argv[])
 		FD_ZERO(&rfd);
 		FD_SET(ifd, &rfd);	// input fd
 		FD_ZERO(&wfd);
-		if (sock > 0) {
+		if (sock >= 0) {
 			// Setup socket to read acks from server
 			FD_SET(sock, &rfd); // remote socket
 			if (sock > ifd)
@@ -545,7 +541,7 @@ int main(int argc, char *argv[])
 		}
 
 		// See if we got a shutdown message from the server
-		if (sock > 0 && FD_ISSET(sock, &rfd))
+		if (sock >= 0 && FD_ISSET(sock, &rfd))
 			check_message();
 
 		// If we broke out due to one of these, cycle to start
@@ -592,7 +588,7 @@ int main(int argc, char *argv[])
 			} while (remote_fgets_more(sizeof(event)));
 		}
 		// See if output fd is also set
-		if (sock > 0 && FD_ISSET(sock, &wfd)) {
+		if (sock >= 0 && FD_ISSET(sock, &wfd)) {
 			// If so, try to drain backlog
 			while (q_queue_length(queue) && !suspend &&
 					!stop && transport_ok)
@@ -602,7 +598,8 @@ int main(int argc, char *argv[])
 
 	// If stdin is a pipe, then flush the queue
 	if (is_pipe(0)) {
-		while (q_queue_length(queue) && !suspend && transport_ok)
+		while (q_queue_length(queue) && !suspend && !stop &&
+					transport_ok)
 			send_one(queue);
 	}
 
@@ -1005,7 +1002,7 @@ static int stop_transport(void)
 static int init_sock(void)
 {
 	int rc;
-	struct addrinfo *ai;
+	struct addrinfo *ai, *runp;
 	struct addrinfo hints;
 	char remote[BUF_SIZE];
 	int one=1;
@@ -1015,6 +1012,8 @@ static int init_sock(void)
 		transport_ok = 1;
 		return ET_SUCCESS;
 	}
+
+	// Resolve the remote host
 	memset(&hints, '\0', sizeof(hints));
 	hints.ai_flags = AI_ADDRCONFIG|AI_NUMERICSERV;
 	hints.ai_socktype = SOCK_STREAM;
@@ -1030,46 +1029,77 @@ static int init_sock(void)
 		else
 			return ET_TEMPORARY;
 	}
-	sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-	if (sock < 0) {
-		if (!quiet)
-			syslog(LOG_ERR, "Error creating socket: %s",
-			strerror(errno));
-		freeaddrinfo(ai);
-		return ET_TEMPORARY;
-	}
 
-	setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char *)&one, sizeof (int));
-
-	if (config.local_port != 0) {
-		struct sockaddr_in address;
-		
-		memset (&address, 0, sizeof(address));
-		address.sin_family = AF_INET;
-		address.sin_port = htons(config.local_port);
-		address.sin_addr.s_addr = htonl(INADDR_ANY);
-
-		if (bind(sock, (struct sockaddr *)&address, sizeof(address))) {
+	// Cycle through the list until we connect
+	runp = ai;
+	while (runp) {
+		if (sock >= 0)
+			close(sock);
+		sock = socket(runp->ai_family, runp->ai_socktype,
+					runp->ai_protocol);
+		if (sock < 0) {
 			if (!quiet)
-				syslog(LOG_ERR,
-			       "Cannot bind local socket to port %d",
-					config.local_port);
-			stop_sock();
-			freeaddrinfo(ai);
-			return ET_TEMPORARY;
+				syslog(LOG_ERR, "Error creating socket: %s",
+				strerror(errno));
+			goto next_try;
 		}
 
-	}
-	if (connect(sock, ai->ai_addr, ai->ai_addrlen)) {
-		if (!quiet)
-			syslog(LOG_ERR, "Error connecting to %s: %s",
-				config.remote_server, strerror(errno));
-		freeaddrinfo(ai);
-		stop_sock();
-		return ET_TEMPORARY;
-	}
+		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+					(char *)&one, sizeof (int));
 
-	freeaddrinfo(ai);
+		// If we are binding, resolve somethihng relative to
+		// the address of the aggregating server
+		if (config.local_port != 0) {
+			struct addrinfo *ai2;
+			struct addrinfo hints2;
+			char local[BUF_SIZE];
+
+			// Ask for setting that can be used for bind
+			memset(&hints2, '\0', sizeof(hints2));
+			hints2.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
+			hints2.ai_socktype = SOCK_STREAM;
+			hints2.ai_family = runp->ai_family;
+			hints2.ai_protocol = runp->ai_protocol;
+			snprintf(local, BUF_SIZE, "%u", config.local_port);
+
+			rc = getaddrinfo(NULL, local, &hints2, &ai2);
+			if (rc) {
+				if (!quiet)
+					syslog(LOG_ERR,
+				"Error looking up local host: %s - retrying",
+						gai_strerror(rc));
+				stop_sock();
+				goto next_try;
+			}
+			// We are not going to cycle through the list.
+			// If done right only one should be on list.
+			if (bind(sock,  ai2->ai_addr, ai2->ai_addrlen)) {
+				if (!quiet)
+					syslog(LOG_ERR,
+				       "Cannot bind local socket to port %d",
+						config.local_port);
+				stop_sock();
+				freeaddrinfo(ai2);
+				goto next_try;
+			}
+			freeaddrinfo(ai2);
+		}
+		if (connect(sock, runp->ai_addr, runp->ai_addrlen)) {
+			if (!quiet)
+				syslog(LOG_ERR, "Error connecting to %s: %s",
+					config.remote_server, strerror(errno));
+			stop_sock();
+		} else
+			break;	// Success, quit trying
+next_try:
+		runp = runp->ai_next;
+	}
+	// If the list was exhausted and no connection, we failed.
+	if (runp == NULL) {
+		rc = ET_PERMANENT;
+		goto out;
+	}
+	rc = ET_SUCCESS;
 	setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (char *)&one, sizeof (int));
 
 	/* The idea here is to minimize the time between the message
@@ -1082,14 +1112,18 @@ static int init_sock(void)
 
 #ifdef USE_GSSAPI
 	if (USE_GSS) {
-		if (negotiate_credentials ())
-			return ET_PERMANENT;
+		if (negotiate_credentials ()) {
+			rc = ET_PERMANENT;
+			goto out;
+		}
 	}
 #endif
 
 	transport_ok = 1;
 	syslog(LOG_NOTICE, "Connected to %s", config.remote_server);
-	return ET_SUCCESS;
+out:
+	freeaddrinfo(ai);
+	return rc;
 }
 
 static int init_transport(void)
@@ -1132,28 +1166,37 @@ static int ar_write (int sk, const void *buf, int len)
 	return rc;
 }
 
+// Returns positive number on success, -1 on failure
 static int ar_read (int sk, void *buf, int len)
 {
 	int rc = 0, r, timeout = config.max_time_per_record * 1000;
 	struct pollfd pfd;
 
-	pfd.fd=sk;
-	pfd.events=POLLIN | POLLPRI | POLLHUP | POLLERR | POLLNVAL;
+	errno = 0;
+	pfd.fd = sk;
+	pfd.events = POLLIN | POLLPRI | POLLHUP | POLLERR | POLLNVAL;
 	while (len > 0) {
 		do {
-			// reads can hang if cable is disconnected
+			// Reads can hang if cable is disconnected
 			int prc = poll(&pfd, (nfds_t) 1, timeout);
 			if (prc <= 0)
 				return -1;
 			r = read(sk, buf, len);
 		} while (r < 0 && errno == EINTR);
 		if (r < 0) {
+			// This means real network problem happened
 			if (errno == EPIPE)
 				stop_sock();
 			return r;
 		}
-		if (r == 0)
+		if (r == 0) {
+			// If errno == 0, remote end closed socket normally
+			if (errno == 0) {
+				stop_sock();
+				remote_ended = 1;
+			}
 			break;
+		}
 		rc += r;
 		buf = (void *)((char *)buf + r);
 		len -= r;
@@ -1244,12 +1287,14 @@ static int recv_msg_gss (unsigned char *header, char *msg, uint32_t *mlen)
 
 	if (utok.length < AUDIT_RMW_HEADER_SIZE) {
 		sync_error_handler ("message too short");
+		free (utok.value);
 		return -1;
 	}
 	memcpy (header, utok.value, AUDIT_RMW_HEADER_SIZE);
 
 	if (! AUDIT_RMW_IS_MAGIC (header, AUDIT_RMW_HEADER_SIZE)) {
 		sync_error_handler ("bad magic number");
+		free (utok.value);
 		return -1;
 	}
 
@@ -1257,6 +1302,7 @@ static int recv_msg_gss (unsigned char *header, char *msg, uint32_t *mlen)
 
 	if (rlen > MAX_AUDIT_MESSAGE_LENGTH) {
 		sync_error_handler ("message too long");
+		free (utok.value);
 		return -1;
 	}
 
@@ -1264,6 +1310,7 @@ static int recv_msg_gss (unsigned char *header, char *msg, uint32_t *mlen)
 
 	*mlen = rlen;
 
+	free (utok.value);
 	return 0;
 }
 #endif
@@ -1289,6 +1336,7 @@ static int send_msg_tcp (unsigned char *header, const char *msg, uint32_t mlen)
 	return 0;
 }
 
+// Returns 0 on success and -1 on failure
 static int recv_msg_tcp (unsigned char *header, char *msg, uint32_t *mlen)
 {
 	int hver, mver, rc;
@@ -1354,11 +1402,17 @@ static int check_message_managed(void)
 		return remote_server_ending_handler(msg);
 	if (type == AUDIT_RMW_TYPE_DISKLOW)
 		return remote_disk_low_handler(msg);
-	if (type == AUDIT_RMW_TYPE_DISKFULL)
+	if (type == AUDIT_RMW_TYPE_DISKFULL) {
+		// Can't log for a while might want a delay
+		stop_transport();
 		return remote_disk_full_handler(msg);
-	if (type == AUDIT_RMW_TYPE_DISKERROR)
+	}
+	if (type == AUDIT_RMW_TYPE_DISKERROR) {
+		// Can't log for a while might want a delay
+		stop_transport();
 		return remote_disk_error_handler(msg);
-	return -1;
+	}
+	return 0;
 }
 
 /* This is to check for async notification like server is shutting down */
@@ -1389,7 +1443,7 @@ static int relay_sock_managed(const char *s, size_t len)
 	int hver, mver;
 	uint32_t type, rlen, seq;
 	char msg[MAX_AUDIT_MESSAGE_LENGTH+1];
-	int n_tries_this_message = 0;
+	unsigned int n_tries_this_message = 0;
 	time_t now, then = 0;
 
 	sequence_id ++;
@@ -1473,10 +1527,16 @@ try_again:
 	/* Specific errors we know how to deal with.  */
 	if (type == AUDIT_RMW_TYPE_DISKLOW)
 		return remote_disk_low_handler (msg);
-	if (type == AUDIT_RMW_TYPE_DISKFULL)
+	if (type == AUDIT_RMW_TYPE_DISKFULL) {
+		// Can't log for a while might want a delay
+		stop_transport();
 		return remote_disk_full_handler (msg);
-	if (type == AUDIT_RMW_TYPE_DISKERROR)
+	}
+	if (type == AUDIT_RMW_TYPE_DISKERROR) {
+		// Can't log for a while might want a delay
+		stop_transport();
 		return remote_disk_error_handler (msg);
+	}
 
 	/* Generic errors.  */
 	if (type & AUDIT_RMW_TYPE_FATALMASK)

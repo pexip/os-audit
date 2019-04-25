@@ -1,5 +1,5 @@
 /* auditctl.c -- 
- * Copyright 2004-2016 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-2017 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -19,6 +19,7 @@
  * Authors:
  *     Steve Grubb <sgrubb@redhat.com>
  *     Rickard E. (Rik) Faith <faith@redhat.com>
+ *     Richard Guy Briggs <rgb@redhat.com>
  */
 
 #include "config.h"
@@ -32,6 +33,8 @@
 #include <ctype.h>
 #include <unistd.h>
 #include <sys/utsname.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <libgen.h>	/* For basename */
@@ -74,6 +77,7 @@ static int reset_vars(void)
 	_audit_permadded = 0;
 	_audit_archadded = 0;
 	_audit_exeadded = 0;
+	_audit_filterfsadded = 0;
 	_audit_elf = 0;
 	add = AUDIT_FILTER_UNSET;
 	del = AUDIT_FILTER_UNSET;
@@ -131,10 +135,14 @@ static void usage(void)
      "    -W <path>           Remove watch at <path>\n"
 #if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
     defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
-     "    --loginuid-immutable   Make loginuids unchangeable once set\n"
+     "    --loginuid-immutable  Make loginuids unchangeable once set\n"
 #endif
-#if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME
-     "    --backlog_wait_time    Set the kernel backlog_wait_time\n"
+#if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME == 1 || \
+    HAVE_DECL_AUDIT_STATUS_BACKLOG_WAIT_TIME == 1
+     "    --backlog_wait_time  Set the kernel backlog_wait_time\n"
+#endif
+#if defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+     "    --reset-lost         Reset the lost record counter\n"
 #endif
      );
 }
@@ -143,12 +151,12 @@ static int lookup_filter(const char *str, int *filter)
 {
 	if (strcmp(str, "task") == 0) 
 		*filter = AUDIT_FILTER_TASK;
-	else if (strcmp(str, "entry") == 0)
-		*filter = AUDIT_FILTER_ENTRY;
 	else if (strcmp(str, "exit") == 0)
 		*filter = AUDIT_FILTER_EXIT;
 	else if (strcmp(str, "user") == 0)
 		*filter = AUDIT_FILTER_USER;
+	else if (strcmp(str, "filesystem") == 0)
+		*filter = AUDIT_FILTER_FS;
 	else if (strcmp(str, "exclude") == 0) {
 		*filter = AUDIT_FILTER_EXCLUDE;
 		exclude = 1;
@@ -212,16 +220,6 @@ static int audit_rule_setup(char *opt, int *filter, int *act, int lineno)
 	/* Make sure we set both */
 	if (*filter == AUDIT_FILTER_UNSET || *act == -1)
 		return 2;
-
-	/* Consolidate rules on exit filter */
-	if (*filter == AUDIT_FILTER_ENTRY) {
-		*filter = AUDIT_FILTER_EXIT;
-		if (lineno)
-			audit_msg(LOG_INFO, "Warning - entry rules deprecated, changing to exit rule in line %d", lineno);
-		else
-			audit_msg(LOG_INFO,
-		    "Warning - entry rules deprecated, changing to exit rule");
-	}
 
 	return 0;
 }
@@ -521,8 +519,12 @@ struct option long_opts[] =
     defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
   {"loginuid-immutable", 0, NULL, 1},
 #endif
-#if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME
+#if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME == 1 || \
+    HAVE_DECL_AUDIT_STATUS_BACKLOG_WAIT_TIME == 1
   {"backlog_wait_time", 1, NULL, 2},
+#endif
+#if defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+  {"reset-lost", 0, NULL, 3},
 #endif
   {NULL, 0, NULL, 0}
 };
@@ -534,7 +536,7 @@ struct option long_opts[] =
  */
 static int setopt(int count, int lineno, char *vars[])
 {
-    int c;
+    int c, lidx = 0;
     int retval = 0, rc;
 
     optind = 0;
@@ -544,7 +546,7 @@ static int setopt(int count, int lineno, char *vars[])
 
     while ((retval >= 0) && (c = getopt_long(count, vars,
 			"hicslDvtC:e:f:r:b:a:A:d:S:F:m:R:w:W:k:p:q:",
-			long_opts, NULL)) != EOF) {
+			long_opts, &lidx)) != EOF) {
 	int flags = AUDIT_FILTER_UNSET;
 	rc = 10;	// Init to something impossible to see if unused.
         switch (c) {
@@ -764,6 +766,13 @@ static int setopt(int count, int lineno, char *vars[])
 			audit_msg(LOG_ERR, 
 			  "Error: syscall auditing being added to user list");
 			return -1;
+		} else if (((add & (AUDIT_FILTER_MASK|AUDIT_FILTER_UNSET)) ==
+				AUDIT_FILTER_FS || (del &
+				(AUDIT_FILTER_MASK|AUDIT_FILTER_UNSET)) ==
+				AUDIT_FILTER_FS)) {
+			audit_msg(LOG_ERR, 
+			  "Error: syscall auditing being added to filesystem list");
+			return -1;
 		} else if (exclude) {
 			audit_msg(LOG_ERR, 
 		    "Error: syscall auditing cannot be put on exclude list");
@@ -940,8 +949,9 @@ static int setopt(int count, int lineno, char *vars[])
 		break;
 	case 'k':
 		if (!(_audit_syscalladded || _audit_permadded ||
-			     _audit_exeadded) || (add==AUDIT_FILTER_UNSET &&
-					del==AUDIT_FILTER_UNSET)) {
+		      _audit_exeadded ||
+		      _audit_filterfsadded) ||
+		    (add==AUDIT_FILTER_UNSET && del==AUDIT_FILTER_UNSET)) {
 			audit_msg(LOG_ERR,
 		    "key option needs a watch or syscall given prior to it");
 			retval = -1;
@@ -1026,7 +1036,8 @@ process_keys:
 			return -2;  // success - no reply for this
 		break;
 	case 2:
-#if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME
+#if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME == 1 || \
+    HAVE_DECL_AUDIT_STATUS_BACKLOG_WAIT_TIME == 1
 		if (optarg && isdigit(optarg[0])) {
 			uint32_t bwt;
 			errno = 0;
@@ -1051,6 +1062,15 @@ process_keys:
 			"backlog_wait_time is not supported on your kernel");
 		retval = -1;
 #endif
+		break;
+	case 3:
+		if ((rc = audit_reset_lost(fd)) >= 0) {
+			audit_msg(LOG_INFO, "lost: %u", rc);
+			return -2;
+		} else {
+			audit_number_to_errmsg(rc, long_opts[lidx].name);
+			retval = -1;
+		}
 		break;
         default: 
 		usage();
@@ -1085,8 +1105,10 @@ process_keys:
 	} else {
 		/* Add this to the rule */
 		int ret = audit_rule_fieldpair_data(&rule_new, cmd, flags);
-		if (ret < 0)
+		if (ret != 0) {
+			audit_number_to_errmsg(ret, cmd);
 			retval = -1;
+		}
 		free(cmd);
 	}
     }
@@ -1321,7 +1343,9 @@ int main(int argc, char *argv[])
 #ifndef DEBUG
 	/* Make sure we are root if we do anything except help */
 	if (!(argc == 2 && (strcmp(argv[1], "--help")==0 ||
-			strcmp(argv[1], "-h") == 0)) && !audit_can_control()) {
+			strcmp(argv[1], "-h") == 0 ||
+			(strcmp(argv[1], "-l") == 0 && geteuid() == 0))) &&
+			!audit_can_control()) {
 		audit_msg(LOG_WARNING, "You must be root to run this program.");
 		return 4;
 	}
