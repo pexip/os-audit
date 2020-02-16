@@ -15,7 +15,8 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Boston, MA 02110-1335, USA.
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -107,15 +108,15 @@ void alist_append(alist *l, anode *node)
 
 int alist_find_subj(alist *l)
 {
-        register anode* window = l->head;
+        register anode* node = l->head;
 
-	while (window) {
-		if (window->scontext) {
-			l->cur = window;
+	while (node) {
+		if (node->scontext) {
+			l->cur = node;
 			return 1;
 		}
 		else
-			window = window->next;
+			node = node->next;
 	}
 	return 0;
 }
@@ -134,15 +135,15 @@ anode *alist_next_subj(alist *l)
 
 int alist_find_obj(alist *l)
 {
-        register anode* window = l->head;
+        register anode* node = l->head;
 
-	while (window) {
-		if (window->tcontext) {
-			l->cur = window;
+	while (node) {
+		if (node->tcontext) {
+			l->cur = node;
 			return 1;
 		}
 		else
-			window = window->next;
+			node = node->next;
 	}
 	return 0;
 }
@@ -161,15 +162,15 @@ anode *alist_next_obj(alist *l)
 
 int alist_find_avc(alist *l)
 {
-        register anode* window = l->head;
+        register anode* node = l->head;
 
-	while (window) {
-		if (window->avc_result != AVC_UNSET) {
-			l->cur = window;
+	while (node) {
+		if (node->avc_result != AVC_UNSET) {
+			l->cur = node;
 			return 1;
 		}
 		else
-			window = window->next;
+			node = node->next;
 	}
 	return 0;
 }

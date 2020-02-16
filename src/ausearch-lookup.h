@@ -1,6 +1,6 @@
 /*
 * ausearch-lookup.h - Header file for ausearch-lookup.c
-* Copyright (c) 2005-06,2014 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-06,2014,2017 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved.
 *
 * This software may be freely redistributed and/or modified under the
@@ -15,7 +15,8 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Boston, MA 02110-1335, USA.
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -39,8 +40,6 @@ void aulookup_destroy_uid_list(void);
 char *unescape(const char *buf);
 int is_hex_string(const char *str);
 void print_tty_data(const char *val);
-int need_sanitize(const unsigned char *s, unsigned int len);
-void sanitize(const char *s, unsigned int len);
 void safe_print_string_n(const char *s, unsigned int len, int ret);
 void safe_print_string(const char *s, int ret);
 

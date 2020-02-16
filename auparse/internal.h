@@ -1,5 +1,5 @@
 /* internal.h -- 
- * Copyright 2006-07,2013-16 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-07,2013-17 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -26,14 +26,12 @@
 #include "ellist.h"
 #include "auditd-config.h"
 #include "data_buf.h"
+#include "normalize-llist.h"
 #include "dso.h"
 #include <stdio.h>
 
 /* This is what state the parser is in */
 typedef enum { EVENT_EMPTY, EVENT_ACCUMULATING, EVENT_EMITTED } auparser_state_t;
-
-#define LOL_EVENTS_DEBUG01      0       // add debug for list of list event
-                                        // processing
 
 /*
  * NOTES:
@@ -114,6 +112,38 @@ struct nv_pair {
 	const char *name;
 };
 
+typedef uint32_t value_t;
+
+typedef struct subj
+{
+	value_t primary;        // typically auid
+	value_t secondary;      // typically uid
+	cllist attr;            // List of attributes
+	const char *what;	// What the subject is
+} subject;
+
+typedef struct obj
+{
+	value_t primary;
+	value_t secondary;
+	value_t two;		// Sometimes we have a second e.g. rename/mount
+	cllist attr;            // List of attributes
+	unsigned int what;      // What the primary object is
+} object;
+
+typedef struct data
+{
+	const char *evkind;
+	value_t session;
+	subject actor;
+	const char *action;
+	object thing;
+	value_t results;
+	const char *how;
+	normalize_option_t opt;
+	value_t key;
+} normalize_data;
+
 struct opaque
 {
 	ausource_t source;		// Source type
@@ -152,6 +182,8 @@ struct opaque
 	auparse_esc_t escape_mode;
 	message_t message_mode;		// Where to send error messages
 	debug_message_t debug_message;	// Whether or not messages are debug or not
+	const char *tmp_translation;	// Pointer to manage mem for field translation
+	normalize_data norm_data;
 };
 
 AUDIT_HIDDEN_START
@@ -160,6 +192,10 @@ AUDIT_HIDDEN_START
 void clear_config(struct daemon_conf *config);
 int aup_load_config(auparse_state_t *au, struct daemon_conf *config, log_test_t lt);
 void free_config(struct daemon_conf *config);
+
+// normalize.c
+void init_normalizer(normalize_data *d);
+void clear_normalizer(normalize_data *d);
 
 AUDIT_HIDDEN_END
 

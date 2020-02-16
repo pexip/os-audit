@@ -24,7 +24,7 @@ This yes/no keyword determines whether or not to write logs to the disk.
 Normally you want this so the default is yes.
 .TP
 .I log_format
-The log format describes how the information should be stored on disk. There are 2 options: raw and enriched. The nolog option is deprecated. If set to
+The log format describes how the information should be stored on disk. There are 2 options: raw and enriched. If set to
 .IR RAW ,
 the audit records will be stored in a format exactly as the kernel sends it. The
 .IR ENRICHED
@@ -79,7 +79,7 @@ If the number is < 2, logs are not rotated. This number must be 999 or less.
 The default is 0 - which means no rotation. As you increase the number of log files being rotated, you may need to adjust the kernel backlog setting upwards since it takes more time to rotate the files. This is typically done in /etc/audit/audit.rules. If log rotation is configured to occur, the daemon will check for excess logs and remove them in effort to keep disk space available. The excess log check is only done on startup and when a reconfigure results in a space check.
 .TP
 .I disp_qos
-This option controls whether you want blocking/lossless or non-blocking/lossy communication between the audit daemon and the dispatcher. There is a 128k buffer between the audit daemon and dispatcher. This is good enogh for most uses. If lossy is chosen, incoming events going to the dispatcher are discarded when this queue is full. (Events are still written to disk if log_format is not nolog.) Otherwise the auditd daemon will wait for the queue to have an empty spot before logging to disk. The risk is that while the daemon is waiting for network IO, an event is not being recorded to disk. Valid values are: lossy and lossless. Lossy is the default value.
+This option controls whether you want blocking/lossless or non-blocking/lossy communication between the audit daemon and the dispatcher. There is a 128k buffer between the audit daemon and dispatcher. This is good enough for most uses. If lossy is chosen, incoming events going to the dispatcher are discarded when this queue is full. (Events are still written to disk if log_format is not nolog.) Otherwise the auditd daemon will wait for the queue to have an empty spot before logging to disk. The risk is that while the daemon is waiting for network IO, an event is not being recorded to disk. Valid values are: lossy and lossless. Lossy is the default value.
 .TP
 .I dispatcher
 The dispatcher is a program that is started by the audit daemon when it starts up. It will pass a copy of all audit events to that application's stdin. Make sure you trust the application that you add to this line since it runs with root privileges.
@@ -128,6 +128,13 @@ option will cause the audit daemon to rotate the logs. It should be noted that l
 option is similar to rotate except it does not use the num_logs setting. This prevents audit logs from being overwritten. The effect is that logs accumulate and are not deleted \- which will trigger the
 .I space_left_action
 if the volume fills up. This is best used in combination with an external script used to archive logs on a periodic basis.
+.TP
+.I verify_email
+This option determines if the email address given in
+.IR action_mail_acct
+is checked to see if the domain name can be resolved. This option must be given before
+.IR action_mail_acct
+or the default value of yes will be used.
 .TP
 .I action_mail_acct
 This option should contain a valid email address or alias. The default address is root. If the email address is not local to the machine, you must make sure you have email properly configured on your machine and network. Also, this option requires that /usr/lib/sendmail exists on the machine.
@@ -237,7 +244,9 @@ This is a numeric value in the range 1..65535 which, if specified,
 causes auditd to listen on the corresponding TCP port for audit
 records from remote systems. The audit daemon may be linked with
 tcp_wrappers. You may want to control access with an entry in the
-hosts.allow and deny files.
+hosts.allow and deny files. If this is deployed on a systemd based
+OS, then you may need to adjust the 'After' directive. See the note in
+the auditd.service file.
 .TP
 .I tcp_listen_queue
 This is a numeric value which indicates how many pending (requested

@@ -65,6 +65,7 @@ struct daemon_conf
 	failure_action_t space_left_action;
 	const char *space_left_exe;
 	const char *action_mail_acct;
+	unsigned int verify_email;
 	unsigned long admin_space_left;
 	failure_action_t admin_space_left_action;
 	const char *admin_space_left_exe;
@@ -86,6 +87,11 @@ struct daemon_conf
 };
 
 void set_allow_links(int allow);
+
+/* Return 0 on success. */
+int set_config_dir(const char *val);
+const char *get_config_dir(void);
+
 int load_config(struct daemon_conf *config, log_test_t lt);
 void clear_config(struct daemon_conf *config);
 const char *audit_lookup_format(int fmt);
@@ -100,4 +106,3 @@ void shutdown_config(void);
 void free_config(struct daemon_conf *config);
 
 #endif
-

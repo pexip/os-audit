@@ -22,8 +22,7 @@
 */
 
 #include "config.h"
-#include "nvlist.h"
-#include "nvpair.h"
+#include "lru.h"
 #include "libaudit.h"
 #include "internal.h"
 #include "interpret.h"
@@ -51,6 +50,12 @@
 #include <sys/personality.h>
 #include <sys/prctl.h>
 #include <sched.h>
+#ifdef USE_FANOTIFY
+#include <linux/fanotify.h>
+#else
+#define FAN_ALLOW 1
+#define FAN_DENY 2
+#endif
 #include "auparse-defs.h"
 #include "gen_tables.h"
 
@@ -120,8 +125,7 @@ typedef enum { S_UNSET=-1, S_FAILED, S_SUCCESS } success_t;
 static char *print_escaped(const char *val);
 static const char *print_signals(const char *val, unsigned int base);
 
-// FIXME: move next two declarations to auparse_state_t
-static auparse_esc_t escape_mode = AUPARSE_ESC_TTY;
+// FIXME: move next declaration to auparse_state_t
 static nvlist il;  // Interpretations list
 
 /*
@@ -173,7 +177,7 @@ static void tty_escape(const char *s, char *dest, unsigned int len)
 	dest[j] = '\0';	/* terminate string */
 }
 
-static const char sh_set[] = "\"'`$\\";
+static const char sh_set[] = "\"'`$\\!()| ";
 static unsigned int need_shell_escape(const char *s, unsigned int len)
 {
 	unsigned int i = 0, cnt = 0;
@@ -205,8 +209,8 @@ static void shell_escape(const char *s, char *dest, unsigned int len)
 	}
 	dest[j] = '\0';	/* terminate string */
 }
-
-static const char quote_set[] = ";'\"`#$&*?[]<>{}\\";
+                                
+static const char quote_set[] = "\"'`$\\!()| ;#&*?[]<>{}";
 static unsigned int need_shell_quote_escape(const unsigned char *s, unsigned int len)
 {
 	unsigned int i = 0, cnt = 0;
@@ -240,7 +244,8 @@ static void shell_quote_escape(const char *s, char *dest, unsigned int len)
 }
 
 /* This should return the count of what needs escaping */
-static unsigned int need_escaping(const char *s, unsigned int len)
+static unsigned int need_escaping(const char *s, unsigned int len,
+	auparse_esc_t escape_mode)
 {
 	switch (escape_mode)
 	{
@@ -251,12 +256,13 @@ static unsigned int need_escaping(const char *s, unsigned int len)
 		case AUPARSE_ESC_SHELL:
 			return need_shell_escape(s, len);
 		case AUPARSE_ESC_SHELL_QUOTE:
-			return need_shell_quote_escape(s, len);;
+			return need_shell_quote_escape(s, len);
 	}
 	return 0;
 }
 
-static void escape(const char *s, char *dest, unsigned int len)
+static void escape(const char *s, char *dest, unsigned int len,
+	auparse_esc_t escape_mode)
 {
 	switch (escape_mode)
 	{
@@ -271,7 +277,7 @@ static void escape(const char *s, char *dest, unsigned int len)
 	}
 }
 
-static void key_escape(char *orig, char *dest)
+static void key_escape(char *orig, char *dest, auparse_esc_t escape_mode)
 {
 	const char *optr = orig;
 	char *str, *dptr = dest, tmp;
@@ -284,11 +290,11 @@ static void key_escape(char *orig, char *dest)
 		klen = str - optr;
 		tmp = *str;
 		*str = 0;
-		cnt = need_escaping(optr, klen);
+		cnt = need_escaping(optr, klen, escape_mode);
 		if (cnt == 0)
 			dptr = stpcpy(dptr, optr);
 		else {
-			escape(optr, dptr, klen);
+			escape(optr, dptr, klen, escape_mode);
 			dptr = strchr(dest, 0);
 			if (dptr == NULL)
 				return; // Something is really messed up
@@ -305,14 +311,6 @@ static void key_escape(char *orig, char *dest)
 	}
 }
 
-int set_escape_mode(auparse_esc_t mode)
-{
-	if (mode < 0 || mode > AUPARSE_ESC_SHELL_QUOTE)
-		return 1;
-	escape_mode = mode;
-	return 0;
-}
-
 static int is_hex_string(const char *str)
 {
 	while (*str) {
@@ -326,7 +324,7 @@ static int is_hex_string(const char *str)
 /* returns a freshly malloc'ed and converted buffer */
 char *au_unescape(char *buf)
 {
-        int len, i;
+        int olen, len, i;
         char saved, *str, *ptr = buf;
 
         /* Find the end of the name */
@@ -340,9 +338,17 @@ char *au_unescape(char *buf)
                 while (isxdigit(*ptr))
                         ptr++;
         }
+	// Make the buffer based on size of original buffer.
+	// This is in case we have unexpected non-hex digit
+	// that causes truncation of the conversion and passes
+	// back a buffer that is not sized on the expectation of
+	// strlen(buf) / 2.
+	olen = strlen(buf);
+	str = malloc(olen+1);
+
         saved = *ptr;
         *ptr = 0;
-        str = strdup(buf);
+	strcpy(str, buf);
         *ptr = saved;
 
 	/* See if its '(null)' from the kernel */
@@ -363,6 +369,11 @@ char *au_unescape(char *buf)
                 ptr++;
         }
         *ptr = 0;
+	len = ptr - str - 1;
+	olen /= 2;
+	// Because *ptr is 0, writing another 0 to it doesn't hurt anything
+	if (olen > len)
+		memset(ptr, 0, olen - len);
         return str;
 }
 
@@ -489,38 +500,44 @@ static const char *aulookup_success(int s)
 	}
 }
 
-static nvpair uid_nvl;
-static int uid_list_created=0;
+static Queue *uid_cache = NULL;
+static int uid_cache_created = 0;
 static const char *aulookup_uid(uid_t uid, char *buf, size_t size)
 {
 	char *name = NULL;
-	int rc;
+	unsigned int key;
+	QNode *q_node;
 
 	if (uid == -1) {
 		snprintf(buf, size, "unset");
 		return buf;
+	} else if (uid == 0) {
+		snprintf(buf, size, "root");
+		return buf;
 	}
 
 	// Check the cache first
-	if (uid_list_created == 0) {
-		nvpair_create(&uid_nvl);
-		nvpair_clear(&uid_nvl);
-		uid_list_created = 1;
+	if (uid_cache_created == 0) {
+		uid_cache = init_lru(19, NULL, "uid");
+		uid_cache_created = 1;
 	}
-	rc = nvpair_find_val(&uid_nvl, uid);
-	if (rc) {
-		name = uid_nvl.cur->name;
-	} else {
-		// This getpw use is OK because its for protocol 1 compatibility
-		// Add it to cache
-		struct passwd *pw;
-		pw = getpwuid(uid);
-		if (pw) {
-			nvpnode nv;
-			nv.name = strdup(pw->pw_name);
-			nv.val = uid;
-			nvpair_append(&uid_nvl, &nv);
-			name = uid_nvl.cur->name;
+	key = compute_subject_key(uid_cache, uid);
+	q_node = check_lru_cache(uid_cache, key);
+	if (q_node) {
+		if (q_node->id == uid)
+			name = q_node->str;
+		else {
+			// This getpw use is OK because its for protocol 1
+			// compatibility.  Add it to cache.
+			struct passwd *pw;
+			lru_evict(uid_cache, key);
+			q_node = check_lru_cache(uid_cache, key);
+			pw = getpwuid(uid);
+			if (pw) {
+				q_node->str = strdup(pw->pw_name);
+				q_node->id = uid;
+				name = q_node->str;
+			}
 		}
 	}
 	if (name != NULL)
@@ -532,44 +549,50 @@ static const char *aulookup_uid(uid_t uid, char *buf, size_t size)
 
 void aulookup_destroy_uid_list(void)
 {
-	if (uid_list_created == 0)
+	if (uid_cache_created == 0)
 		return;
 
-	nvpair_clear(&uid_nvl); 
-	uid_list_created = 0;
+	destroy_lru(uid_cache); 
+	uid_cache_created = 0;
 }
 
-static nvpair gid_nvl;
-static int gid_list_created=0;
+static Queue *gid_cache = NULL;
+static int gid_cache_created = 0;
 static const char *aulookup_gid(gid_t gid, char *buf, size_t size)
 {
 	char *name = NULL;
-	int rc;
+	unsigned int key;
+	QNode *q_node;
 
 	if (gid == -1) {
 		snprintf(buf, size, "unset");
 		return buf;
+	} else if (gid == 0) {
+		snprintf(buf, size, "root");
+		return buf;
 	}
 
 	// Check the cache first
-	if (gid_list_created == 0) {
-		nvpair_create(&gid_nvl);
-		nvpair_clear(&gid_nvl);
-		gid_list_created = 1;
+	if (gid_cache_created == 0) {
+		gid_cache = init_lru(19, NULL, "gid");
+		gid_cache_created = 1;
 	}
-	rc = nvpair_find_val(&gid_nvl, gid);
-	if (rc) {
-		name = gid_nvl.cur->name;
-	} else {
-		// Add it to cache
-		struct group *gr;
-		gr = getgrgid(gid);
-		if (gr) {
-			nvpnode nv;
-			nv.name = strdup(gr->gr_name);
-			nv.val = gid;
-			nvpair_append(&gid_nvl, &nv);
-			name = gid_nvl.cur->name;
+	key = compute_subject_key(gid_cache, gid);
+	q_node = check_lru_cache(gid_cache, key);
+	if (q_node) {
+		if (q_node->id == gid)
+			name = q_node->str;
+		else {
+			// Add it to cache
+			struct group *gr;
+			lru_evict(gid_cache, key);
+			q_node = check_lru_cache(gid_cache, key);
+			gr = getgrgid(gid);
+			if (gr) {
+				q_node->str = strdup(gr->gr_name);
+				q_node->id = gid;
+				name = q_node->str;
+			}
 		}
 	}
 	if (name != NULL)
@@ -581,11 +604,11 @@ static const char *aulookup_gid(gid_t gid, char *buf, size_t size)
 
 void aulookup_destroy_gid_list(void)
 {
-	if (gid_list_created == 0)
+	if (gid_cache_created == 0)
 		return;
 
-	nvpair_clear(&gid_nvl); 
-	gid_list_created = 0;
+	destroy_lru(gid_cache); 
+	gid_cache_created = 0;
 }
 
 static const char *print_uid(const char *val, unsigned int base)
@@ -640,7 +663,7 @@ static const char *print_arch(const char *val, unsigned int machine)
 		machine = audit_elf_to_machine(ival);
 	}
         if ((int)machine < 0) {
-		if (asprintf(&out, "unknown elf type(%s)", val) < 0)
+		if (asprintf(&out, "unknown-elf-type(%s)", val) < 0)
 			out = NULL;
                 return out;
         }
@@ -648,7 +671,7 @@ static const char *print_arch(const char *val, unsigned int machine)
 	if (ptr)
 	        return strdup(ptr);
 	else {
-		if (asprintf(&out, "unknown machine type(%d)", machine) < 0)
+		if (asprintf(&out, "unknown-machine-type(%d)", machine) < 0)
 			out = NULL;
                 return out;
 	}
@@ -672,7 +695,7 @@ static const char *print_ipccall(const char *val, unsigned int base)
 	if (func)
 		return strdup(func);
 	else {
-		if (asprintf(&out, "unknown ipccall(%s)", val) < 0)
+		if (asprintf(&out, "unknown-ipccall(%s)", val) < 0)
 			out = NULL;
                 return out;
 	}
@@ -696,7 +719,7 @@ static const char *print_socketcall(const char *val, unsigned int base)
 	if (func)
 		return strdup(func);
 	else {
-		if (asprintf(&out, "unknown socketcall(%s)", val) < 0)
+		if (asprintf(&out, "unknown-socketcall(%s)", val) < 0)
 			out = NULL;
                 return out;
 	}
@@ -730,7 +753,7 @@ static const char *print_syscall(const idata *id)
 		} else
                         return strdup(sys);
         } else {
-		if (asprintf(&out, "unknown syscall(%d)", syscall) < 0)
+		if (asprintf(&out, "unknown-syscall(%d)", syscall) < 0)
 			out = NULL;
 	}
 
@@ -761,7 +784,7 @@ static const char *print_exit(const char *val)
 
 static char *print_escaped(const char *val)
 {
-	const char *out;
+	char *out;
 
         if (*val == '"') {
                 char *term;
@@ -792,6 +815,44 @@ static char *print_escaped(const char *val)
 	return strdup(val); // Something is wrong with string, just send as is
 }
 
+static const char *print_escaped_ext(const idata *id)
+{
+	if (id->cwd) {
+		char *str1 = NULL, *str2, *str3 = NULL, *out = NULL;
+		str2 = print_escaped(id->val);
+		if (!str2)
+			goto err_out;
+		if (*str2 != '/') {
+			str1 = print_escaped(id->cwd);
+			if (!str1)
+				goto err_out;
+			if (asprintf(&str3, "%s/%s", str1, str2) < 0)
+				goto err_out;
+		} else {
+			// Check in case /home/../etc/passwd
+			if (strstr(str2, "..") == NULL)
+				return str2;
+
+			str3 = str2;
+			str2 = NULL;
+			str1 = NULL;
+		}
+		errno = 0;
+		out = realpath(str3, NULL);
+		if (errno) { // If there's an error, just return the original
+			free(str1);
+			free(str2);
+			return str3;
+		}
+err_out:
+		free(str1);
+		free(str2);
+		free(str3);
+		return out;
+	} else
+		return print_escaped(id->val);
+}
+
 static const char *print_proctitle(const char *val)
 {
 	char *out = (char *)print_escaped(val);
@@ -799,6 +860,9 @@ static const char *print_proctitle(const char *val)
 		size_t len = strlen(val) / 2;
 		const char *end = out + len;
 		char *ptr = out;
+		// Proctitle has arguments separated by NUL bytes
+		// We need to write over the NUL bytes with a space
+		// so that we can see the arguments
 		while ((ptr  = rawmemchr(ptr, '\0'))) {
 			if (ptr >= end)
 				break;
@@ -957,7 +1021,7 @@ static const char *print_socket_domain(const char *val)
 	}
         str = fam_i2s(i);
         if (str == NULL) {
-		if (asprintf(&out, "unknown family(0x%s)", val) < 0)
+		if (asprintf(&out, "unknown-family(0x%s)", val) < 0)
 			out = NULL;
 		return out;
 	} else
@@ -979,7 +1043,7 @@ static const char *print_socket_type(const char *val)
 	}
         str = sock_type_i2s(type);
         if (str == NULL) {
-		if (asprintf(&out, "unknown type(%s)", val) < 0)
+		if (asprintf(&out, "unknown-type(%s)", val) < 0)
 			out = NULL;
 		return out;
 	} else
@@ -1001,7 +1065,7 @@ static const char *print_socket_proto(const char *val)
 	}
         p = getprotobynumber(proto);
         if (p == NULL) {
-		if (asprintf(&out, "unknown proto(%s)", val) < 0)
+		if (asprintf(&out, "unknown-proto(%s)", val) < 0)
 			out = NULL;
 		return out;
 	} else
@@ -1010,7 +1074,8 @@ static const char *print_socket_proto(const char *val)
 
 static const char *print_sockaddr(const char *val)
 {
-        int slen, rc = 0;
+        size_t slen;
+        int rc = 0;
         const struct sockaddr *saddr;
         char name[NI_MAXHOST], serv[NI_MAXSERV];
         const char *host;
@@ -1020,7 +1085,7 @@ static const char *print_sockaddr(const char *val)
         slen = strlen(val)/2;
         host = au_unescape((char *)val);
 	if (host == NULL) {
-		if (asprintf(&out, "malformed host(%s)", val) < 0)
+		if (asprintf(&out, "malformed-host(%s)", val) < 0)
 			out = NULL;
 		return out;
 	}
@@ -1029,7 +1094,7 @@ static const char *print_sockaddr(const char *val)
 
         str = fam_i2s(saddr->sa_family);
         if (str == NULL) {
-		if (asprintf(&out, "unknown family(%d)", saddr->sa_family) < 0)
+		if (asprintf(&out, "unknown-family(%d)", saddr->sa_family) < 0)
 			out = NULL;
 		free((char *)host);
 		return out;
@@ -1139,6 +1204,9 @@ static const char *print_sockaddr(const char *val)
 					  str, n->nl_family, n->nl_pid);
                         }
                         break;
+		default:
+			rc = asprintf(&out, "{ fam=%s (unsupported) }", str);
+			break;
         }
 	if (rc < 0)
 		out = NULL;
@@ -1220,7 +1288,7 @@ static const char *print_capabilities(const char *val, int base)
 	s = cap_i2s(cap);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown capability(%s%s)",
+	if (asprintf(&out, "unknown-capability(%s%s)",
 				base == 16 ? "0x" : "", val) < 0)
 		out = NULL;
 	return out;
@@ -1286,7 +1354,7 @@ static const char *print_open_flags(const char *val)
 	size_t i;
 	unsigned int flags;
 	int cnt = 0;
-	char *out, buf[178];
+	char *out, buf[sizeof(open_flag_strings)+8];
 
 	errno = 0;
 	flags = strtoul(val, NULL, 16);
@@ -1324,7 +1392,7 @@ static const char *print_clone_flags(const char *val)
 {
 	unsigned int flags, i, clone_sig;
 	int cnt = 0;
-	char *out, buf[362]; // added 10 for signal name
+	char *out, buf[sizeof(clone_flag_strings)+16];// + 10 for signal name
 
 	errno = 0;
 	flags = strtoul(val, NULL, 16);
@@ -1380,7 +1448,7 @@ static const char *print_fcntl_cmd(const char *val)
 	s = fcntl_i2s(cmd);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown fcntl command(%d)", cmd) < 0)
+	if (asprintf(&out, "unknown-fcntl-command(%d)", cmd) < 0)
 		out = NULL;
 	return out;
 }
@@ -1402,7 +1470,7 @@ static const char *print_epoll_ctl(const char *val)
 	s = epoll_ctl_i2s(cmd);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown epoll_ctl operation (%d)", cmd) < 0)
+	if (asprintf(&out, "unknown-epoll_ctl-operation(%d)", cmd) < 0)
 		out = NULL;
 	return out;
 }
@@ -1424,15 +1492,15 @@ static const char *print_clock_id(const char *val)
 		if (s != NULL)
 			return strdup(s);
 	}
-	if (asprintf(&out, "unknown clk_id (0x%s)", val) < 0)
+	if (asprintf(&out, "unknown-clk_id(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
 
 static const char *print_prot(const char *val, unsigned int is_mmap)
 {
-	unsigned int prot, i;
-	int cnt = 0, limit;
+	unsigned int prot, i, limit;
+	int cnt = 0;
 	char buf[144];
 	char *out;
 
@@ -1453,7 +1521,7 @@ static const char *print_prot(const char *val, unsigned int is_mmap)
 		limit = 4;
 	else
 		limit = 3;
-        for (i=0; i<limit; i++) {
+        for (i=0; i < limit; i++) {
                 if (prot_table[i].value & prot) {
                         if (!cnt) {
                                 strcat(buf,
@@ -1475,7 +1543,7 @@ static const char *print_mmap(const char *val)
 {
 	unsigned int maps, i;
 	int cnt = 0;
-	char buf[176];
+	char buf[sizeof(mmap_strings)+8];
 	char *out;
 
 	errno = 0;
@@ -1533,7 +1601,7 @@ static const char *print_personality(const char *val)
 		} else
 			return strdup(s);
 	}
-	if (asprintf(&out, "unknown personality (0x%s)", val) < 0)
+	if (asprintf(&out, "unknown-personality(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -1555,7 +1623,7 @@ static const char *print_ptrace(const char *val)
 	s = ptrace_i2s(trace);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown ptrace (0x%s)", val) < 0)
+	if (asprintf(&out, "unknown-ptrace(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -1577,7 +1645,7 @@ static const char *print_prctl_opt(const char *val)
 	s = prctl_opt_i2s(opt);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown prctl option (0x%s)", val) < 0)
+	if (asprintf(&out, "unknown-prctl-option(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -1632,7 +1700,7 @@ static const char *print_rlimit(const char *val)
 		if (s != NULL)
 			return strdup(s);
 	}
-	if (asprintf(&out, "unknown rlimit (0x%s)", val) < 0)
+	if (asprintf(&out, "unknown-rlimit(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -1641,7 +1709,7 @@ static const char *print_recv(const char *val)
 {
 	unsigned int rec, i;
 	int cnt = 0;
-	char buf[234];
+	char buf[sizeof(recv_strings)+8];
 	char *out;
 
 	errno = 0;
@@ -1746,7 +1814,7 @@ static const char *print_sched(const char *val)
 			strcat(buf, "|SCHED_RESET_ON_FORK");
 		return strdup(buf);
 	}
-	if (asprintf(&out, "unknown scheduler policy (0x%s)", val) < 0)
+	if (asprintf(&out, "unknown-scheduler-policy(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -1771,7 +1839,7 @@ static const char *print_sock_opt_level(const char *val)
 			const char *s = socklevel_i2s(lvl);
 			if (s != NULL)
 				return strdup(s);
-			if (asprintf(&out, "unknown sockopt level (0x%s)", val) < 0)
+			if (asprintf(&out, "unknown-sockopt-level(0x%s)", val) < 0)
 				out = NULL;
 		} else
 			return strdup(p->p_name);
@@ -1801,7 +1869,7 @@ static const char *print_sock_opt_name(const char *val, int machine)
 	s = sockoptname_i2s(opt);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown sockopt name (0x%s)", val) < 0)
+	if (asprintf(&out, "unknown-sockopt-name(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -1823,7 +1891,7 @@ static const char *print_ip_opt_name(const char *val)
 	s = ipoptname_i2s(opt);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown ipopt name (0x%s)", val) < 0)
+	if (asprintf(&out, "unknown-ipopt-name(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -1845,7 +1913,7 @@ static const char *print_ip6_opt_name(const char *val)
 	s = ip6optname_i2s(opt);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown ip6opt name (0x%s)", val) < 0)
+	if (asprintf(&out, "unknown-ip6opt-name(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -1867,7 +1935,7 @@ static const char *print_tcp_opt_name(const char *val)
 	s = tcpoptname_i2s(opt);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown tcpopt name (0x%s)", val) < 0)
+	if (asprintf(&out, "unknown-tcpopt-name(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -1889,7 +1957,7 @@ static const char *print_udp_opt_name(const char *val)
 		out = strdup("UDP_CORK");
 	else if (opt == 100)
 		out = strdup("UDP_ENCAP");
-	else if (asprintf(&out, "unknown udpopt name (0x%s)", val) < 0)
+	else if (asprintf(&out, "unknown-udpopt-name(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -1911,7 +1979,7 @@ static const char *print_pkt_opt_name(const char *val)
 	s = pktoptname_i2s(opt);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown pktopt name (0x%s)", val) < 0)
+	if (asprintf(&out, "unknown-pktopt-name(0x%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -1920,7 +1988,7 @@ static const char *print_shmflags(const char *val)
 {
 	unsigned int flags, partial, i;
 	int cnt = 0;
-	char *out, buf[32];
+	char *out, buf[sizeof(shm_mode_strings)+sizeof(ipccmd_strings)+8];
 
 	errno = 0;
 	flags = strtoul(val, NULL, 16);
@@ -1990,7 +2058,7 @@ static const char *print_seek(const char *val)
 	}
 	str = seek_i2s(whence);
 	if (str == NULL) {
-		if (asprintf(&out, "unknown whence(%s)", val) < 0)
+		if (asprintf(&out, "unknown-whence(%s)", val) < 0)
 			out = NULL;
 		return out;
 	} else
@@ -2001,7 +2069,7 @@ static const char *print_umount(const char *val)
 {
 	unsigned int flags, i;
 	int cnt = 0;
-	char buf[64];
+	char buf[sizeof(umount_strings)+8];
 	char *out;
 
 	errno = 0;
@@ -2047,9 +2115,45 @@ static const char *print_ioctl_req(const char *val)
 	r = ioctlreq_i2s(req);
 	if (r != NULL)
 		return strdup(r);
-	if (asprintf(&out, "0x%s", val) < 0)
+	if (asprintf(&out, "0x%x", req) < 0)
 		out = NULL;
 	return out;
+}
+
+static const char *fanotify[3]= { "unknown", "allow", "deny" };
+static const char *aulookup_fanotify(unsigned s)
+{
+	switch (s)
+	{
+		default:
+			return fanotify[0];
+			break;
+		case FAN_ALLOW:
+			return fanotify[1];
+			break;
+		case FAN_DENY:
+			return fanotify[2];
+			break;
+	}
+}
+
+static const char *print_fanotify(const char *val)
+{
+        int res;
+
+	if (isdigit(*val)) {
+	        errno = 0;
+        	res = strtoul(val, NULL, 10);
+	        if (errno) {
+			char *out;
+			if (asprintf(&out, "conversion error(%s)", val) < 0)
+				out = NULL;
+	                return out;
+        	}
+
+	        return strdup(aulookup_fanotify(res));
+	} else
+		return strdup(val);
 }
 
 static const char *print_exit_syscall(const char *val)
@@ -2374,7 +2478,7 @@ static const char *print_signals(const char *val, unsigned int base)
 		if (s != NULL)
 			return strdup(s);
 	}
-	if (asprintf(&out, "unknown signal (%s%s)",
+	if (asprintf(&out, "unknown-signal(%s%s)",
 					base == 16 ? "0x" : "", val) < 0)
 		out = NULL;
 	return out;
@@ -2397,7 +2501,7 @@ static const char *print_nfproto(const char *val)
 	s = nfproto_i2s(proto);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown netfilter protocol (%s)", val) < 0)
+	if (asprintf(&out, "unknown-netfilter-protocol(%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -2419,7 +2523,7 @@ static const char *print_icmptype(const char *val)
 	s = icmptype_i2s(icmptype);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown icmp type (%s)", val) < 0)
+	if (asprintf(&out, "unknown-icmp-type(%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -2460,7 +2564,7 @@ static const char *print_hook(const char *val)
 	}
 	str = inethook_i2s(hook);
 	if (str == NULL) {
-		if (asprintf(&out, "unknown hook(%s)", val) < 0)
+		if (asprintf(&out, "unknown-hook(%s)", val) < 0)
 			out = NULL;
 		return out;
 	} else
@@ -2482,7 +2586,7 @@ static const char *print_netaction(const char *val)
 	}
 	str = netaction_i2s(action);
 	if (str == NULL) {
-		if (asprintf(&out, "unknown action(%s)", val) < 0)
+		if (asprintf(&out, "unknown-action(%s)", val) < 0)
 			out = NULL;
 		return out;
 	} else
@@ -2525,8 +2629,13 @@ static const char *print_list(const char *val)
 	if (errno) { 
 		if (asprintf(&out, "conversion error(%s)", val) < 0)
 			out = NULL;
-	} else
-		out = strdup(audit_flag_to_name(i));
+	} else {
+		const char *o = audit_flag_to_name(i);
+		if (o != NULL)
+			out = strdup(o);
+		else if (asprintf(&out, "unknown-list(%s)", val) < 0)
+			out = NULL;
+	}
 	return out;
 }
 
@@ -2685,7 +2794,7 @@ static const char *print_seccomp_code(const char *val)
 	s = seccomp_i2s(code & SECCOMP_RET_ACTION);
 	if (s != NULL)
 		return strdup(s);
-	if (asprintf(&out, "unknown seccomp code (%s)", val) < 0)
+	if (asprintf(&out, "unknown-seccomp-code(%s)", val) < 0)
 		out = NULL;
 	return out;
 }
@@ -2703,7 +2812,7 @@ int lookup_type(const char *name)
  * This is the main entry point for the auparse library. Call chain is:
  * auparse_interpret_field -> nvlist_interp_cur_val -> interpret
  */
-const char *interpret(const rnode *r)
+const char *interpret(const rnode *r, auparse_esc_t escape_mode)
 {
 	const nvlist *nv = &r->nv;
 	int type;
@@ -2715,11 +2824,12 @@ const char *interpret(const rnode *r)
 	id.syscall = r->syscall;
 	id.a0 = r->a0;
 	id.a1 = r->a1;
+	id.cwd = r->cwd;
 	id.name = nvlist_get_cur_name(nv);
 	id.val = nvlist_get_cur_val(nv);
 	type = auparse_interp_adjust_type(r->type, id.name, id.val);
 
-	out = auparse_do_interpretation(type, &id);
+	out = auparse_do_interpretation(type, &id, escape_mode);
 	n = nvlist_get_cur(nv);
 	n->interp_val = (char *)out;
 
@@ -2775,7 +2885,8 @@ int auparse_interp_adjust_type(int rtype, const char *name, const char *val)
  * This can be called by either interpret() or from ausearch-report or
  * auditctl-listing.c. Returns a malloc'ed buffer that the caller must free.
  */
-char *auparse_do_interpretation(int type, const idata *id)
+char *auparse_do_interpretation(int type, const idata *id,
+	auparse_esc_t escape_mode)
 {
 	const char *out;
 
@@ -2786,6 +2897,11 @@ char *auparse_do_interpretation(int type, const idata *id)
 			const char *val = il.cur->interp_val;
 
 			if (val) {
+				// If we don't know what it is when auditd
+				// recorded it, try it again incase the
+				// libraries have been updated to support it.
+				if (strncmp(val, "unknown-", 8 ) == 0)
+					goto unknown; 
 				if (type == AUPARSE_TYPE_UID ||
 						type == AUPARSE_TYPE_GID)
 					return print_escaped(val);
@@ -2794,6 +2910,7 @@ char *auparse_do_interpretation(int type, const idata *id)
 			}
 		}
 	}
+unknown:
 
 	switch(type) {
 		case AUPARSE_TYPE_UID:
@@ -2812,9 +2929,12 @@ char *auparse_do_interpretation(int type, const idata *id)
 			out = print_exit(id->val);
 			break;
 		case AUPARSE_TYPE_ESCAPED:
+		case AUPARSE_TYPE_ESCAPED_FILE:
+			out = print_escaped_ext(id);
+			break;
 		case AUPARSE_TYPE_ESCAPED_KEY:
 			out = print_escaped(id->val);
-                        break;
+			break;
 		case AUPARSE_TYPE_PERM:
 			out = print_perm(id->val);
 			break;
@@ -2905,6 +3025,9 @@ char *auparse_do_interpretation(int type, const idata *id)
 		case AUPARSE_TYPE_IOCTL_REQ:
 			out = print_ioctl_req(id->val);
 			break;
+		case AUPARSE_TYPE_FANOTIFY:
+			out = print_fanotify(id->val);
+			break;
 		case AUPARSE_TYPE_MAC_LABEL:
 		case AUPARSE_TYPE_UNCLASSIFIED:
 		default:
@@ -2912,7 +3035,7 @@ char *auparse_do_interpretation(int type, const idata *id)
 			break;
         }
 
-	if (escape_mode != AUPARSE_ESC_RAW) {
+	if (escape_mode != AUPARSE_ESC_RAW && out) {
 		char *str = NULL;
 		unsigned int len = strlen(out);
 		if (type == AUPARSE_TYPE_ESCAPED_KEY) {
@@ -2922,11 +3045,11 @@ char *auparse_do_interpretation(int type, const idata *id)
 		}
 		if (str == NULL) {
 			// This is the normal path
-			unsigned int cnt = need_escaping(out, len);
+			unsigned int cnt = need_escaping(out, len, escape_mode);
 			if (cnt) {
 				char *dest = malloc(len + 1 + (3*cnt));
 				if (dest)
-					escape(out, dest, len);
+					escape(out, dest, len, escape_mode);
 				free((void *)out);
 				out = dest;
 			}
@@ -2939,7 +3062,7 @@ char *auparse_do_interpretation(int type, const idata *id)
 				unsigned int klen = str - ptr;
 				char tmp = *str;
 				*str = 0;
-				cnt += need_escaping(ptr, klen);
+				cnt += need_escaping(ptr, klen, escape_mode);
 				*str = tmp;
 				ptr = str;
 				// If we are not at the end...
@@ -2958,7 +3081,7 @@ char *auparse_do_interpretation(int type, const idata *id)
 				// actually put a control character in a key.
 				char *dest = malloc(len + 1 + (3*cnt));
 				if (dest)
-					key_escape(out, dest);
+					key_escape(out, dest, escape_mode);
 				free((void *)out);
 				out = dest;
 			}

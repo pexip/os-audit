@@ -15,7 +15,8 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Boston, MA 02110-1335, USA.
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
@@ -65,15 +66,15 @@ void nvlist_append(nvlist *l, nvnode *node)
 
 int nvlist_find_val(nvlist *l, long val)
 {
-        register nvnode* window = l->head;
+        register nvnode* node = l->head;
 
-	while (window) {
-		if (window->val == val) {
-			l->cur = window;
+	while (node) {
+		if (node->val == val) {
+			l->cur = node;
 			return 1;
 		}
 		else
-			window = window->next;
+			node = node->next;
 	}
 	return 0;
 }

@@ -15,14 +15,15 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Boston, MA 02110-1335, USA.
 *
 * Authors:
 *   Steve Grubb <sgrubb@redhat.com>
 */
 
-#ifndef AUPARSE_HEADER
-#define AUPARSE_HEADER
+#ifndef AUSEARCH_PARSE_HEADER
+#define AUSEARCH_PARSE_HEADER
 
 #include "config.h"
 #include "ausearch-llist.h"

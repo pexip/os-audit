@@ -1,5 +1,5 @@
 /* audispd.c --
- * Copyright 2007-08,2013,2016 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2007-08,2013,2016-17 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -34,6 +34,9 @@
 #include <sys/poll.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <limits.h>
+#include <sys/uio.h>
+#include <getopt.h>
 
 #include "audispd-config.h"
 #include "audispd-pconfig.h"
@@ -51,8 +54,7 @@ static daemon_conf_t daemon_config;
 static conf_llist plugin_conf;
 static int audit_fd;
 static pthread_t inbound_thread;
-static const char *config_file = "/etc/audisp/audispd.conf";
-static const char *plugin_dir =  "/etc/audisp/plugins.d/";
+static char *config_file = NULL;
 
 /* Local function prototypes */
 static void signal_plugins(int sig);
@@ -60,6 +62,24 @@ static int event_loop(void);
 static int safe_exec(plugin_conf_t *conf);
 static void *inbound_thread_main(void *arg);
 static void process_inbound_event(int fd);
+
+/*
+ * Output a usage message and exit with an error.
+ */
+static void usage(void)
+{
+	fprintf(stderr, "%s",
+		"Usage: audispd [options]\n"
+		"-c,--config_dir <config_dir_path>: Override default "
+			"configuration file path\n");
+	exit(2);
+}
+
+static void release_memory_exit(int code)
+{
+	free(config_file);
+	exit(code);
+}
 
 /*
  * SIGTERM handler
@@ -130,7 +150,7 @@ static void load_plugin_conf(conf_llist *plugin)
 	plist_create(plugin);
 
 	/* read configs */
-	d = opendir(plugin_dir);
+	d = opendir(daemon_config.plugin_dir);
 	if (d) {
 		struct dirent *e;
 
@@ -143,7 +163,7 @@ static void load_plugin_conf(conf_llist *plugin)
 				continue;
 
 			snprintf(fname, sizeof(fname), "%s%s",
-				plugin_dir, e->d_name);
+				daemon_config.plugin_dir, e->d_name);
 
 			clear_pconfig(&config);
 			if (load_pconfig(&config, fname) == 0) {
@@ -329,11 +349,42 @@ static int reconfigure(void)
 
 int main(int argc, char *argv[])
 {
+	extern char *optarg;
+	extern int optind;
+	static const struct option opts[] = {
+		{"config_dir", required_argument, NULL, 'c'},
+		{NULL, 0, NULL, 0}
+	};
 	lnode *conf;
 	struct sigaction sa;
 	int i;
 
-	set_aumessage_mode(MSG_SYSLOG, DBG_YES);
+	while ((i = getopt_long(argc, argv, "i:c:", opts, NULL)) != -1) {
+		switch (i) {
+			case 'c':
+				if (asprintf(&config_file, "%s/audispd.conf",
+						optarg) < 0) {
+mem_out:
+					printf(
+					"Failed allocating memory, exiting\n");
+					release_memory_exit(1);
+				}
+				break;
+			default:
+				usage();
+		}
+	}
+
+	/* check for trailing command line following options */
+	if (optind < argc)
+		usage();
+
+	if (config_file == NULL)
+		config_file = strdup("/etc/audisp/audispd.conf");
+	if (config_file == NULL)
+		goto mem_out;
+
+	set_aumessage_mode(MSG_SYSLOG, DBG_NO);
 
 	/* Clear any procmask set by libev */
 	sigfillset (&sa.sa_mask);
@@ -355,15 +406,13 @@ int main(int argc, char *argv[])
 	sigaction(SIGALRM, &sa, NULL);
 	sa.sa_handler = child_handler;
 	sigaction(SIGCHLD, &sa, NULL);
+	setsid();
 
-	/* move stdin to its own fd */
-	if (argc == 3 && strcmp(argv[1], "--input") == 0) 
-		audit_fd = open(argv[2], O_RDONLY);
-	else
-		audit_fd = dup(0);
+	audit_fd = dup(0);
 	if (audit_fd < 0) {
-		syslog(LOG_ERR, "Failed setting up input, exiting");
-		return 1;
+		syslog(LOG_ERR, "Failed setting up input(%s, %d), exiting",
+				strerror(errno), audit_fd);
+		release_memory_exit(1);
 	}
 
 	/* Make all descriptors point to dev null */
@@ -372,30 +421,35 @@ int main(int argc, char *argv[])
 		if (dup2(0, i) < 0 || dup2(1, i) < 0 || dup2(2, i) < 0) {
 			syslog(LOG_ERR, "Failed duping /dev/null %s, exiting",
 					strerror(errno));
-			return 1;
+			release_memory_exit(1);
 		}
 		close(i);
 	} else {
 		syslog(LOG_ERR, "Failed opening /dev/null %s, exiting",
 					strerror(errno));
-		return 1;
+		close(audit_fd);
+		release_memory_exit(1);
 	}
 	if (fcntl(audit_fd, F_SETFD, FD_CLOEXEC) < 0) {
 		syslog(LOG_ERR, "Failed protecting input %s, exiting",
 					strerror(errno));
-		return 1;
+		close(audit_fd);
+		release_memory_exit(1);
 	}
 
 	/* init the daemon's config */
-	if (load_config(&daemon_config, config_file))
-		return 6;
+	if (load_config(&daemon_config, config_file)) {
+		close(audit_fd);
+		release_memory_exit(6);
+	}
 
 	load_plugin_conf(&plugin_conf);
 
 	/* if no plugins - exit */
 	if (plist_count(&plugin_conf) == 0) {
 		syslog(LOG_NOTICE, "No plugins found, exiting");
-		return 0;
+		close(audit_fd);
+		release_memory_exit(0);
 	}
 
 	/* Plugins are started with the auditd priority */
@@ -423,11 +477,19 @@ int main(int argc, char *argv[])
 	/* Tell it to poll the audit fd */
 	if (add_event(audit_fd, process_inbound_event) < 0) {
 		syslog(LOG_ERR, "Cannot add event, exiting");
-		return 1;
+		close(audit_fd);
+		close(i);
+		release_memory_exit(1);
 	}
 
 	/* Create inbound thread */
 	pthread_create(&inbound_thread, NULL, inbound_thread_main, NULL); 
+
+	// Block these signals on main thread so poll(2) wakes up
+	sigemptyset (&sa.sa_mask);
+	sigaddset(&sa.sa_mask, SIGHUP);
+	sigaddset(&sa.sa_mask, SIGTERM);
+	pthread_sigmask(SIG_BLOCK, &sa.sa_mask, NULL);
 
 	/* Start event loop */
 	while (event_loop()) {
@@ -462,6 +524,7 @@ int main(int argc, char *argv[])
 	/* Cleanup the queue */
 	destroy_queue();
 	free_config(&daemon_config);
+	free((void *)config_file);
 	
 	return 0;
 }
@@ -488,7 +551,12 @@ static int safe_exec(plugin_conf_t *conf)
 	}
 
 	/* Set up comm with child */
-	dup2(conf->plug_pipe[0], 0);
+	if (dup2(conf->plug_pipe[0], 0) < 0) {
+		close(conf->plug_pipe[0]);
+		close(conf->plug_pipe[1]);
+		conf->pid = 0;
+		return -1;	/* Failed to fork */
+	}
 	for (i=3; i<24; i++)	 /* Arbitrary number */
 		close(i);
 
@@ -642,7 +710,7 @@ static int event_loop(void)
 		type = audit_msg_type_to_name(e->hdr.type);
 		if (type == NULL) {
 			snprintf(unknown, sizeof(unknown),
-				"UNKNOWN[%d]", e->hdr.type);
+				"UNKNOWN[%u]", e->hdr.type);
 			type = unknown;
 		}
 		// Protocol 1 is not formatted
@@ -683,9 +751,11 @@ static int event_loop(void)
 				continue;
 
 			/* Now send the event to the right child */
-			if (conf->p->type == S_SYSLOG) 
-				send_syslog(v, e->hdr.ver);
-			else if (conf->p->type == S_AF_UNIX) {
+			if (conf->p->type == S_SYSLOG) {
+				// Strip out End of event records for syslog
+				if (e->hdr.type != AUDIT_EOE)
+					send_syslog(v, e->hdr.ver);
+			} else if (conf->p->type == S_AF_UNIX) {
 				if (conf->p->format == F_STRING)
 					send_af_unix_string(v, len);
 				else
@@ -863,4 +933,3 @@ static void process_inbound_event(int fd)
 		}
 	}
 }
-
