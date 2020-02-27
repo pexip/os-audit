@@ -1,5 +1,18 @@
---- a/audisp/plugins/builtins/syslog.conf.old  2014-10-14 16:18:55.882040233 +0000
-+++ b/audisp/plugins/builtins/syslog.conf      2014-10-14 16:19:19.894041428 +0000
+--- a/init.d/auditd.conf
++++ b/init.d/auditd.conf
+@@ -23,8 +23,8 @@
+ action_mail_acct = root
+ admin_space_left = 50
+ admin_space_left_action = SUSPEND
+-disk_full_action = SUSPEND
+-disk_error_action = SUSPEND
++disk_full_action = SYSLOG
++disk_error_action = SYSLOG
+ use_libwrap = yes
+ ##tcp_listen_port = 60
+ tcp_listen_queue = 5
+--- a/audisp/plugins/builtins/syslog.conf
++++ b/audisp/plugins/builtins/syslog.conf
 @@ -6,9 +6,9 @@
  # logged to. Valid options are LOG_LOCAL0 through 7, LOG_AUTH,
  # LOG_AUTHPRIV, LOG_DAEMON, LOG_SYSLOG, and LOG_USER.
@@ -12,18 +25,3 @@
 -args = LOG_INFO
 +args = LOG_INFO LOG_LOCAL6
  format = string
-diff --git a/init.d/auditd.conf b/init.d/auditd.conf
-index a52b6c7..283850d 100644
---- a/init.d/auditd.conf
-+++ b/init.d/auditd.conf
-@@ -22,8 +22,8 @@ space_left_action = SYSLOG
- action_mail_acct = root
- admin_space_left = 50
- admin_space_left_action = SUSPEND
--disk_full_action = SUSPEND
--disk_error_action = SUSPEND
-+disk_full_action = SYSLOG
-+disk_error_action = SYSLOG
- use_libwrap = yes
- ##tcp_listen_port = 
- tcp_listen_queue = 5

@@ -1,3 +1,10 @@
+audit (1:2.8.4-3pexip1) pexip; urgency=medium
+
+  * Migrate to Buster
+  * debian/patches/custom-config.diff: refresh
+
+ -- Vincent Sanders <vince@pexip.com>  Fri, 07 Feb 2020 08:48:22 +0000
+
 audit (1:2.8.4-3) unstable; urgency=medium
 
   [ Ondřej Nový ]
