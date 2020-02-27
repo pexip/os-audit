@@ -1,4 +1,4 @@
-.TH AUDITCTL: "8" "Aug 2014" "Red Hat" "System Administration Utilities"
+.TH AUDITCTL: "8" "Jan 2017" "Red Hat" "System Administration Utilities"
 .SH NAME
 auditctl \- a utility to assist controlling the kernel's audit system
 .SH SYNOPSIS
@@ -30,7 +30,9 @@ Set failure mode
 Help
 .TP
 .B \-i
-Ignore errors when reading rules from a file. This causes auditctl to always return a success exit code.
+When given by itself, ignore errors when reading rules from a file. This causes auditctl to always return a success exit code. If passed as an argument to
+.B \-s
+then it gives an interpretation of the numbers to human readable words if possible.
 .TP
 .BI \-\-loginuid-immutable
 This option tells the kernel to make loginuids unchangeable once they are set. Changing loginuids requires CAP_AUDIT_CONTROL. So, its not something that can be done by unprivileged users. Setting this makes loginuid tamper-proof, but can cause some problems in certain kinds of containers.
@@ -41,6 +43,9 @@ If you have an existing directory watch and bind or move mount another subtree i
 .BI \-r\  rate
 Set limit in messages/sec (\fB0\fP=none). If this \fIrate\fP is non-zero and is exceeded, the failure flag is consulted by the kernel for action. The default value is \fB0\fP.
 .TP
+.BI \-\-reset-lost
+Reset the lost record counter shown by the status command.
+.TP
 .BI \-R\  file
 Read rules from a \fIfile\fP. The rules must be 1 per line and in the order that they are to be executed in. The rule file must be owned by root and not readable by other users or it will be rejected. The rule file may have comments embedded by starting the line with a '#' character. Rules that are read from a file are identical to what you would type on a command line except they are not preceded by auditctl (since auditctl is the one executing the file) and you would not use shell escaping since auditctl is reading the file instead of bash.
 .TP
@@ -49,7 +54,7 @@ Trim the subtrees after a mount command.
 .SH STATUS OPTIONS
 .TP
 .B \-l
-List all rules 1 per line. Two more options may be given to this command. You can give either a key option (\-k) to list rules that match a key or a (\-i) to have a0 through a3 interpretted to help determine the syscall argument values are correct .
+List all rules 1 per line. Two more options may be given to this command. You can give either a key option (\-k) to list rules that match a key or a (\-i) to have a0 through a3 interpreted to help determine the syscall argument values are correct .
 .TP
 .BI \-m\  text
 Send a user space message into the audit system. This can only be done if you have CAP_AUDIT_WRITE capability (normally the root user has this). The resulting event will be the USER type.
@@ -76,7 +81,7 @@ Add a rule to the syscall exit list. This list is used upon exit from a system c
 Add a rule to the user message filter list. This list is used by the kernel to filter events originating in user space before relaying them to the audit daemon. It should be noted that the only fields that are valid are: uid, auid, gid, pid, subj_user, subj_role, subj_type, subj_sen, subj_clr, and msgtype. All other fields will be treated as non-matching. It should be understood that any event originating from user space from a process that has CAP_AUDIT_WRITE will be recorded into the audit trail. This means that the most likely use for this filter is with rules that have an action of never since nothing has to be done to allow events to be recorded.
 .TP
 .B exclude
-Add a rule to the event type exclusion filter list. This list is used to filter events that you do not want to see. For example, if you do not want to see any avc messages, you would using this list to record that. The message type that you do not wish to see is given with the msgtype field. 
+Add a rule to the event type exclusion filter list. This list is used to filter events that you do not want to see. For example, if you do not want to see any avc messages, you would using this list to record that. Events can be excluded by process ID, user ID, group ID, login user ID, message type or subject context.  The action is ignored and uses its default of "never".
 .RE
 
 The following describes the valid \fIactions\fP for the rule:
@@ -201,6 +206,9 @@ Process ID
 .TP
 .B ppid
 Parent's Process ID
+.TP
+.B sessionid
+User's login session ID
 .TP
 .B subj_user
 Program's SE Linux User

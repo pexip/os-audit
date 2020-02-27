@@ -149,14 +149,14 @@ int main(int argc, char *argv[])
 
 	/* Generate a checkpoint if required */
 	if (checkpt_filename) {
-		/* Providing we found something and haven't failed */
-		if (!checkpt_failure && found)
+		/* Providing haven't failed and have sucessfully read data records, save a checkpoint */
+		if (!checkpt_failure && (rc == 0))
 			save_ChkPt(checkpt_filename);
 		free_ChkPtMemory();
 		free((void *)checkpt_filename);
 		/*
  		 * A checkpoint failure at this point means either 
- 		 * - we failed in attempting to create the checkpouint file
+ 		 * - we failed in attempting to create the checkpoint file
  		 *   and so we will return 11
  		 * - we had a corrupted checkpoint file and so we will return 12
  		 */
@@ -171,9 +171,9 @@ int main(int argc, char *argv[])
 	free(event_type);
 	free(user_file);
 	free((char *)event_key);
-	free(event_tuid);
-	free(event_teuid);
-	free(event_tauid);
+	free((char *)event_tuid);
+	free((char *)event_teuid);
+	free((char *)event_tauid);
 	auparse_destroy(NULL);
 	if (rc)
 		return rc;
@@ -249,7 +249,7 @@ static int process_logs(void)
 			if (	(sbuf.st_dev == chkpt_input_dev) &&
 				(sbuf.st_ino == chkpt_input_ino) ) {
 				/*
-				 * If we are ignoing all but time, then we
+				 * If we are ignoring all but time, then we
 				 * don't stop checking more files and just
 				 * let this loop go to completion and hence
 				 * we will find the 'oldest' file.
@@ -318,7 +318,7 @@ static int process_logs(void)
 }
 
 /*
- * Decide if we should start outputing events given we loaded a checkpoint.
+ * Decide if we should start outputting events given we loaded a checkpoint.
  *
  * The previous checkpoint will have recorded the last event outputted,
  * if there was one. If nothing is to be output, either the audit.log file
@@ -329,7 +329,7 @@ static int process_logs(void)
  * 	1	can output
  * 	2	can output but not this event
  * 	3	we have found an event whose time is > MAX_EVENT_DELTA_SECS secs
- * 		past our checkpoint time, which means this particulare event is
+ * 		past our checkpoint time, which means this particular event is
  * 		complete. This should not happen, for we should have found our
  * 		checkpoint event before ANY other completed event.
  *
@@ -443,16 +443,6 @@ static int process_log_fd(void)
 			if (do_output == 1) {
 				found = 1;
 				output_record(entries);
-
-				/* Remember this event if checkpointing */
-				if (checkpt_filename) {
-					if (set_ChkPtLastEvent(&entries->e)) {
-						list_clear(entries);
-						free(entries);
-						fclose(log_fd);
-						return 4;	/* no memory */
-					}
-				}
 			} else if (do_output == 3) {
 				fprintf(stderr,
 			"Corrupted checkpoint file. Inode match, but newer complete event (%lu.%03u:%lu) found before loaded checkpoint %lu.%03u:%lu\n",
@@ -474,6 +464,15 @@ static int process_log_fd(void)
 			}
 			if (line_buffered)
 				fflush(stdout);
+		}
+		/* Remember this event if checkpointing, irrespective of if we displayed it or not (do_output == 1) */
+		if (checkpt_filename) {
+			if (set_ChkPtLastEvent(&entries->e)) {
+				list_clear(entries);
+				free(entries);
+				fclose(log_fd);
+				return 4;	/* no memory */
+			}
 		}
 		ausearch_free_interpretations();
 		list_clear(entries);
@@ -552,7 +551,7 @@ static int get_record(llist **l)
 					log_fd);
 
 		if (timer_running) {
-			/* timer may have fired but thats ok */
+			/* timer may have fired but that's ok */
 			timer_running = 0;
 			alarm(0);
 		}

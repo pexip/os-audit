@@ -1,6 +1,6 @@
 /*
 * nvlist.h - Header file for nvlist.c
-* Copyright (c) 2006-07 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2006-07,2016 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved.
 *
 * This library is free software; you can redistribute it and/or
@@ -44,11 +44,13 @@ void nvlist_create(nvlist *l);
 void nvlist_clear(nvlist* l);
 nvnode *nvlist_next(nvlist *l);
 int nvlist_get_cur_type(const rnode *r);
-const char *nvlist_interp_cur_val(const rnode *r);
+const char *nvlist_interp_cur_val(const rnode *r, auparse_esc_t escape_mode);
 void nvlist_append(nvlist *l, nvnode *node);
 void nvlist_interp_fixup(nvlist *l);
 
 /* Given a numeric index, find that record. */
+nvnode *nvlist_goto_rec(nvlist *l, unsigned int i);
+/* Given a name, find that record */
 int nvlist_find_name(nvlist *l, const char *name);
 
 AUDIT_HIDDEN_END

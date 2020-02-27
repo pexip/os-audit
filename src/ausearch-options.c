@@ -1,5 +1,5 @@
 /* ausearch-options.c - parse commandline options and configure ausearch
- * Copyright 2005-08,2010-11,2014,2016 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-08,2010-11,2014,2016-17 Red Hat Inc., Durham, North Carolina.
  * Copyright (c) 2011 IBM Corp.
  * All Rights Reserved.
  *
@@ -31,15 +31,20 @@
 #include <errno.h>
 #include <pwd.h>
 #include <grp.h>
+#include <limits.h>
 #include "ausearch-options.h"
 #include "ausearch-time.h"
 #include "ausearch-int.h"
 #include "libaudit.h"
+#include "auparse-defs.h"
 
 
 /* Global vars that will be accessed by the main program */
 char *user_file = NULL;
 int force_logs = 0;
+const char *checkpt_filename = NULL;	/* checkpoint filename if present */
+report_t report_format = RPT_DEFAULT;
+
 
 /* Global vars that will be accessed by the match model */
 unsigned int event_id = -1;
@@ -47,6 +52,7 @@ gid_t event_gid = -1, event_egid = -1;
 ilist *event_type = NULL;
 pid_t event_pid = -1, event_ppid = -1;
 success_t event_success = S_UNSET;
+auparse_esc_t escape_mode = AUPARSE_ESC_TTY;
 int event_exact_match = 0;
 uid_t event_uid = -1, event_euid = -1, event_loginuid = -2;
 const char *event_tuid = NULL, *event_teuid = NULL, *event_tauid = NULL;
@@ -59,6 +65,7 @@ int event_exit_is_set = 0;
 int line_buffered = 0;
 int event_debug = 0;
 int checkpt_timeonly = 0;
+int extra_keys = 0, extra_labels = 0, extra_obj2 = 0, extra_time = 0;
 const char *event_key = NULL;
 const char *event_filename = NULL;
 const char *event_exe = NULL;
@@ -69,8 +76,6 @@ const char *event_subject = NULL;
 const char *event_object = NULL;
 const char *event_uuid = NULL;
 const char *event_vmname = NULL;
-const char *checkpt_filename = NULL;	/* checkpoint filename if present */
-report_t report_format = RPT_DEFAULT;
 ilist *event_type;
 
 slist *event_node_list = NULL;
@@ -86,7 +91,8 @@ S_HOSTNAME, S_INTERP, S_INFILE, S_MESSAGE_TYPE, S_PID, S_SYSCALL, S_OSUCCESS,
 S_TIME_END, S_TIME_START, S_TERMINAL, S_ALL_UID, S_EFF_UID, S_UID, S_LOGINID,
 S_VERSION, S_EXACT_MATCH, S_EXECUTABLE, S_CONTEXT, S_SUBJECT, S_OBJECT,
 S_PPID, S_KEY, S_RAW, S_NODE, S_IN_LOGS, S_JUST_ONE, S_SESSION, S_EXIT,
-S_LINEBUFFERED, S_UUID, S_VMNAME, S_DEBUG, S_CHECKPOINT, S_ARCH };
+S_LINEBUFFERED, S_UUID, S_VMNAME, S_DEBUG, S_CHECKPOINT, S_ARCH, S_FORMAT,
+S_EXTRA_TIME, S_EXTRA_LABELS, S_EXTRA_KEYS, S_EXTRA_OBJ2, S_ESCAPE };
 
 static struct nv_pair optiontab[] = {
 	{ S_EVENT, "-a" },
@@ -97,9 +103,15 @@ static struct nv_pair optiontab[] = {
 	{ S_CHECKPOINT, "--checkpoint" },
 	{ S_DEBUG, "--debug" },
 	{ S_EXIT, "-e" },
+	{ S_ESCAPE, "--escape" },
 	{ S_EXIT, "--exit" },
+	{ S_EXTRA_KEYS, "--extra-keys" },
+	{ S_EXTRA_LABELS, "--extra-labels" },
+	{ S_EXTRA_OBJ2, "--extra-obj2" },
+	{ S_EXTRA_TIME, "--extra-time" },
 	{ S_FILENAME, "-f" },
 	{ S_FILENAME, "--file" },
+	{ S_FORMAT, "--format" },
 	{ S_ALL_GID, "-ga" },
 	{ S_ALL_GID, "--gid-all" },
 	{ S_EFF_GID, "-ge" },
@@ -171,7 +183,7 @@ static struct nv_pair optiontab[] = {
 
 static int audit_lookup_option(const char *name)
 {
-        int i;
+        unsigned int i;
 
         for (i = 0; i < OPTION_NAMES; i++)
                 if (!strcmp(optiontab[i].name, name))
@@ -189,6 +201,7 @@ static void usage(void)
 	"\t--debug\t\t\tWrite malformed events that are skipped to stderr\n"
 	"\t-e,--exit  <Exit code or errno>\tsearch based on syscall exit code\n"
 	"\t-f,--file  <File name>\t\tsearch based on file name\n"
+	"\t--format [raw|default|interpret|csv|text] results format options\n"
 	"\t-ga,--gid-all <all Group id>\tsearch based on All group ids\n"
 	"\t-ge,--gid-effective <effective Group id>  search based on Effective\n\t\t\t\t\tgroup id\n"
 	"\t-gi,--gid <Group Id>\t\tsearch based on group id\n"
@@ -330,6 +343,42 @@ int check_params(int count, char *vars[])
 				retval = -1;
 			}
 			break;
+		case S_EXTRA_KEYS:
+			extra_keys = 1;
+			if (optarg) {
+				fprintf(stderr, 
+					"Argument is NOT required for %s\n",
+					vars[c]);
+        	                retval = -1;
+			}
+			break;
+		case S_EXTRA_LABELS:
+			extra_labels = 1;
+			if (optarg) {
+				fprintf(stderr, 
+					"Argument is NOT required for %s\n",
+					vars[c]);
+        	                retval = -1;
+			}
+			break;
+		case S_EXTRA_OBJ2:
+			extra_obj2 = 1;
+			if (optarg) {
+				fprintf(stderr, 
+					"Argument is NOT required for %s\n",
+					vars[c]);
+        	                retval = -1;
+			}
+			break;
+		case S_EXTRA_TIME:
+			extra_time = 1;
+			if (optarg) {
+				fprintf(stderr, 
+					"Argument is NOT required for %s\n",
+					vars[c]);
+        	                retval = -1;
+			}
+			break;
 		case S_COMM:
 			if (!optarg) {
 				fprintf(stderr, 
@@ -350,10 +399,18 @@ int check_params(int count, char *vars[])
 					"Argument is required for %s\n",
 					vars[c]);
 				retval = -1;
+				break;
 			} else {
+				if (strlen(optarg) >= PATH_MAX) {
+					fprintf(stderr,
+						"File name is too long %s\n",
+						optarg);
+					retval = -1;
+					break;
+				}
 				event_filename = strdup(optarg);
-        	                if (event_filename == NULL)
-                	                retval = -1;
+       		                if (event_filename == NULL)
+               		                retval = -1;
 				c++;
 			}
 			break;
@@ -609,6 +666,64 @@ int check_params(int count, char *vars[])
 				fprintf(stderr, 
 					"Argument is NOT required for --raw\n");
         	                retval = -1;
+			}
+			break;
+		case S_ESCAPE:
+			if (!optarg) {
+				fprintf(stderr, 
+					"Argument is required for %s\n",
+					vars[c]);
+				retval = -1;
+			} else {
+				if (strcmp(optarg, "raw") == 0)
+					escape_mode = AUPARSE_ESC_RAW;
+				else if (strcmp(optarg, "tty") == 0)
+					escape_mode = AUPARSE_ESC_TTY;
+				else if (strncmp(optarg, "shell", 6) == 0)
+					escape_mode = AUPARSE_ESC_SHELL;
+				else if (strcmp(optarg, "shell_quote") == 0)
+					escape_mode = AUPARSE_ESC_SHELL_QUOTE;
+				else {
+					fprintf(stderr, 
+						"Unknown option (%s)\n",
+						optarg);
+					retval = -1;
+					break;
+				}
+				c++;
+			}
+			break;
+		case S_FORMAT:
+			if (report_format != RPT_DEFAULT) {
+				fprintf(stderr, 
+					"Multiple output formats, use only 1\n");
+        	                retval = -1;
+				break;
+			}
+			if (!optarg) {
+				fprintf(stderr, 
+					"Argument is required for %s\n",
+					vars[c]);
+				retval = -1;
+			} else {
+				if (strcmp(optarg, "raw") == 0)
+					report_format = RPT_RAW;
+				else if (strcmp(optarg, "default") == 0)
+					report_format = RPT_DEFAULT;
+				else if (strncmp(optarg, "interp", 6) == 0)
+					report_format = RPT_INTERP;
+				else if (strcmp(optarg, "csv") == 0)
+					report_format = RPT_CSV;
+				else if (strcmp(optarg, "text") == 0)
+					report_format = RPT_TEXT;
+				else {
+					fprintf(stderr, 
+						"Unknown option (%s)\n",
+						optarg);
+					retval = -1;
+					break;
+				}
+				c++;
 			}
 			break;
 		case S_NODE:
@@ -1175,6 +1290,12 @@ int check_params(int count, char *vars[])
 			break;
 		}
 		c++;
+	}
+
+	// Final config checks
+	if ((extra_time || extra_labels || extra_keys) && report_format != RPT_CSV) {
+		fprintf(stderr, "--extra options requires format to be csv\n");
+		retval = -1;
 	}
 
 	return retval;

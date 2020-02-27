@@ -1,3 +1,107 @@
+audit (1:2.8.4-3) unstable; urgency=medium
+
+  [ Ondřej Nový ]
+  * d/copyright: Use https protocol in Format field
+
+  [ Andrej Shadura ]
+  * Port auditd.init and augenrules to the POSIX shell
+
+  [ Laurent Bigonville ]
+  * d/p/06-do_not_hardcode_stdint_path.patch: Do not hardcode the path to
+    stdint.h (Closes: #927946, #909967)
+
+ -- Laurent Bigonville <bigon@debian.org>  Thu, 25 Apr 2019 16:47:32 +0200
+
+audit (1:2.8.4-2) unstable; urgency=medium
+
+  * d/p/04-fix_ftbfs_tests.patch: Fix FTBFS in the test with parallel build
+    (Closes: #907538)
+
+ -- Laurent Bigonville <bigon@debian.org>  Fri, 31 Aug 2018 07:33:31 +0200
+
+audit (1:2.8.4-1) unstable; urgency=medium
+
+  * New upstream version 2.8.4
+  * debian/control: Bump Standards-Version to 4.2.1 (no further changes)
+  * debian/control: Drop X-Python(3)-Version to please lintian
+  * debian/docs: Stop installing TODO file as it's not shipped in the tarball
+    anymore
+  * debian/libauparse0.symbols: Remove lru symbols that are now hidden
+
+ -- Laurent Bigonville <bigon@debian.org>  Tue, 28 Aug 2018 11:31:54 +0200
+
+audit (1:2.8.3-1) unstable; urgency=medium
+
+  [ Karsten Merker ]
+  * Add pkg.audit.noldap build-profile to help bootstrap new architectures
+    (Closes: #894314)
+
+  [ Laurent Bigonville ]
+  * New bugfix upstream release
+  * debian/control: Bump Standards-Version to 4.1.4 (no further changes)
+  * debian/rules: Use dh_missing instead of dh_install to list not installed
+    files
+  * debian/control: Add Rules-Requires-Root: binary-targets field
+  * Drop old and unused debian/patches/DESACTIVATED:build-on-hppa patch
+  * debian/control: Move git repository to salsa
+
+ -- Laurent Bigonville <bigon@debian.org>  Thu, 26 Apr 2018 11:53:22 +0200
+
+audit (1:2.8.2-1) unstable; urgency=medium
+
+  * New bugfix upstream release
+    - debian/libaudit1.symbols: Add newly exported symbol
+  * debian/control: Bump Standards-Version to 4.1.2 (no further changes)
+  * debian/watch: Use https:// instead of http://
+
+ -- Laurent Bigonville <bigon@debian.org>  Mon, 18 Dec 2017 09:13:02 +0100
+
+audit (1:2.8.1-2) unstable; urgency=medium
+
+  * Make auditd logs readable by the adm group by default (Closes: #759604)
+
+ -- Laurent Bigonville <bigon@debian.org>  Wed, 08 Nov 2017 18:39:12 +0100
+
+audit (1:2.8.1-1) unstable; urgency=medium
+
+  * New bugfix upstream release
+  * debian/control: Move all packages from Priority: extra (which is
+    deprecated) to Priority: optional
+
+ -- Laurent Bigonville <bigon@debian.org>  Sun, 15 Oct 2017 13:06:41 +0200
+
+audit (1:2.8-1) unstable; urgency=low
+
+  * New upstream release
+    - debian/libaudit1.symbols, debian/libauparse0.symbols: Add newly exported
+      symbols
+
+ -- Laurent Bigonville <bigon@debian.org>  Thu, 12 Oct 2017 14:25:12 +0200
+
+audit (1:2.7.8-1) unstable; urgency=medium
+
+  * New upstream release
+    - debian/libauparse0.symbols: Add newly exported symbol
+  * debian/control: Bump Standards-Version to 4.1.1 (no further changes)
+  * Bump debhelper compatibility to 10, drop dh-systemd and dh-autoreconf
+    build-dep, these are not needed anymore
+
+ -- Laurent Bigonville <bigon@debian.org>  Tue, 03 Oct 2017 16:10:39 +0200
+
+audit (1:2.7.7-1) unstable; urgency=medium
+
+  * New upstream release
+    - Drop debian/patches/03-fix-segfault-sock.patch, applied upstream
+    - Refresh debian/patches/01-no-refusemanualstop.patch
+    - debian/libaudit1.symbols, debian/libauparse0.symbols: Update the
+      exported symbols list
+  * debian/control: Bump Standards-Version to 4.0.0 (no further changes)
+  * debian/rules: Do not pass start/stop options to update-rc.d, this is
+    deprecated for years and just produces a confusing warning (Closes:
+    #860217, LP: #1646015)
+
+ -- Laurent Bigonville <bigon@debian.org>  Wed, 21 Jun 2017 18:30:33 +0200
+
 audit (1:2.6.7-2pexip1) pexip; urgency=medium
 
   * Migrate to Stretch
@@ -13,7 +117,7 @@ audit (1:2.6.7-2) unstable; urgency=medium
     some audit messages (Closes: #859120)
 
   [ Helmut Grohne ]
-  * Fix FTCBFS: Cross compatibe python Build-Depends (Closes: #840896)
+  * Fix FTCBFS: Cross compatible python Build-Depends (Closes: #840896)
   * Add support for the nopython build profile (Closes: #840262)
 
  -- Laurent Bigonville <bigon@debian.org>  Wed, 12 Apr 2017 18:17:21 +0200
@@ -216,7 +320,7 @@ audit (1:2.3.3-3) unstable; urgency=low
 audit (1:2.3.3-2) unstable; urgency=low
 
   * QA upload
-  * Enable compilation on hppa (closes: 735944). Thanks to Helge Deller!  
+  * Enable compilation on hppa (closes: 735944). Thanks to Helge Deller!
     - patch build-on-hppa
     - debian/rules: configure --with-hppa on hppa architecture
 

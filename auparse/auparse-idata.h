@@ -1,6 +1,6 @@
 /*
 * idata.h - Header file for ausearch-lookup.c
-* Copyright (c) 2013,2016 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2013,2016-17 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved.
 *
 * This library is free software; you can redistribute it and/or
@@ -33,20 +33,18 @@ typedef struct _idata {
 	int syscall;		// The syscall for the event
 	unsigned long long a0;	// arg 0 to the syscall
 	unsigned long long a1;	// arg 1 to the syscall
+	const char *cwd;	// The current working directory
 	const char *name;	// name of field being interpretted
 	const char *val;	// value of field being interpretted
 } idata;
 
 
 int auparse_interp_adjust_type(int rtype, const char *name, const char *val);
-char *auparse_do_interpretation(int type, const idata *id);
+char *auparse_do_interpretation(int type, const idata *id,
+	auparse_esc_t escape_mode);
 void _auparse_load_interpretations(const char *buf);
 void _auparse_free_interpretations(void);
 const char *_auparse_lookup_interpretation(const char *name);
-
-AUDIT_HIDDEN_START
-int set_escape_mode(auparse_esc_t mode);
-AUDIT_HIDDEN_END
 
 #endif
 

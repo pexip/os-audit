@@ -15,7 +15,8 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; see the file COPYING. If not, write to the
- * Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+ * Boston, MA 02110-1335, USA.
  *
  * Authors:
  *   Steve Grubb <sgrubb@redhat.com>
@@ -133,7 +134,7 @@ static void report_session(lnode* cur)
 		    printf("    ausearch --start %s", start);
 		}
 		if (cur->name == NULL)
-			printf(" --session %d", cur->session);
+			printf(" --session %u", cur->session);
 		if (cur->loginuid_proof == 0 && cur->result == 1) // Bad login
 			printf(" -a %lu", cur->user_login_proof);
 		printf("\n\n");

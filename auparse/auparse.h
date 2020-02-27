@@ -1,5 +1,5 @@
 /* auparse.h --
- * Copyright 2006-08,2012,2014-16 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-08,2012,2014-17 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -50,6 +50,7 @@ void auparse_add_callback(auparse_state_t *au, auparse_callback_ptr callback,
 void auparse_set_escape_mode(auparse_state_t *au, auparse_esc_t mode);
 int auparse_reset(auparse_state_t *au);
 void auparse_destroy(auparse_state_t *au);
+void auparse_destroy_ext(auparse_state_t *au, auparse_destroy_what_t what);
 
 /* Functions that are part of the search interface */
 int ausearch_add_expression(auparse_state_t *au, const char *expression,
@@ -65,6 +66,44 @@ int ausearch_add_timestamp_item_ex(auparse_state_t *au, const char *op,
 int ausearch_add_regex(auparse_state_t *au, const char *expr);
 int ausearch_set_stop(auparse_state_t *au, austop_t where);
 void ausearch_clear(auparse_state_t *au);
+
+/* Functions that are part of the auparse_normalize interface */
+
+// This causes the current event to become normalized.
+int auparse_normalize(auparse_state_t *au, normalize_option_t opt);
+
+// Event kind accessor
+const char *auparse_normalize_get_event_kind(auparse_state_t *au);
+
+// session accessor
+int auparse_normalize_session(auparse_state_t *au);
+
+// Subject accessing functions
+int auparse_normalize_subject_primary(auparse_state_t *au);
+int auparse_normalize_subject_secondary(auparse_state_t *au);
+const char *auparse_normalize_subject_kind(auparse_state_t *au);
+int auparse_normalize_subject_first_attribute(auparse_state_t *au);
+int auparse_normalize_subject_next_attribute(auparse_state_t *au);
+
+// Action string accessor
+const char *auparse_normalize_get_action(auparse_state_t *au);
+
+// Object accessing functions
+int auparse_normalize_object_primary(auparse_state_t *au);
+int auparse_normalize_object_secondary(auparse_state_t *au);
+int auparse_normalize_object_primary2(auparse_state_t *au);
+int auparse_normalize_object_first_attribute(auparse_state_t *au);
+int auparse_normalize_object_next_attribute(auparse_state_t *au);
+const char *auparse_normalize_object_kind(auparse_state_t *au);
+
+// Results accessor
+int auparse_normalize_get_results(auparse_state_t *au);
+
+// How accessor
+const char *auparse_normalize_how(auparse_state_t *au);
+
+// Syscall key accessor
+int auparse_normalize_key(auparse_state_t *au);
 
 /* Functions that traverse events */
 int ausearch_next_event(auparse_state_t *au);
@@ -83,6 +122,7 @@ unsigned int auparse_get_num_records(auparse_state_t *au);
 /* Functions that traverse records in the same event */
 int auparse_first_record(auparse_state_t *au);
 int auparse_next_record(auparse_state_t *au);
+unsigned int auparse_get_record_num(auparse_state_t *au);
 int auparse_goto_record_num(auparse_state_t *au, unsigned int num);
 
 /* Accessors to record data */
@@ -97,6 +137,8 @@ const char *auparse_get_record_text(auparse_state_t *au);
 const char *auparse_get_record_interpretations(auparse_state_t *au);
 const char *auparse_find_field(auparse_state_t *au, const char *name);
 const char *auparse_find_field_next(auparse_state_t *au);
+unsigned int auparse_get_field_num(auparse_state_t *au);
+int auparse_goto_field_num(auparse_state_t *au, unsigned int num);
 
 /* Accessors to field data */
 const char *auparse_get_field_name(auparse_state_t *au);
@@ -104,8 +146,10 @@ const char *auparse_get_field_str(auparse_state_t *au);
 int auparse_get_field_type(auparse_state_t *au);
 int auparse_get_field_int(auparse_state_t *au);
 const char *auparse_interpret_field(auparse_state_t *au);
-
-
+const char *auparse_interpret_realpath(auparse_state_t *au);
+const char *auparse_interpret_sock_family(auparse_state_t *au);
+const char *auparse_interpret_sock_port(auparse_state_t *au);
+const char *auparse_interpret_sock_address(auparse_state_t *au);
 #ifdef __cplusplus
 }
 #endif

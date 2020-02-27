@@ -1,5 +1,5 @@
 /* ausearch-time.c - time handling utility functions
- * Copyright 2006-08,2011,2016 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-08,2011,2016-17 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -24,6 +24,10 @@
 #include "config.h"
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdlib.h>
 #include "ausearch-time.h"
 
 #define SECONDS_IN_DAY 24*60*60
@@ -42,6 +46,7 @@ struct nv_pair {
 static struct nv_pair timetab[] = {
         { T_NOW, "now" },
         { T_RECENT, "recent" },
+	{ T_BOOT, "boot" },
         { T_TODAY, "today" },
         { T_YESTERDAY, "yesterday" },
         { T_THIS_WEEK, "this-week" },
@@ -49,11 +54,12 @@ static struct nv_pair timetab[] = {
         { T_THIS_MONTH, "this-month" },
         { T_THIS_YEAR, "this-year" },
 };
+
 #define TIME_NAMES (sizeof(timetab)/sizeof(timetab[0]))
 
 int lookup_time(const char *name)
 {
-        int i;
+        unsigned int i;
 
         for (i = 0; i < TIME_NAMES; i++) {
                 if (strcmp(timetab[i].name, name) == 0) {
@@ -111,6 +117,47 @@ static void set_tm_recent(struct tm *d)
 	replace_date(d, tv);
 }
 
+static int set_tm_boot(struct tm *d)
+{
+	char buf[128];
+        time_t t;
+	int rc, fd = open("/proc/uptime", O_RDONLY);
+	if (fd < 0) {
+error_out:
+		fprintf(stderr, "Can't read uptime (%s)\n", strerror(errno));
+		return -1;
+	}
+
+        t = time(NULL);
+	rc = read(fd, buf, sizeof(buf)-1);
+	close(fd);
+	if (rc > 0) {
+		struct tm *tv;
+		float f_uptime;
+		unsigned long uptime;
+		char *ptr;
+
+		buf[rc] = 0;
+		ptr = strchr(buf, ' '); // Accurate only to the second
+		if (ptr)
+			*ptr = 0;
+
+		errno = 0;
+		f_uptime = strtof(buf, NULL);
+		uptime = f_uptime + 0.5;
+		if (errno)
+			goto error_out;
+
+		t -= uptime;
+        	tv = localtime(&t);
+		replace_time(d, tv);
+		replace_date(d, tv);
+	} else
+		goto error_out;
+
+	return 0;
+}
+
 static void set_tm_this_week(struct tm *d)
 {
         time_t t = time(NULL);
@@ -118,7 +165,7 @@ static void set_tm_this_week(struct tm *d)
         d->tm_sec = 0;          /* seconds */
         d->tm_min = 0;          /* minutes */
         d->tm_hour = 0;         /* hours */
-	t -= (time_t)(tv->tm_wday*SECONDS_IN_DAY);
+	t -= (time_t)(tv->tm_wday*(time_t)SECONDS_IN_DAY);
         tv = localtime(&t);
 	replace_date(d, tv);
 }
@@ -188,6 +235,10 @@ static int lookup_and_set_time(const char *da, struct tm *d)
 			case T_RECENT:
 				set_tm_recent(d);
 				break;
+			case T_BOOT:
+				if (set_tm_boot(d))
+					return -2;
+				break;
 			case T_TODAY:
 				set_tm_today(d);
 				break;
@@ -248,7 +299,8 @@ int ausearch_time_start(const char *da, const char *ti)
 			start_time = mktime(&d);
 		} else {
 			int keyword=lookup_time(da);
-			if (keyword == T_RECENT || keyword == T_NOW) {
+			if (keyword == T_RECENT || keyword == T_NOW ||
+				keyword == T_BOOT) {
 				if (ti == NULL || strcmp(ti, "00:00:00") == 0)
 					goto set_it;
 			}
@@ -321,7 +373,8 @@ int ausearch_time_end(const char *da, const char *ti)
 			end_time = mktime(&d);
 		} else {
 			int keyword=lookup_time(da);
-			if (keyword == T_RECENT || keyword == T_NOW) {
+			if (keyword == T_RECENT || keyword == T_NOW ||
+				keyword == T_BOOT) {
 				if (ti == NULL || strcmp(ti, "00:00:00") == 0)
 					goto set_it;
 			}

@@ -100,6 +100,8 @@ static int space_action_parser(struct nv_pair *nv, int line,
 		struct daemon_conf *config);
 static int action_mail_acct_parser(struct nv_pair *nv, int line, 
 		struct daemon_conf *config);
+static int verify_email_parser(struct nv_pair *nv, int line, 
+		struct daemon_conf *config);
 static int admin_space_left_parser(struct nv_pair *nv, int line, 
 		struct daemon_conf *config);
 static int admin_space_left_action_parser(struct nv_pair *nv, int line, 
@@ -151,6 +153,7 @@ static const struct kw_pair keywords[] =
   {"space_left",               space_left_parser,		0 },
   {"space_left_action",        space_action_parser,		1 },
   {"action_mail_acct",         action_mail_acct_parser,		0 },
+  {"verify_email",             verify_email_parser,		0 },
   {"admin_space_left",         admin_space_left_parser,		0 },
   {"admin_space_left_action",  admin_space_left_action_parser,	1 },
   {"disk_full_action",         disk_full_action_parser,		1 },
@@ -237,11 +240,33 @@ static const struct nv_list yes_no_values[] =
 
 const char *email_command = "/usr/lib/sendmail";
 static int allow_links = 0;
+static const char *config_dir = NULL;
+static char *config_file = NULL;
 
 
 void set_allow_links(int allow)
 {
 	allow_links = allow;
+}
+
+int set_config_dir(const char *val)
+{
+	config_dir = strdup(val);
+	if (config_dir == NULL)
+		return 1;
+	if (asprintf(&config_file, "%s/auditd.conf", config_dir) < 0)
+		return 1;
+	return 0;
+}
+
+const char *get_config_dir(void)
+{
+	/* This function is used to determine if audispd is started with
+	 * a -c parameter followed by the config_dir location. If we are
+	 * using the standard location, do not pass back a location. */
+	if (config_file && strcmp(config_file, CONFIG_FILE) == 0)
+		return NULL;
+	return config_dir;
 }
 
 /*
@@ -271,6 +296,7 @@ void clear_config(struct daemon_conf *config)
 	config->space_left_action = FA_IGNORE;
 	config->space_left_exe = NULL;
 	config->action_mail_acct = strdup("root");
+	config->verify_email = 1;
 	config->admin_space_left= 0L;
 	config->admin_space_left_action = FA_IGNORE;
 	config->admin_space_left_exe = NULL;
@@ -301,12 +327,14 @@ int load_config(struct daemon_conf *config, log_test_t lt)
 
 	clear_config(config);
 	log_test = lt;
+	if (config_file == NULL)
+		config_file = strdup(CONFIG_FILE);
 
 	/* open the file */
 	mode = O_RDONLY;
 	if (allow_links == 0)
 		mode |= O_NOFOLLOW;
-	rc = open(CONFIG_FILE, mode);
+	rc = open(config_file, mode);
 	if (rc < 0) {
 		if (errno != ENOENT) {
 			audit_msg(LOG_ERR, "Error opening config file (%s)", 
@@ -314,7 +342,7 @@ int load_config(struct daemon_conf *config, log_test_t lt)
 			return 1;
 		}
 		audit_msg(LOG_WARNING,
-			"Config file %s doesn't exist, skipping", CONFIG_FILE);
+			"Config file %s doesn't exist, skipping", config_file);
 		return 0;
 	}
 	fd = rc;
@@ -323,7 +351,7 @@ int load_config(struct daemon_conf *config, log_test_t lt)
 	 * not symlink.
 	 */
 	audit_msg(LOG_DEBUG, "Config file %s opened for parsing", 
-			CONFIG_FILE);
+			config_file);
 	if (fstat(fd, &st) < 0) {
 		audit_msg(LOG_ERR, "Error fstat'ing config file (%s)", 
 			strerror(errno));
@@ -332,19 +360,19 @@ int load_config(struct daemon_conf *config, log_test_t lt)
 	}
 	if (st.st_uid != 0) {
 		audit_msg(LOG_ERR, "Error - %s isn't owned by root", 
-			CONFIG_FILE);
+			config_file);
 		close(fd);
 		return 1;
 	}
 	if ((st.st_mode & S_IWOTH) == S_IWOTH) {
 		audit_msg(LOG_ERR, "Error - %s is world writable", 
-			CONFIG_FILE);
+			config_file);
 		close(fd);
 		return 1;
 	}
 	if (!S_ISREG(st.st_mode)) {
 		audit_msg(LOG_ERR, "Error - %s is not a regular file", 
-			CONFIG_FILE);
+			config_file);
 		close(fd);
 		return 1;
 	}
@@ -358,7 +386,7 @@ int load_config(struct daemon_conf *config, log_test_t lt)
 		return 1;
 	}
 
-	while (get_line(f, buf, sizeof(buf), &lineno, CONFIG_FILE)) {
+	while (get_line(f, buf, sizeof(buf), &lineno, config_file)) {
 		// convert line into name-value pair
 		const struct kw_pair *kw;
 		struct nv_pair nv;
@@ -369,17 +397,17 @@ int load_config(struct daemon_conf *config, log_test_t lt)
 			case 1: // not the right number of tokens.
 				audit_msg(LOG_ERR, 
 				"Wrong number of arguments for line %d in %s", 
-					lineno, CONFIG_FILE);
+					lineno, config_file);
 				break;
 			case 2: // no '=' sign
 				audit_msg(LOG_ERR, 
 					"Missing equal sign for line %d in %s", 
-					lineno, CONFIG_FILE);
+					lineno, config_file);
 				break;
 			default: // something else went wrong... 
 				audit_msg(LOG_ERR, 
 					"Unknown error for line %d in %s", 
-					lineno, CONFIG_FILE);
+					lineno, config_file);
 				break;
 		}
 		if (nv.name == NULL) {
@@ -390,7 +418,7 @@ int load_config(struct daemon_conf *config, log_test_t lt)
 			fclose(f);
 			audit_msg(LOG_ERR,
 				"Not processing any more lines in %s",
-				CONFIG_FILE);
+				config_file);
 			return 1;
 		}
 
@@ -399,7 +427,7 @@ int load_config(struct daemon_conf *config, log_test_t lt)
 		if (kw->name == NULL) {
 			audit_msg(LOG_ERR, 
 				"Unknown keyword \"%s\" in line %d of %s", 
-				nv.name, lineno, CONFIG_FILE);
+				nv.name, lineno, config_file);
 			fclose(f);
 			return 1;
 		}
@@ -409,7 +437,7 @@ int load_config(struct daemon_conf *config, log_test_t lt)
 			audit_msg(LOG_ERR, 
 				"Keyword \"%s\" has invalid option "
 				"\"%s\" in line %d of %s", 
-				nv.name, nv.option, lineno, CONFIG_FILE);
+				nv.name, nv.option, lineno, config_file);
 			fclose(f);
 			return 1;
 		}
@@ -591,11 +619,9 @@ static int log_file_parser(struct nv_pair *nv, int line,
 
 	fd = open(nv->value, mode);
 	if (fd < 0) {
-		if (errno == ENOENT) {
-			fd = create_log_file(nv->value);
-			if (fd < 0) 
-				return 1;
-		} else {
+		if (errno == ENOENT)
+			goto finish_up;	// Will create the log later
+		else {
 			audit_msg(LOG_ERR, "Unable to open %s (%s)", nv->value, 
 					strerror(errno));
 			return 1;
@@ -624,6 +650,7 @@ static int log_file_parser(struct nv_pair *nv, int line,
 		audit_msg(LOG_WARNING, "audit log is not writable by owner");
 	}
 
+finish_up:
 	free((void *)config->log_file);
 	config->log_file = strdup(nv->value);
 	if (config->log_file == NULL)
@@ -841,8 +868,7 @@ static int log_format_parser(struct nv_pair *nv, int line,
 			if (config->log_format == LF_NOLOG) {
 				audit_msg(LOG_WARNING,
 				    "The NOLOG option to log_format is deprecated. Please use the write_logs option.");
-				if (config->log_format == LF_NOLOG &&
-					config->write_logs != 0)
+				if (config->write_logs != 0)
 					audit_msg(LOG_WARNING,
 					    "The NOLOG option is overriding the write_logs current setting.");
 				config->write_logs = 0;
@@ -1070,7 +1096,9 @@ static int validate_email(const char *acct)
 
 	if ((ptr1 = strchr(acct, '@'))) {
 		char *ptr2;
-		struct hostent *t_addr;
+		int rc2;
+		struct addrinfo *ai;
+		struct addrinfo hints;
 
 		ptr2 = strrchr(acct, '.');        // get last dot - sb after @
 		if ((ptr2 == NULL) || (ptr1 > ptr2)) {
@@ -1079,23 +1107,28 @@ static int validate_email(const char *acct)
 			return 2;
 		}
 
-		t_addr = gethostbyname(ptr1+1);
-		if (t_addr == 0) {
+		memset(&hints, 0, sizeof(hints));
+		hints.ai_flags = AI_ADDRCONFIG | AI_CANONNAME;
+		hints.ai_socktype = SOCK_STREAM;
+
+		rc2 = getaddrinfo(ptr1+1, NULL, &hints, &ai);
+		if (rc2 != 0) {
 			if ((h_errno == HOST_NOT_FOUND) ||
-					(h_errno == NO_RECOVERY)) {
-					audit_msg(LOG_ERR,
-				"validate_email: failed looking up host for %s",
-					ptr1+1);
-				// FIXME: gethostbyname is having trouble
-				// telling when we have a temporary vs permanent
-				// dns failure. So, for now, treat all as temp
-				return 1;
-			} else if (h_errno == TRY_AGAIN)
+						(h_errno == NO_RECOVERY)) {
+				audit_msg(LOG_ERR,
+			"validate_email: failed looking up host for %s (%s)",
+					ptr1+1, gai_strerror(rc2));
+				// FIXME: How can we tell that we truly have
+				// a permanent failure and what is that? For
+				// now treat all as temp failure.
+			} else if (h_errno == TRY_AGAIN) {
 				audit_msg(LOG_DEBUG,
 		"validate_email: temporary failure looking up domain for %s",
 					ptr1+1);
+			}
 			return 1;
 		}
+		freeaddrinfo(ai);
 	}
 	return 0;
 }
@@ -1111,7 +1144,7 @@ static int action_mail_acct_parser(struct nv_pair *nv, int line,
 	if (tmail == NULL)
 		return 1;
 
-	if (validate_email(tmail) > 1) {
+	if (config->verify_email && validate_email(tmail) > 1) {
 		free(tmail);
 		return 1;
 	}
@@ -1121,6 +1154,24 @@ static int action_mail_acct_parser(struct nv_pair *nv, int line,
 		free((void *)config->action_mail_acct);
 	config->action_mail_acct = tmail;
 	return 0;
+}
+
+static int verify_email_parser(struct nv_pair *nv, int line,
+	struct daemon_conf *config)
+{
+	unsigned long i;
+	audit_msg(LOG_DEBUG, "verify_email_parser called with: %s",
+		  nv->value);
+
+
+	for (i=0; yes_no_values[i].name != NULL; i++) {
+		if (strcasecmp(nv->value, yes_no_values[i].name) == 0) {
+			config->verify_email = yes_no_values[i].option;
+			return 0;
+		}
+	}
+	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->value, line);
+	return 1;
 }
 
 static int admin_space_left_parser(struct nv_pair *nv, int line, 
@@ -1703,12 +1754,14 @@ const char *audit_lookup_format(int fmt)
 int create_log_file(const char *val)
 {
 	int fd;
+	mode_t u;
 
-	umask(S_IRWXO);
+	u = umask(S_IRWXO);
 	fd = open(val, O_CREAT|O_EXCL|O_APPEND, S_IRUSR|S_IWUSR|S_IRGRP);
 	if (fd < 0) 
 		audit_msg(LOG_ERR, "Unable to create %s (%s)", val,
 			strerror(errno));
+	umask(u);
 	return fd;
 }
 
@@ -1725,6 +1778,8 @@ void free_config(struct daemon_conf *config)
         free((void *)config->disk_error_exe);
         free((void *)config->krb5_principal);
         free((void *)config->krb5_key_file);
+        free((void *)config_dir);
+        free(config_file);
 }
 
 int resolve_node(struct daemon_conf *config)
@@ -1769,7 +1824,7 @@ int resolve_node(struct daemon_conf *config)
 				if (rc2 != 0) {
 					audit_msg(LOG_ERR,
 					"Cannot resolve hostname %s (%s)",
-					tmp_name, gai_strerror(rc));
+					tmp_name, gai_strerror(rc2));
 					rc = -1;
 					break;
 				}
@@ -1817,4 +1872,3 @@ int resolve_node(struct daemon_conf *config)
 				config->node_name);
 	return rc;
 }
-
