@@ -1,5 +1,5 @@
 Source: audit
-Priority: extra
+Priority: optional
 Maintainer: Pexip AS <packaging@pexip.com>
 XSBC-Pexip-Original-Maintainer: Laurent Bigonville <bigon@debian.org>
 Build-Depends: debhelper (>= 10),

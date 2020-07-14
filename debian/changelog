@@ -1,3 +1,9 @@
+audit (1:2.8.4-3pexip2) pexip; urgency=medium
+
+  * Change priority from extra to optional
+
+ -- Vincent Sanders <vince@pexip.com>  Tue, 14 Jul 2020 14:11:06 +0100
+
 audit (1:2.8.4-3pexip1) pexip; urgency=medium
 
   * Migrate to Buster
