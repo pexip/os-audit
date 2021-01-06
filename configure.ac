@@ -1,7 +1,7 @@
 dnl
 define([AC_INIT_NOTICE],
 [### Generated automatically using autoconf version] AC_ACVERSION [
-### Copyright 2005-18 Steve Grubb <sgrubb@redhat.com>
+### Copyright 2005-19 Steve Grubb <sgrubb@redhat.com>
 ###
 ### Permission is hereby granted, free of charge, to any person obtaining a
 ### copy of this software and associated documentation files (the "Software"),
@@ -29,7 +29,7 @@ define([AC_INIT_NOTICE],
 ])
 
 AC_REVISION($Revision: 1.3 $)dnl
-AC_INIT(audit,2.8.4)
+AC_INIT(audit,3.0)
 AC_PREREQ(2.12)dnl
 AM_CONFIG_HEADER(config.h)
 
@@ -67,11 +67,27 @@ AC_CHECK_DECLS([AUDIT_FEATURE_VERSION], [], [], [[#include <linux/audit.h>]])
 AC_CHECK_MEMBERS([struct audit_status.feature_bitmap], [], [], [[#include <linux/audit.h>]])
 AC_CHECK_DECLS([AUDIT_VERSION_BACKLOG_WAIT_TIME], [], [], [[#include <linux/audit.h>]])
 AC_CHECK_DECLS([AUDIT_STATUS_BACKLOG_WAIT_TIME], [], [], [[#include <linux/audit.h>]])
+AC_CHECK_DECLS([AUDIT_STATUS_BACKLOG_WAIT_TIME_ACTUAL], [], [], [[#include <linux/audit.h>]])
 AC_CHECK_DECLS([ADDR_NO_RANDOMIZE],,, [#include <sys/personality.h>])
 dnl; posix_fallocate is used in audisp-remote
 AC_CHECK_FUNCS([posix_fallocate])
 dnl; signalfd is needed for libev
 AC_CHECK_FUNC([signalfd], [], [ AC_MSG_ERROR([The signalfd system call is necessary for auditd]) ])
+dnl; check if rawmemchr is available
+AC_CHECK_FUNCS([rawmemchr])
+dnl; check if strndupa is available
+AC_LINK_IFELSE(
+  [AC_LANG_SOURCE(
+    [[
+      #define _GNU_SOURCE
+      #include <string.h>
+      int main() { (void) strndupa("test", 10); return 0; }]])],
+ [AC_DEFINE(HAVE_STRNDUPA, 1, [Let us know if we have it or not])],
+ []
+)
+dnl; pthread_yield is used in zos-remote
+AC_SEARCH_LIBS(pthread_yield, pthread, 
+	[AC_DEFINE(HAVE_PTHREAD_YIELD, 1, [Define to 1 if we have pthread_yield])], [])
 
 ALLWARNS=""
 ALLDEBUG="-g"
@@ -98,6 +114,21 @@ if test "x$use_python" = xno ; then
 	AC_MSG_RESULT(no)
 else
 AC_MSG_RESULT(testing)
+
+# Try to find a versioned Python2 interpreter,
+# if not explicitly specified by the user.
+if test "x$PYTHON" = "x"; then
+  AC_MSG_CHECKING([for versioned Python2 interpreter])
+  AC_MSG_RESULT([])
+  for python2 in python2 python2.7 python2.6 python2.5 python2.4 python2.3 python2.2 python2.1 python2.0; do
+    AC_PATH_PROG([PYTHON], [$python2])
+    if test "x$PYTHON" != "x"; then
+      break;
+    fi
+  done
+fi
+
+# Setup Python2 with the interpreter found previously.
 AM_PATH_PYTHON
 PYINCLUDEDIR=`python${am_cv_python_version} -c "from distutils import sysconfig; print(sysconfig.get_config_var('INCLUDEPY'))"`
 if test -f ${PYINCLUDEDIR}/Python.h ; then
@@ -190,7 +221,7 @@ else
 	fi
     ])
 fi
-AM_CONDITIONAL(HAVE_GOLANG, test ${golang_found} = "yes")
+AM_CONDITIONAL(HAVE_GOLANG, test "x${golang_found}" = "xyes")
 
 #auditd listener
 AC_MSG_CHECKING(whether to include auditd network listener support)
@@ -213,6 +244,16 @@ AC_ARG_ENABLE(zos-remote,
 			      [Disable audisp ZOS remote plugin])],
 	      enable_zos_remote=$enableval,
 	      enable_zos_remote=yes)
+if test $enable_zos_remote = yes; then
+	AC_CHECK_HEADER(lber.h, ldap_headers=yes, ldap_headers=no)
+	AC_CHECK_LIB(lber, ber_free, LDAP_LDADD=-llber)
+	if test x$LDAP_LDADD = x ; then
+		AC_MSG_ERROR(zos remote support was requested but the openldap library was not found)
+	fi
+	if test $ldap_headers = no ; then
+		AC_MSG_ERROR(openldap libraries found but headers are missing)
+	fi
+fi
 AM_CONDITIONAL(ENABLE_ZOS_REMOTE, test "x$enable_zos_remote" != "xno")
 AC_MSG_RESULT($enable_zos_remote)
 
@@ -282,18 +323,6 @@ fi
 ],WARNS="$ALLWARNS")
 
 withval=""
-AC_MSG_CHECKING(whether to include alpha processor support)
-AC_ARG_WITH(alpha,
-AS_HELP_STRING([--with-alpha],[enable Alpha processor support]),
-use_alpha=$withval,
-use_alpha=no)
-if test x$use_alpha != xno ; then
-      AC_DEFINE(WITH_ALPHA,1,[Define if you want to enable Alpha processor support.])
-fi
-AM_CONDITIONAL(USE_ALPHA, test x$use_alpha = xyes)
-AC_MSG_RESULT($use_alpha)
-
-withval=""
 AC_MSG_CHECKING(whether to include arm eabi processor support)
 AC_ARG_WITH(arm,
 AS_HELP_STRING([--with-arm],[enable Arm eabi processor support]),
@@ -327,28 +356,6 @@ if test x$use_apparmor != xno ; then
       AC_DEFINE(WITH_APPARMOR,1,[Define if you want to enable AppArmor events.])
 fi
 AC_MSG_RESULT($use_apparmor)
-
-withval=""
-AC_MSG_CHECKING(whether to use prelude)
-AC_ARG_WITH(prelude,
-AS_HELP_STRING([--with-prelude],[enable prelude IDS support]),
-use_prelude=$withval,
-use_prelude=no)
-AC_MSG_RESULT($use_prelude)
-if test x$use_prelude = xno ; then
-	have_prelude=no;
-else
-      AC_CHECK_LIB(prelude, prelude_init,
-                 have_prelude=yes, have_prelude=no)
-      if test x$have_prelude = xno ; then
-        AC_MSG_ERROR([Prelude explicitly required and prelude library not found])
-      else
-	LIBPRELUDE_CFLAGS=`libprelude-config --pthread-cflags 2>/dev/null`
-	LIBPRELUDE_LDFLAGS=`libprelude-config --ldflags 2>/dev/null`
-        AC_MSG_RESULT(yes)
-      fi
-fi
-AM_CONDITIONAL(HAVE_PRELUDE, test x$have_prelude = xyes)
 
 withval=""
 AC_MSG_CHECKING(whether to use libwrap)
@@ -398,10 +405,8 @@ LIBCAP_NG_PATH
 AC_SUBST(DEBUG)
 AC_SUBST(LIBWRAP_LIBS)
 #AC_SUBST(libev_LIBS)
-AC_SUBST(LIBPRELUDE_CFLAGS)
-AC_SUBST(LIBPRELUDE_LDFLAGS)
 
-AC_OUTPUT(Makefile lib/Makefile lib/audit.pc lib/test/Makefile auparse/Makefile auparse/test/Makefile auparse/auparse.pc src/Makefile src/libev/Makefile src/test/Makefile docs/Makefile rules/Makefile init.d/Makefile audisp/Makefile audisp/plugins/Makefile audisp/plugins/builtins/Makefile audisp/plugins/prelude/Makefile audisp/plugins/remote/Makefile audisp/plugins/zos-remote/Makefile bindings/Makefile bindings/python/Makefile bindings/python/python2/Makefile bindings/python/python3/Makefile bindings/golang/Makefile bindings/swig/Makefile bindings/swig/src/Makefile bindings/swig/python/Makefile bindings/swig/python3/Makefile tools/Makefile tools/aulast/Makefile tools/aulastlog/Makefile tools/ausyscall/Makefile tools/auvirt/Makefile m4/Makefile)
+AC_OUTPUT(Makefile common/Makefile lib/Makefile lib/audit.pc lib/test/Makefile auparse/Makefile auparse/test/Makefile auparse/auparse.pc src/Makefile src/libev/Makefile src/test/Makefile docs/Makefile rules/Makefile init.d/Makefile audisp/Makefile audisp/plugins/Makefile audisp/plugins/builtins/Makefile audisp/plugins/remote/Makefile audisp/plugins/zos-remote/Makefile audisp/plugins/syslog/Makefile bindings/Makefile bindings/python/Makefile bindings/python/python2/Makefile bindings/python/python3/Makefile bindings/golang/Makefile bindings/swig/Makefile bindings/swig/src/Makefile bindings/swig/python/Makefile bindings/swig/python3/Makefile tools/Makefile tools/aulast/Makefile tools/aulastlog/Makefile tools/ausyscall/Makefile tools/auvirt/Makefile m4/Makefile)
 
 echo .
 echo "

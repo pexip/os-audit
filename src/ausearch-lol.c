@@ -1,6 +1,6 @@
 /*
 * ausearch-lol.c - linked list of linked lists library
-* Copyright (c) 2008,2010,2014,2016 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2008,2010,2014,2016,2019 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -29,7 +29,7 @@
 #include <stdio.h>
 #include "ausearch-common.h"
 #include "auditd-config.h"
-#include "private.h"
+#include "common.h"
 
 #define ARRAY_LIMIT 80
 static int ready = 0;
@@ -131,6 +131,37 @@ static int inline events_are_equal(event *e1, event *e2)
 	return 1;
 }
 
+// Returns -1 if e1 < e2, 0 if equal, and 1 if e1 > e2
+static int compare_event_time(event *e1, event *e2)
+{
+	if (e1->sec != e2->sec) {
+		if (e1->sec > e2->sec)
+			return 1;
+		return -1;
+	}
+	if (e1->milli != e2->milli) {
+		if (e1->milli > e2->milli)
+			return 1;
+		return -1;
+	}
+	if (e1->serial != e2->serial) {
+		if (e1->serial > e2->serial)
+			return 1;
+		return -1;
+	}
+	return 0;
+}
+
+#ifndef HAVE_STRNDUPA
+static inline char *strndupa(const char *old, size_t n)
+{
+	size_t len = strnlen(old, n);
+	char *tmp = alloca(len + 1);
+	tmp[len] = 0;
+	return memcpy(tmp, old, len);
+}
+#endif
+
 /*
  * This function will look at the line and pick out pieces of it.
  */
@@ -182,6 +213,12 @@ static int extract_timestamp(const char *b, event *e)
 					}
 					return 0;
 				} else {
+					// If no start time, any event is 1st
+					if (very_first_event.sec == 0 &&
+							start_time == 0) {
+						very_first_event.sec = e->sec;
+						very_first_event.milli = e->milli;
+					}
 					if (tnode)
 						e->node = strdup(tnode);
 					e->type = audit_name_to_msg_type(ttype);
@@ -206,13 +243,15 @@ static void check_events(lol *lo, time_t sec)
 		lolnode *cur = &lo->array[i];
 		if (cur->status == L_BUILDING) {
 			// If 2 seconds have elapsed, we are done
-			if (cur->l->e.sec + 2 < sec) { 
+			if (cur->l->e.sec + 2 <= sec) { 
 				cur->status = L_COMPLETE;
 				ready++;
 			} else if (cur->l->e.type == AUDIT_PROCTITLE ||
 				    cur->l->e.type < AUDIT_FIRST_EVENT ||
 				    cur->l->e.type >= AUDIT_FIRST_ANOM_MSG ||
-				    cur->l->e.type == AUDIT_KERNEL) {
+				    cur->l->e.type == AUDIT_KERNEL ||
+				    (cur->l->e.type >= AUDIT_MAC_UNLBL_ALLOW &&
+				    cur->l->e.type <= AUDIT_MAC_CALIPSO_DEL)) {
 				// If known to be 1 record event, we are done
 				cur->status = L_COMPLETE;
 				ready++;
@@ -254,7 +293,7 @@ int lol_add_record(lol *lo, char *buff)
 			if (n.tlen > MAX_AUDIT_MESSAGE_LENGTH)
 				n.tlen = MAX_AUDIT_MESSAGE_LENGTH;
 		} else
-			n.tlen = MAX_AUDIT_MESSAGE_LENGTH;
+			n.tlen = n.mlen;
 		fmt = LF_ENRICHED;
 	} else {
 		ptr = strrchr(n.message, 0x0a);
@@ -264,7 +303,7 @@ int lol_add_record(lol *lo, char *buff)
 			if (n.mlen > MAX_AUDIT_MESSAGE_LENGTH)
 				n.mlen = MAX_AUDIT_MESSAGE_LENGTH;
 		} else
-			n.mlen = MAX_AUDIT_MESSAGE_LENGTH;
+			n.mlen = strlen(n.message);
 		n.interp = NULL;
 		n.tlen = n.mlen;
 		fmt = LF_RAW;
@@ -283,6 +322,14 @@ int lol_add_record(lol *lo, char *buff)
 			}
 		}
 	}
+
+	// Eat standalone EOE, main event was already marked complete
+	if (e.type == AUDIT_EOE) {
+		free((char *)e.node);
+		free(n.message);
+		return 0;
+	}
+
 	// Create new event and fill it in
 	l = malloc(sizeof(llist));
 	list_create(l);
@@ -310,7 +357,6 @@ void terminate_all_events(lol *lo)
 			ready++;
 		}
 	}
-//printf("maxi = %d\n",lo->maxi);
 }
 
 /* Search the list for any event that is ready to go. The caller
@@ -318,17 +364,35 @@ void terminate_all_events(lol *lo)
 llist* get_ready_event(lol *lo)
 {
 	int i;
+	lolnode *lowest = NULL;
 
 	if (ready == 0)
 		return NULL;
 
 	for (i=0; i<=lo->maxi; i++) {
+		// Look for the event with the lowest time stamp
 		lolnode *cur = &lo->array[i];
-		if (cur->status == L_COMPLETE) {
-			cur->status = L_EMPTY;
-			ready--;
-			return cur->l;
+		if (cur->status == L_EMPTY)
+			continue;
+		if (lowest == NULL)
+			lowest = cur;
+		else if (compare_event_time(&(lowest->l->e), &(cur->l->e)) == 1)
+			lowest = cur;
+	}
+
+	if (lowest && lowest->status == L_COMPLETE) {
+		lowest->status = L_EMPTY;
+		ready--;
+		// Try to consolidate the array so that we iterate
+		// over a smaller portion next time
+		if (lowest == &lo->array[lo->maxi]) {
+			lolnode *ptr = lowest;
+			while (ptr->status == L_EMPTY && lo->maxi > 0) {
+				lo->maxi--;
+				ptr = &lo->array[lo->maxi];
+			}
 		}
+		return lowest->l;
 	}
 
 	return NULL;

@@ -19,6 +19,10 @@
 #undef HAVE_DECL_AUDIT_STATUS_BACKLOG_WAIT_TIME
 
 /* Define to 1 if you have the declaration of
+   `AUDIT_STATUS_BACKLOG_WAIT_TIME_ACTUAL', and to 0 if you don't. */
+#undef HAVE_DECL_AUDIT_STATUS_BACKLOG_WAIT_TIME_ACTUAL
+
+/* Define to 1 if you have the declaration of
    `AUDIT_VERSION_BACKLOG_WAIT_TIME', and to 0 if you don't. */
 #undef HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME
 
@@ -73,6 +77,12 @@
 /* Define to 1 if you have the `posix_fallocate' function. */
 #undef HAVE_POSIX_FALLOCATE
 
+/* Define to 1 if we have pthread_yield */
+#undef HAVE_PTHREAD_YIELD
+
+/* Define to 1 if you have the `rawmemchr' function. */
+#undef HAVE_RAWMEMCHR
+
 /* Define to 1 if you have the `select' function. */
 #undef HAVE_SELECT
 
@@ -90,6 +100,9 @@
 
 /* Define to 1 if you have the <string.h> header file. */
 #undef HAVE_STRING_H
+
+/* Let us know if we have it or not */
+#undef HAVE_STRNDUPA
 
 /* Define to 1 if `feature_bitmap' is a member of `struct audit_status'. */
 #undef HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP
@@ -171,9 +184,6 @@
 
 /* Define if you want to enable Aarch64 processor support. */
 #undef WITH_AARCH64
-
-/* Define if you want to enable Alpha processor support. */
-#undef WITH_ALPHA
 
 /* Define if you want to enable AppArmor events. */
 #undef WITH_APPARMOR

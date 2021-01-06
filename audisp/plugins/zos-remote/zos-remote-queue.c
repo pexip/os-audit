@@ -27,6 +27,9 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <syslog.h>
+#ifndef HAVE_PTHREAD_YIELD
+#include <sched.h>
+#endif
 #include "zos-remote-log.h"
 
 static volatile BerElement **q;
@@ -77,7 +80,11 @@ retry:
         pthread_mutex_unlock(&queue_lock);
     } else {
         pthread_mutex_unlock(&queue_lock);
+#ifdef HAVE_PTHREAD_YIELD
         pthread_yield(); /* Let dequeue thread run to clear queue */
+#else
+	sched_yield();
+#endif
         retry_cnt++;
         goto retry;
     }
@@ -136,7 +143,7 @@ void destroy_queue(void)
     unsigned int i;
 
     for (i=0; i<q_depth; i++) {
-        ber_free(q[i], 1);
+        ber_free((BerElement *)q[i], 1);
     }
 
     free(q);

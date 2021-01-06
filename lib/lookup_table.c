@@ -35,9 +35,6 @@
 #include "private.h"
 
 #ifndef NO_TABLES
-#ifdef WITH_ALPHA
-#include "alpha_tables.h"
-#endif
 #ifdef WITH_ARM
 #include "arm_tables.h"
 #endif
@@ -45,7 +42,6 @@
 #include "aarch64_tables.h"
 #endif
 #include "i386_tables.h"
-#include "ia64_tables.h"
 #include "ppc_tables.h"
 #include "s390_tables.h"
 #include "s390x_tables.h"
@@ -69,15 +65,11 @@ struct int_transtab {
 static const struct int_transtab elftab[] = {
     { MACH_X86,     AUDIT_ARCH_I386   },
     { MACH_86_64,   AUDIT_ARCH_X86_64 },
-    { MACH_IA64,    AUDIT_ARCH_IA64   },
     { MACH_PPC64,   AUDIT_ARCH_PPC64  },
     { MACH_PPC64LE, AUDIT_ARCH_PPC64LE},
     { MACH_PPC,     AUDIT_ARCH_PPC    },
     { MACH_S390X,   AUDIT_ARCH_S390X  },
     { MACH_S390,    AUDIT_ARCH_S390   },
-#ifdef WITH_ALPHA
-    { MACH_ALPHA,   AUDIT_ARCH_ALPHA  },
-#endif
 #ifdef WITH_ARM
     { MACH_ARM,   AUDIT_ARCH_ARM  },
 #endif
@@ -109,7 +101,7 @@ const char *audit_field_to_name(int field)
 
 int audit_name_to_syscall(const char *sc, int machine)
 {
-	int res, found = 0;
+	int res = -1, found = 0;
 
 	switch (machine)
 	{
@@ -119,9 +111,6 @@ int audit_name_to_syscall(const char *sc, int machine)
 			break;
 		case MACH_86_64:
 			found = x86_64_syscall_s2i(sc, &res);
-			break;
-		case MACH_IA64:
-			found = ia64_syscall_s2i(sc, &res);
 			break;
 		case MACH_PPC64:
 		case MACH_PPC64LE:
@@ -134,11 +123,6 @@ int audit_name_to_syscall(const char *sc, int machine)
 		case MACH_S390:
 			found = s390_syscall_s2i(sc, &res);
 			break;
-#ifdef WITH_ALPHA
-	        case MACH_ALPHA:
-			found = alpha_syscall_s2i(sc, &res);
-			break;
-#endif
 #ifdef WITH_ARM
 	        case MACH_ARM:
 			found = arm_syscall_s2i(sc, &res);
@@ -167,8 +151,6 @@ const char *audit_syscall_to_name(int sc, int machine)
 			return i386_syscall_i2s(sc);
 		case MACH_86_64:
 			return x86_64_syscall_i2s(sc);
-		case MACH_IA64:
-			return ia64_syscall_i2s(sc);
 		case MACH_PPC64:
 		case MACH_PPC64LE:
 		case MACH_PPC:
@@ -177,10 +159,6 @@ const char *audit_syscall_to_name(int sc, int machine)
 			return s390x_syscall_i2s(sc);
 		case MACH_S390:
 			return s390_syscall_i2s(sc);
-#ifdef WITH_ALPHA
-	        case MACH_ALPHA:
-			return alpha_syscall_i2s(sc);
-#endif
 #ifdef WITH_ARM
 	        case MACH_ARM:
 			return arm_syscall_i2s(sc);

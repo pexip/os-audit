@@ -1,4 +1,4 @@
-.TH AUDIT.RULES: "7" "Aug 2014" "Red Hat" "System Administration Utilities"
+.TH AUDIT.RULES: "7" "Jan 2019" "Red Hat" "System Administration Utilities"
 .SH NAME
 audit.rules \- a set of rules loaded in the kernel audit system
 .SH DESCRIPTION
@@ -85,10 +85,10 @@ After the syscall is specified, you would normally have one or more
 .B \-F
 options that fine tune what to match against. Rather than list all the valid field types here, the reader should look at the auditctl man page which has a full listing of each field and what it means. But it's worth mentioning a couple things.
 
-The audit system considers uids to be unsigned numbers. The audit system uses the number \-1 to indicate that a loginuid is not set. This means that when it's printed out, it looks like 4294967295. If you write a rule that you wanted try to get the valid users of the system, you need to look in /etc/login.defs to see where user accounts start. For example, if UID_MIN is  500, then you would also need to take into account that the unsigned representation of \-1 is higher than 500. So you would address this with the following piece of a rule:
+The audit system considers uids to be unsigned numbers. The audit system uses the number \-1 to indicate that a loginuid is not set. This means that when it's printed out, it looks like 4294967295. But when you write rules, you can use either "unset" which is easy to remember, or -1, or 4294967295. They are all equivalent. If you write a rule that you wanted try to get the valid users of the system, you need to look in /etc/login.defs to see where user accounts start. For example, if UID_MIN is 1000, then you would also need to take into account that the unsigned representation of \-1 is higher than 500. So you would address this with the following piece of a rule:
 
 .nf
-\-F auid>=500 \-F auid!=4294967295
+\-F auid>=1000 \-F auid!=unset
 .fi
 
 These individual checks are "anded" and both have to be true.
@@ -150,14 +150,14 @@ If you are not getting events on syscall rules that you think you should, try ru
 If you get a warning from auditctl saying, "32/64 bit syscall mismatch in line XX, you should specify an arch". This means that you specified a syscall rule on a bi-arch system where the syscall has a different syscall number for the 32 and 64 bit interfaces. This means that on one of those interfaces you are likely auditing the wrong syscall. To solve the problem, re-write the rule as two rules specifying the intended arch for each rule. For example,
 
 .nf
-\-always,exit \-S openat \-k access
+\-a always,exit \-S openat \-k access
 .fi
 
 would be rewritten as
 
 .nf
-\-always,exit \-F arch=b32 \-S openat \-k access
-\-always,exit \-F arch=b64 \-S openat \-k access
+\-a always,exit \-F arch=b32 \-S openat \-k access
+\-a always,exit \-F arch=b64 \-S openat \-k access
 .fi
 
 If you get a warning that says, "entry rules deprecated, changing to exit rule". This means that you have a rule intended for the entry filter, but that filter is no longer available. Auditctl moved your rule to the exit filter so that it's not lost. But to solve this so that you do not get the warning any more, you need to change the offending rule from entry to exit.
@@ -170,6 +170,13 @@ The following rule shows how to audit failed access to files due to permission p
 .B \-a always,exit \-F arch=b32 \-S open \-S openat \-F exit=\-EPERM \-k access
 .B \-a always,exit \-F arch=b64 \-S open \-S openat \-F exit=\-EACCES \-k access
 .B \-a always,exit \-F arch=b64 \-S open \-S openat \-F exit=\-EPERM \-k access
+.fi
+
+.SH HARD WIRED EVENTS
+If auditing is enabled, then you can get any event that is not caused by syscall or file watch rules (because you don't have any rules loaded). So, that means, any event from 1100-1299, 1326, 1328, 1331 and higher can be emitted. The reason that there are a number of events that are hardwired is because they are required by regulatory compliance and are sent automatically as a convenience. (For example, logon/logoff is a mandatory event in all security guidance.) If you don't want this, you can use the exclude filter to drop events that you do not want.
+
+.nf
+.B \-a always,exclude -F msgtype=CRED_REFR
 .fi
 
 .SH "SEE ALSO"

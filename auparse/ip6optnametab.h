@@ -1,5 +1,5 @@
 /* ip6optnametab.h --
- * Copyright 2013-16 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2013-16,2018,2020 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -47,6 +47,8 @@ _S(25, "IPV6_RECVERR")
 _S(26, "IPV6_V6ONLY")
 _S(27, "IPV6_JOIN_ANYCAST")
 _S(28, "IPV6_LEAVE_ANYCAST")
+_S(29, "IPV6_MULTICAST_ALL")
+_S(30, "IPV6_ROUTER_ALERT_ISOLATE")
 _S(32, "IPV6_FLOWLABEL_MGR")
 _S(33, "IPV6_FLOWINFO_SEND")
 _S(34, "IPV6_IPSEC_POLICY")
@@ -87,5 +89,6 @@ _S(74, "IPV6_ORIGDSTADDR")
 _S(75, "IPV6_TRANSPARENT")
 _S(76, "IPV6_UNICAST_IF")
 _S(77, "IPV6_RECVFRAGSIZE")
+_S(78, "IPV6_FREEBIND")
 _S(80, "IP6T_SO_ORIGINAL_DST")
 

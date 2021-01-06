@@ -142,6 +142,9 @@ extern "C" {
 #define AUDIT_INTEGRITY_PCR		1804 /* PCR invalidation msgs */
 #define AUDIT_INTEGRITY_RULE		1805 /* Policy rule */
 #endif
+#ifndef AUDIT_INTEGRITY_EVM_XATTR
+#define AUDIT_INTEGRITY_EVM_XATTR	1806 /* New EVM-covered xattr */
+#endif
 
 #define AUDIT_FIRST_ANOM_MSG		2100
 #define AUDIT_LAST_ANOM_MSG		2199
@@ -198,6 +201,7 @@ extern "C" {
 #define AUDIT_USER_MAC_POLICY_LOAD	2310 /* Userspc daemon loaded policy */
 #define AUDIT_ROLE_MODIFY		2311 /* Admin modified a role */
 #define AUDIT_USER_MAC_CONFIG_CHANGE	2312 /* Change made to MAC policy */
+#define AUDIT_USER_MAC_STATUS		2313 /* Userspc daemon enforcing change */
 
 #define AUDIT_FIRST_CRYPTO_MSG		2400
 #define AUDIT_CRYPTO_TEST_USER		2400 /* Crypto test results */
@@ -216,10 +220,11 @@ extern "C" {
 
 #define AUDIT_LAST_CRYPTO_MSG		2499
 
+/* Events for both VMs and container orchestration software */
 #define AUDIT_FIRST_VIRT_MSG		2500
-#define AUDIT_VIRT_CONTROL		2500 /* Start, Pause, Stop VM */
+#define AUDIT_VIRT_CONTROL		2500 /* Start,Pause,Stop VM/container */
 #define AUDIT_VIRT_RESOURCE		2501 /* Resource assignment */
-#define AUDIT_VIRT_MACHINE_ID		2502 /* Binding of label to VM */
+#define AUDIT_VIRT_MACHINE_ID		2502 /* Binding of label to VM/cont */
 #define AUDIT_VIRT_INTEGRITY_CHECK	2503 /* Guest integrity results */
 #define AUDIT_VIRT_CREATE		2504 /* Creation of guest image */
 #define AUDIT_VIRT_DESTROY		2505 /* Destruction of guest image */
@@ -278,8 +283,36 @@ extern "C" {
 #define AUDIT_FANOTIFY		1331 /* Fanotify access decision */
 #endif
 
+#ifndef AUDIT_TIME_INJOFFSET
+#define AUDIT_TIME_INJOFFSET	1332 /* Timekeeping offset injected */
+#endif
+
+#ifndef AUDIT_TIME_ADJNTPVAL
+#define AUDIT_TIME_ADJNTPVAL	1333 /* NTP value adjustment */
+#endif
+
+#ifndef AUDIT_BPF
+#define AUDIT_BPF		1334 /* BPF load/unload */
+#endif
+
+#ifndef AUDIT_EVENT_LISTENER
+#define AUDIT_EVENT_LISTENER		1335 /* audit mcast sock join/part */
+#endif
+
+#ifndef AUDIT_MAC_CALIPSO_ADD
+#define AUDIT_MAC_CALIPSO_ADD	1418 /* NetLabel: add CALIPSO DOI entry */
+#endif
+
+#ifndef AUDIT_MAC_CALIPSO_DEL
+#define AUDIT_MAC_CALIPSO_DEL	1419 /* NetLabel: del CALIPSO DOI entry */
+#endif
+
 #ifndef AUDIT_ANOM_LINK
 #define AUDIT_ANOM_LINK		1702 /* Suspicious use of file links */
+#endif
+
+#ifndef AUDIT_ANOM_CREAT
+#define AUDIT_ANOM_CREAT            1703 /* Suspicious file creation */
 #endif
 
 /* This is related to the filterkey patch */
@@ -335,6 +368,9 @@ extern "C" {
 #endif
 #ifndef AUDIT_EXE
 #define AUDIT_EXE 112
+#endif
+#ifndef AUDIT_SADDR_FAM
+#define AUDIT_SADDR_FAM 113
 #endif
 
 #ifndef AUDIT_SESSIONID
@@ -519,12 +555,12 @@ struct audit_dispatcher_header {
 typedef enum {
 	MACH_X86=0,
 	MACH_86_64,
-	MACH_IA64,
+	MACH_IA64,	// Deprecated but has to stay
 	MACH_PPC64,
 	MACH_PPC,
 	MACH_S390X,
 	MACH_S390,
-	MACH_ALPHA,
+	MACH_ALPHA,	// Deprecated but has to stay
 	MACH_ARM,
 	MACH_AARCH64,
 	MACH_PPC64LE
@@ -553,6 +589,7 @@ extern int  audit_setloginuid(uid_t uid);
 extern uint32_t audit_get_session(void);
 extern int  audit_detect_machine(void);
 extern int audit_determine_machine(const char *arch);
+extern char *audit_format_signal_info(char *buf, int len, char *op, struct audit_reply *rep, char *res);
 
 /* Translation functions */
 extern int        audit_name_to_field(const char *field);
@@ -594,6 +631,7 @@ extern int  audit_set_rate_limit(int fd, uint32_t limit);
 extern int  audit_set_backlog_limit(int fd, uint32_t limit);
 int audit_set_backlog_wait_time(int fd, uint32_t bwt);
 int audit_reset_lost(int fd);
+int audit_reset_backlog_wait_time_actual(int fd);
 extern int  audit_set_feature(int fd, unsigned feature, unsigned value, unsigned lock);
 extern int  audit_set_loginuid_immutable(int fd);
 
@@ -614,12 +652,12 @@ extern int audit_make_equivalent(int fd, const char *mount_point,
 				const char *subtree);
 
 /* AUDIT_ADD_RULE */
-extern int  audit_add_rule_data(int fd, struct audit_rule_data *rule,
-                                int flags, int action);
+extern int audit_add_rule_data(int fd, struct audit_rule_data *rule,
+                               int flags, int action);
 
 /* AUDIT_DEL_RULE */
-extern int  audit_delete_rule_data(int fd, struct audit_rule_data *rule,
-                                   int flags, int action);
+extern int audit_delete_rule_data(int fd, struct audit_rule_data *rule,
+                                  int flags, int action);
 
 /* The following are for standard formatting of messages */
 extern int audit_value_needs_encoding(const char *str, unsigned int len);
@@ -647,16 +685,21 @@ extern int audit_log_user_command(int audit_fd, int type, const char *command,
         const char *tty, int result);
 
 /* Rule-building helper functions */
-extern int  audit_rule_syscall_data(struct audit_rule_data *rule, int scall);
-extern int  audit_rule_syscallbyname_data(struct audit_rule_data *rule,
+/* Heap-allocates and initializes an audit_rule_data */
+extern struct audit_rule_data *audit_rule_create_data(void);
+/* Initializes an existing audit_rule_data struct */
+extern void audit_rule_init_data(struct audit_rule_data *rule);
+extern int audit_rule_syscall_data(struct audit_rule_data *rule, int scall);
+extern int audit_rule_syscallbyname_data(struct audit_rule_data *rule,
                                           const char *scall);
 /* Note that the following function takes a **, where audit_rule_fieldpair()
  * takes just a *.  That structure may need to be reallocated as a result of
  * adding new fields */
-extern int  audit_rule_fieldpair_data(struct audit_rule_data **rulep,
+extern int audit_rule_fieldpair_data(struct audit_rule_data **rulep,
                                       const char *pair, int flags);
 extern int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 					 const char *pair, int flags);
+/* Deallocates the audit_rule_rule object, and any associated resources */
 extern void audit_rule_free_data(struct audit_rule_data *rule);
 
 /* Capability testing functions */

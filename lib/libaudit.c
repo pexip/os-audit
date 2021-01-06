@@ -1,5 +1,5 @@
 /* libaudit.c -- 
- * Copyright 2004-2009,2012,2014,2016-17 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-2009,2012,2014,2016-17,2020 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -40,12 +40,14 @@
 #include <limits.h>	/* for PATH_MAX */
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/socket.h> /* AF_MAX */
 #ifdef HAVE_LIBCAP_NG
 #include <cap-ng.h>
 #endif
 #include "libaudit.h"
 #include "private.h"
 #include "errormsg.h"
+#include "common.h"
 
 /* #defines for the audit failure query  */
 #define CONFIG_FILE "/etc/libaudit.conf"
@@ -381,14 +383,14 @@ int audit_is_enabled(int fd)
 
 			rc = audit_get_reply(fd, &rep, GET_REPLY_NONBLOCKING,0);
 			if (rc > 0) {
-                	        /* If we get done or error, break out */
-                        	if (rep.type == NLMSG_DONE || 
+			        /* If we get done or error, break out */
+				if (rep.type == NLMSG_DONE ||
 					rep.type == NLMSG_ERROR)
 	                                break;
 
-        	                /* If its not status, keep looping */
+		                /* If its not status, keep looping */
 	                        if (rep.type != AUDIT_GET)
-        	                        continue;
+		                        continue;
 
 				/* Found it... */
 				return rep.status->enabled;
@@ -422,8 +424,8 @@ int audit_set_failure(int fd, uint32_t failure)
 	s.failure = failure;
 	rc = audit_send(fd, AUDIT_SET, &s, sizeof(s));
 	if (rc < 0)
-		audit_msg(audit_priority(errno), 
-			"Error sending failure mode request (%s)", 
+		audit_msg(audit_priority(errno),
+			"Error sending failure mode request (%s)",
 			strerror(-rc));
 	return rc;
 }
@@ -443,8 +445,8 @@ int audit_set_pid(int fd, uint32_t pid, rep_wait_t wmode)
 	s.pid     = pid;
 	rc = audit_send(fd, AUDIT_SET, &s, sizeof(s));
 	if (rc < 0) {
-		audit_msg(audit_priority(errno), 
-			"Error setting audit daemon pid (%s)", 
+		audit_msg(audit_priority(errno),
+			"Error setting audit daemon pid (%s)",
 			strerror(-rc));
 		return rc;
 	}
@@ -476,7 +478,7 @@ int audit_set_rate_limit(int fd, uint32_t limit)
 	rc = audit_send(fd, AUDIT_SET, &s, sizeof(s));
 	if (rc < 0)
 		audit_msg(audit_priority(errno),
-			"Error sending rate limit request (%s)", 
+			"Error sending rate limit request (%s)",
 			strerror(-rc));
 	return rc;
 }
@@ -492,7 +494,7 @@ int audit_set_backlog_limit(int fd, uint32_t limit)
 	rc = audit_send(fd, AUDIT_SET, &s, sizeof(s));
 	if (rc < 0)
 		audit_msg(audit_priority(errno),
-			"Error sending backlog limit request (%s)", 
+			"Error sending backlog limit request (%s)",
 			strerror(-rc));
 	return rc;
 }
@@ -510,7 +512,7 @@ int audit_set_backlog_wait_time(int fd, uint32_t bwt)
 	rc = audit_send(fd, AUDIT_SET, &s, sizeof(s));
 	if (rc < 0)
 		audit_msg(audit_priority(errno),
-			"Error sending backlog limit request (%s)", 
+			"Error sending backlog limit request (%s)",
 			strerror(-rc));
 #endif
 	return rc;
@@ -531,8 +533,28 @@ int audit_reset_lost(int fd)
 	rc = __audit_send(fd, AUDIT_SET, &s, sizeof(s), &seq);
 	if (rc < 0)
 		audit_msg(audit_priority(errno),
-			"Error sending lost reset request (%s)", 
+			"Error sending lost reset request (%s)",
 			strerror(-rc));
+	return rc;
+}
+
+int audit_reset_backlog_wait_time_actual(int fd)
+{
+	int rc = -1;
+
+#if HAVE_DECL_AUDIT_STATUS_BACKLOG_WAIT_TIME_ACTUAL == 1
+	struct audit_status s;
+	int seq;
+
+	memset(&s, 0, sizeof(s));
+	s.mask          = AUDIT_STATUS_BACKLOG_WAIT_TIME_ACTUAL;
+	s.backlog_wait_time_actual = 0;
+	rc = __audit_send(fd, AUDIT_SET, &s, sizeof(s), &seq);
+	if (rc < 0)
+		audit_msg(audit_priority(errno),
+			"Error sending backlog wait time actual reset request (%s)",
+			strerror(-rc));
+#endif
 	return rc;
 }
 
@@ -552,7 +574,7 @@ int audit_set_feature(int fd, unsigned feature, unsigned value, unsigned lock)
 	rc = audit_send(fd, AUDIT_SET_FEATURE, &f, sizeof(f));
 	if (rc < 0)
 		audit_msg(audit_priority(errno),
-			"Error setting feature (%s)", 
+			"Error setting feature (%s)",
 			strerror(-rc));
 	return rc;
 #else
@@ -572,7 +594,7 @@ int audit_request_features(int fd)
 	rc = audit_send(fd, AUDIT_GET_FEATURE, &f, sizeof(f));
 	if (rc < 0)
 		audit_msg(audit_priority(errno),
-			"Error getting feature (%s)", 
+			"Error getting feature (%s)",
 			strerror(-rc));
 	return rc;
 #else
@@ -623,14 +645,14 @@ static void load_feature_bitmap(void)
 
 			rc = audit_get_reply(fd, &rep, GET_REPLY_NONBLOCKING,0);
 			if (rc > 0) {
-                	        /* If we get done or error, break out */
-                        	if (rep.type == NLMSG_DONE || 
+			        /* If we get done or error, break out */
+				if (rep.type == NLMSG_DONE ||
 					rep.type == NLMSG_ERROR)
 	                                break;
 
-        	                /* If its not status, keep looping */
+		                /* If its not status, keep looping */
 	                        if (rep.type != AUDIT_GET)
-        	                        continue;
+		                        continue;
 
 				/* Found it... */
 				features_bitmap = rep.status->feature_bitmap;
@@ -658,7 +680,7 @@ int audit_request_rules_list_data(int fd)
 	int rc = audit_send(fd, AUDIT_LIST_RULES, NULL, 0);
 	if (rc < 0 && rc != -EINVAL)
 		audit_msg(audit_priority(errno),
-			"Error sending rule list data request (%s)", 
+			"Error sending rule list data request (%s)",
 			strerror(-rc));
 	return rc;
 }
@@ -673,12 +695,28 @@ int audit_request_signal_info(int fd)
 	return rc;
 }
 
+char *audit_format_signal_info(char *buf, int len, char *op,
+			       struct audit_reply *rep, char *res)
+{
+	if (rep->len == 24)
+		snprintf(buf, len, "op=%s auid=%u pid=%d res=%s", op,
+			rep->signal_info->uid, rep->signal_info->pid, res);
+	else
+		snprintf(buf, len, "op=%s auid=%u pid=%d subj=%s res=%s",
+			op, rep->signal_info->uid, rep->signal_info->pid,
+			rep->signal_info->ctx, res);
+	return buf;
+}
+
 int audit_update_watch_perms(struct audit_rule_data *rule, int perms)
 {
 	unsigned int i, done=0;
 
-	if (rule->field_count < 1)
+	if (rule->field_count < 1) {
+		audit_msg(LOG_ERR,
+			 "Permissions should be preceeded by other fields");
 		return -1;
+	}
 
 	// First see if we have an entry we are updating
 	for (i=0; i< rule->field_count; i++) {
@@ -689,9 +727,12 @@ int audit_update_watch_perms(struct audit_rule_data *rule, int perms)
 	}
 	if (!done) {
 		// If not check to see if we have room to add a field
-		if (rule->field_count >= (AUDIT_MAX_FIELDS - 1))
+		if (rule->field_count >= (AUDIT_MAX_FIELDS - 1)) {
+			audit_msg(LOG_ERR,
+				  "Too many fields when adding permissions");
 			return -2;
-	
+		}
+
 		// Add the perm
 		rule->fields[rule->field_count] = AUDIT_PERM;
 		rule->fieldflags[rule->field_count] = AUDIT_EQUAL;
@@ -750,7 +791,7 @@ int audit_add_watch_dir(int type, struct audit_rule_data **rulep,
 	rule->fieldflags[1] = AUDIT_EQUAL;
 	rule->values[1] = AUDIT_PERM_READ | AUDIT_PERM_WRITE |
 				AUDIT_PERM_EXEC | AUDIT_PERM_ATTR;
-	
+
 	_audit_permadded = 1;
 
 	return  0;
@@ -763,12 +804,12 @@ int audit_add_rule_data(int fd, struct audit_rule_data *rule,
 
 	rule->flags  = flags;
 	rule->action = action;
-	rc = audit_send(fd, AUDIT_ADD_RULE, rule, 
+	rc = audit_send(fd, AUDIT_ADD_RULE, rule,
 			sizeof(struct audit_rule_data) + rule->buflen);
 	if (rc < 0)
 		audit_msg(audit_priority(errno),
 			"Error sending add rule data request (%s)",
-				errno == EEXIST ? 
+				errno == EEXIST ?
 				"Rule exists" : strerror(-rc));
 	return rc;
 }
@@ -780,7 +821,7 @@ int audit_delete_rule_data(int fd, struct audit_rule_data *rule,
 
 	rule->flags  = flags;
 	rule->action = action;
-	rc = audit_send(fd, AUDIT_DEL_RULE, rule, 
+	rc = audit_send(fd, AUDIT_DEL_RULE, rule,
 			sizeof(struct audit_rule_data) + rule->buflen);
 	if (rc < 0) {
 		if (rc == -ENOENT)
@@ -800,7 +841,7 @@ int audit_delete_rule_data(int fd, struct audit_rule_data *rule,
 int audit_trim_subtrees(int fd)
 {
 	int rc = audit_send(fd, AUDIT_TRIM, NULL, 0);
-	if (rc < 0) 
+	if (rc < 0)
 		audit_msg(audit_priority(errno),
 			"Error sending trim subtrees command (%s)",
 			strerror(-rc));
@@ -816,20 +857,20 @@ int audit_make_equivalent(int fd, const char *mount_point,
 	int rc;
 	size_t len1 = strlen(mount_point);
 	size_t len2 = strlen(subtree);
- 	struct {
- 		uint32_t sizes[2];
- 		unsigned char buf[];
- 	} *cmd = malloc(sizeof(*cmd) + len1 + len2);
+	struct {
+		uint32_t sizes[2];
+		unsigned char buf[];
+	} *cmd = malloc(sizeof(*cmd) + len1 + len2);
 
- 	memset(cmd, 0, sizeof(*cmd) + len1 + len2);
+	memset(cmd, 0, sizeof(*cmd) + len1 + len2);
 
- 	cmd->sizes[0] = len1;
- 	cmd->sizes[1] = len2;
- 	memcpy(&cmd->buf[0], mount_point, len1);
- 	memcpy(&cmd->buf[len1], subtree, len2);
+	cmd->sizes[0] = len1;
+	cmd->sizes[1] = len2;
+	memcpy(&cmd->buf[0], mount_point, len1);
+	memcpy(&cmd->buf[len1], subtree, len2);
 
- 	rc = audit_send(fd, AUDIT_MAKE_EQUIV, cmd, sizeof(*cmd) + len1 + len2);
-	if (rc < 0) 
+	rc = audit_send(fd, AUDIT_MAKE_EQUIV, cmd, sizeof(*cmd) + len1 + len2);
+	if (rc < 0)
 		audit_msg(audit_priority(errno),
 			"Error sending make_equivalent command (%s)",
 			strerror(-rc));
@@ -935,7 +976,7 @@ int audit_rule_syscall_data(struct audit_rule_data *rule, int scall)
 	int word = AUDIT_WORD(scall);
 	int bit  = AUDIT_BIT(scall);
 
-	if (word > (AUDIT_BITMASK_SIZE-1)) 
+	if (word > (AUDIT_BITMASK_SIZE-1))
 		return -1;
 	rule->mask[word] |= bit;
 	return 0;
@@ -948,7 +989,7 @@ int audit_rule_syscallbyname_data(struct audit_rule_data *rule,
 	int machine;
 
 	if (!strcmp(scall, "all")) {
-		for (i = 0; i < AUDIT_BITMASK_SIZE; i++) 
+		for (i = 0; i < AUDIT_BITMASK_SIZE; i++)
 			rule->mask[i] = ~0;
 		return 0;
 	}
@@ -963,7 +1004,7 @@ int audit_rule_syscallbyname_data(struct audit_rule_data *rule,
 		if (isdigit(scall[0]))
 			nr = strtol(scall, NULL, 0);
 	}
-	if (nr >= 0) 
+	if (nr >= 0)
 		return audit_rule_syscall_data(rule, nr);
 	return -1;
 }
@@ -1300,7 +1341,7 @@ int audit_rule_interfield_comp_data(struct audit_rule_data **rulep,
 }
 
 int audit_determine_machine(const char *arch)
-{	// What do we want? i686, x86_64, ia64 or b64, b32
+{	// What do we want? i686, x86_64 or b64, b32
 	int machine;
 	unsigned int bits = 0;
 
@@ -1310,7 +1351,7 @@ int audit_determine_machine(const char *arch)
 	} else if (strcasecmp("b32", arch) == 0) {
 		bits = ~__AUDIT_ARCH_64BIT;
 		machine = audit_detect_machine();
-	} else { 
+	} else {
 		machine = audit_name_to_machine(arch);
 		if (machine < 0) {
 			// See if its numeric
@@ -1323,7 +1364,7 @@ int audit_determine_machine(const char *arch)
 		}
 	}
 
-	if (machine < 0) 
+	if (machine < 0)
 		return -4;
 
 	/* Here's where we fixup the machine. For example, they give
@@ -1337,16 +1378,12 @@ int audit_determine_machine(const char *arch)
 	else if (bits == ~__AUDIT_ARCH_64BIT && machine == MACH_AARCH64)
 		machine = MACH_ARM;
 
-	/* Check for errors - return -6 
+	/* Check for errors - return -6
 	 * We don't allow 32 bit machines to specify 64 bit. */
 	switch (machine)
 	{
 		case MACH_X86:
 			if (bits == __AUDIT_ARCH_64BIT)
-				return -6;
-			break;
-		case MACH_IA64:
-			if (bits == ~__AUDIT_ARCH_64BIT)
 				return -6;
 			break;
 		case MACH_PPC:
@@ -1360,19 +1397,22 @@ int audit_determine_machine(const char *arch)
 #ifdef WITH_ARM
 		case MACH_ARM:
 			if (bits == __AUDIT_ARCH_64BIT)
-				return -6; // Deadcode - just incase of mistake
+				return -6; /* 32 bit only */
 			break;
 #endif
 #ifdef WITH_AARCH64
 		case MACH_AARCH64:
 			if (bits && bits != __AUDIT_ARCH_64BIT)
-				return -6; // Deadcode - just incase of mistake
+				return -6; /* 64 bit only */
 			break;
 #endif
 		case MACH_86_64:   /* fallthrough */
 		case MACH_PPC64:   /* fallthrough */
-		case MACH_PPC64LE: /* fallthrough */
 		case MACH_S390X:   /* fallthrough */
+			break;
+		case MACH_PPC64LE: /* 64 bit only */
+			if (bits && bits != __AUDIT_ARCH_64BIT)
+				return -6;
 			break;
 		default:
 			return -6;
@@ -1434,17 +1474,17 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 
 	if (v == NULL)
 		return -EAU_OPMISSING;
-	
+
 	if (*f == 0)
 		return -EAU_FIELDNAME;
 
 	if (*v == 0)
 		return -EAU_FIELDVALMISSING;
 
-	if ((field = audit_name_to_field(f)) < 0) 
+	if ((field = audit_name_to_field(f)) < 0)
 		return -EAU_FIELDUNKNOWN;
 
-	/* Exclude filter can be used only with MSGTYPE and cred fields */
+	/* Exclude filter can be used only with MSGTYPE, cred and EXE fields */
 	if (flags == AUDIT_FILTER_EXCLUDE) {
 		uint32_t features = audit_get_features();
 		if ((features & AUDIT_FEATURE_BITMAP_EXCLUDE_EXTEND) == 0) {
@@ -1462,6 +1502,7 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 				case AUDIT_SUBJ_TYPE:
 				case AUDIT_SUBJ_SEN:
 				case AUDIT_SUBJ_CLR:
+				case AUDIT_EXE:
 					break;
 				default:
 					return -EAU_MSGTYPECREDEXCLUDE;
@@ -1489,8 +1530,8 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 		case AUDIT_OBJ_UID:
 			// Do positive & negative separate for 32 bit systems
 			vlen = strlen(v);
-			if (isdigit((char)*(v))) 
-				rule->values[rule->field_count] = 
+			if (isdigit((char)*(v)))
+				rule->values[rule->field_count] =
 					strtoul(v, NULL, 0);
 			else if (vlen >= 2 && *(v)=='-' &&
 						(isdigit((char)*(v+1))))
@@ -1500,11 +1541,11 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 				if (strcmp(v, "unset") == 0)
 					rule->values[rule->field_count] =
 								4294967295;
-				else if (audit_name_to_uid(v, 
+				else if (audit_name_to_uid(v,
 					&rule->values[rule->field_count])) {
 					audit_msg(LOG_ERR, "Unknown user: %s",
 						v);
-					return -2;
+					return -EAU_PRINT_NOTHING;
 				}
 			}
 			break;
@@ -1513,15 +1554,15 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 		case AUDIT_SGID:
 		case AUDIT_FSGID:
 		case AUDIT_OBJ_GID:
-			if (isdigit((char)*(v))) 
-				rule->values[rule->field_count] = 
+			if (isdigit((char)*(v)))
+				rule->values[rule->field_count] =
 					strtol(v, NULL, 0);
 			else {
-				if (audit_name_to_gid(v, 
+				if (audit_name_to_gid(v,
 					&rule->values[rule->field_count])) {
 					audit_msg(LOG_ERR, "Unknown group: %s",
 						v);
-					return -2;
+					return -EAU_PRINT_NOTHING;
 				}
 			}
 			break;
@@ -1529,17 +1570,17 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 			if (flags != AUDIT_FILTER_EXIT)
 				return -EAU_EXITONLY;
 			vlen = strlen(v);
-			if (isdigit((char)*(v))) 
-				rule->values[rule->field_count] = 
+			if (isdigit((char)*(v)))
+				rule->values[rule->field_count] =
 					strtol(v, NULL, 0);
-			else if (vlen >= 2 && *(v)=='-' && 
-						(isdigit((char)*(v+1)))) 
-				rule->values[rule->field_count] = 
+			else if (vlen >= 2 && *(v)=='-' &&
+						(isdigit((char)*(v+1))))
+				rule->values[rule->field_count] =
 					strtol(v, NULL, 0);
 			else {
-				rule->values[rule->field_count] = 
+				rule->values[rule->field_count] =
 						audit_name_to_errno(v);
-				if (rule->values[rule->field_count] == 0) 
+				if (rule->values[rule->field_count] == 0)
 					return -EAU_ERRUNKNOWN;
 			}
 			break;
@@ -1585,8 +1626,8 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 				uint32_t features = audit_get_features();
 				if ((features & AUDIT_FEATURE_BITMAP_EXECUTABLE_PATH) == 0)
 					return -EAU_FIELDNOSUPPORT;
-				if (op != AUDIT_EQUAL)
-					return -EAU_OPEQ;
+				if (!(op == AUDIT_NOT_EQUAL || op == AUDIT_EQUAL))
+					return -EAU_OPEQNOTEQ;
 				_audit_exeadded = 1;
 			}
 			if (field == AUDIT_FILTERKEY &&
@@ -1615,7 +1656,7 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 
 			break;
 		case AUDIT_ARCH:
-			if (_audit_syscalladded) 
+			if (_audit_syscalladded)
 				return -EAU_ARCHMISPLACED;
 			if (!(op == AUDIT_NOT_EQUAL || op == AUDIT_EQUAL))
 				return -EAU_OPEQNOTEQ;
@@ -1624,7 +1665,7 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 
 				errno = 0;
 				_audit_elf = strtoul(v, NULL, 0);
-				if (errno) 
+				if (errno)
 					return -EAU_ELFUNKNOWN;
 
 				// Make sure we have a valid mapping
@@ -1644,7 +1685,7 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 
 				_audit_elf = elf;
 			}
-			rule->values[rule->field_count] = _audit_elf; 
+			rule->values[rule->field_count] = _audit_elf;
 			_audit_archadded = 1;
 			break;
 		case AUDIT_PERM:
@@ -1683,7 +1724,7 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 		case AUDIT_FILETYPE:
 			if (!(flags == AUDIT_FILTER_EXIT))
 				return -EAU_EXITONLY;
-			rule->values[rule->field_count] = 
+			rule->values[rule->field_count] =
 				audit_name_to_ftype(v);
 			if ((int)rule->values[rule->field_count] < 0) {
 				return -EAU_FILETYPEUNKNOWN;
@@ -1694,11 +1735,11 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 				return -EAU_FIELDUNAVAIL;
 			if (!(op == AUDIT_NOT_EQUAL || op == AUDIT_EQUAL))
 				return -EAU_OPEQNOTEQ;
-			if (isdigit((char)*(v))) 
-				rule->values[rule->field_count] = 
+			if (isdigit((char)*(v)))
+				rule->values[rule->field_count] =
 					strtoul(v, NULL, 0);
 			else
-				rule->values[rule->field_count] = 
+				rule->values[rule->field_count] =
 					audit_name_to_fstype(v);
 			if ((int)rule->values[rule->field_count] == -1) {
 				return -EAU_FSTYPEUNKNOWN;
@@ -1707,14 +1748,14 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 			break;
 		case AUDIT_ARG0...AUDIT_ARG3:
 			vlen = strlen(v);
-			if (isdigit((char)*(v))) 
-				rule->values[rule->field_count] = 
+			if (isdigit((char)*(v)))
+				rule->values[rule->field_count] =
 					strtoul(v, NULL, 0);
 			else if (vlen >= 2 && *(v)=='-' &&
 						(isdigit((char)*(v+1))))
 				rule->values[rule->field_count] =
 					strtol(v, NULL, 0);
-			else 
+			else
 				return -EAU_FIELDVALNUM;
 			break;
 		case AUDIT_SESSIONID:
@@ -1727,8 +1768,8 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 				return -EAU_FIELDNOFILTER;
 			// Do positive & negative separate for 32 bit systems
 			vlen = strlen(v);
-			if (isdigit((char)*(v))) 
-				rule->values[rule->field_count] = 
+			if (isdigit((char)*(v)))
+				rule->values[rule->field_count] =
 					strtoul(v, NULL, 0);
 			else if (vlen >= 2 && *(v)=='-' &&
 						(isdigit((char)*(v+1))))
@@ -1736,6 +1777,11 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 					strtol(v, NULL, 0);
 			else if (strcmp(v, "unset") == 0)
 				rule->values[rule->field_count] = 4294967295;
+			break;
+		case AUDIT_SADDR_FAM:
+			rule->values[rule->field_count] = strtoul(v, NULL, 0);
+			if (rule->values[rule->field_count] >= AF_MAX)
+				return -EAU_FIELDVALTOOBIG;
 			break;
 		case AUDIT_DEVMAJOR...AUDIT_INODE:
 		case AUDIT_SUCCESS:
@@ -1751,7 +1797,7 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 
 			if (field == AUDIT_PPID && !(flags==AUDIT_FILTER_EXIT))
 				return -EAU_EXITONLY;
-			
+
 			if (!isdigit((char)*(v)))
 				return -EAU_FIELDVALNUM;
 
@@ -1767,6 +1813,22 @@ int audit_rule_fieldpair_data(struct audit_rule_data **rulep, const char *pair,
 	return 0;
 }
 
+struct audit_rule_data *audit_rule_create_data(void)
+{
+	struct audit_rule_data *rule;
+
+	rule = malloc(sizeof(*rule));
+	if (rule != NULL) {
+		audit_rule_init_data(rule);
+	}
+	return rule;
+}
+
+void audit_rule_init_data(struct audit_rule_data *rule)
+{
+	memset(rule, 0, sizeof(*rule));
+}
+
 void audit_rule_free_data(struct audit_rule_data *rule)
 {
 	free(rule);
@@ -1779,7 +1841,7 @@ static int audit_name_to_uid(const char *name, uid_t *uid)
 	struct passwd *pw;
 
 	pw = getpwnam(name);
-	if (pw == NULL) 
+	if (pw == NULL)
 		return 1;
 
 	memset(pw->pw_passwd, ' ', strlen(pw->pw_passwd));
@@ -1792,9 +1854,9 @@ static int audit_name_to_gid(const char *name, gid_t *gid)
 	struct group *gr;
 
 	gr = getgrnam(name);
-	if (gr == NULL) 
+	if (gr == NULL)
 		return 1;
- 
+
 	*gid = gr->gr_gid;
 	return 0;
 }
@@ -1812,7 +1874,7 @@ int audit_detect_machine(void)
 void audit_number_to_errmsg(int errnumber, const char *opt)
 {
 	unsigned int i;
-	
+
 	for (i = 0; i < sizeof(err_msgtab)/sizeof(struct msg_tab); i++) {
 		if (err_msgtab[i].key == errnumber) {
 			switch (err_msgtab[i].position)

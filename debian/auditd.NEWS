@@ -1,3 +1,11 @@
+audit (1:3.0~alpha9-1) experimental; urgency=medium
+
+  audispd executable has been merged back into the main auditd daemon.
+  All configuration files have moved from /etc/audisp/plugins.d to
+  /etc/audit/plugins.d.
+
+ -- Laurent Bigonville <bigon@debian.org>  Sun, 05 Apr 2020 13:30:06 +0200
+
 audit (1:2.5.2-1) unstable; urgency=medium
 
   With this version, the /etc/audit/audit.rules configuration file is

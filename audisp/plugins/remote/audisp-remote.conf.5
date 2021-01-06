@@ -1,4 +1,4 @@
-.TH AUDISP-REMOTE.CONF: "5" "June 2016" "Red Hat" "System Administration Utilities"
+.TH AUDISP-REMOTE.CONF: "5" "Aug 2018" "Red Hat" "System Administration Utilities"
 .SH NAME
 audisp-remote.conf \- the audisp-remote configuration file
 .SH DESCRIPTION
@@ -19,11 +19,13 @@ set to the word
 then any available unpriviledged port is used. This is a security mechanism to prevent untrusted user space apps from injecting events into the audit daemon. You should set it to an unused port < 1024 to ensure that only privileged users can bind to that port. Then also set the tcp_client_ports in the aggregating auditd.conf file to match the ports that clients are sending from.
 .TP
 .I transport
-This parameter tells the remote logging app how to send events to the remote system. The only valid value right now is
-.IR tcp ".
+This parameter tells the remote logging app how to send events to the remote system. The valid options are
+.IR TCP ", and " KRB5 ".
 If set to
-.IR tcp ,
-the remote logging app will just make a normal clear text connection to the remote system. This is not used if kerberos is enabled.
+.IR TCP ,
+the remote logging app will just make a normal clear text connection to the remote system. If its set to
+.IR KRB5 ",
+then Kerberos 5 will be used for authentication and encryption. The default value is TCP.
 .TP
 .I mode
 This parameter tells the remote logging app what strategy to use getting records to the remote system. Valid values are
@@ -57,7 +59,13 @@ the remote end, and to receive status messages from the remote server.
 If
 .I ascii
 is given instead, each message is a simple ASCII text line with no
-overhead at all.  If
+overhead at all. The
+.I ascii
+format is a very simplistic protocol. If there are any network problems, it
+willcause audisp-remote to exit. Auditd may or may not restart it on next
+event. If something more robust is needed, use the
+.I managed
+format. If
 .I mode
 is set to \fIforward\fP,
 .I format
@@ -126,7 +134,7 @@ remote end signals a disk error.  The default is warn_once.
 .TP
 .I remote_ending_action
 Likewise, this parameter tells the system what action to take if the
-remote end signals a disk error. This action has one additional option,
+network connection is lost. This action has one additional option,
 .I reconnect
 which tells the remote plugin to attempt to reconnect to the server upon receipt of the next audit record. If an event was being sent when something triggered this action, it is not dequeued. If it is unsuccessful in reconnecting, the audit record could be lost. The default is to reconnect.
 .TP
@@ -160,10 +168,31 @@ option will cause the remote logging app to put the computer system in single us
 .I halt
 option will cause the remote logging app to shutdown the computer system.
 .TP
+.I startup_failure_action
+This parameter tells the system what action to take whenever there is an error connecting to the remote system during startup. Typically, this is benign as the plugin's default behavior is to attempt reconnecting until it succeeds. But there may be times when you want to do something different. Valid values are
+.IR ignore ", " syslog ", " exec ", " warn_once ", and " warn_once_continue " .
+If set to
+.IR ignore ,
+the remote logging app does nothing.
+.I Syslog
+means that it will issue a warning to syslog.
+.I exec
+/path-to-script will execute the script. You cannot pass parameters to the script.
+.I warn_once
+is like syslog execept that only one message is put in syslog until an event is successfully transferred.
+.I warn_once_continue
+is like warn_once except it ignores the problem. This is the default.
+.TP
 .I enable_krb5
-If set to "yes", Kerberos 5 will be used for authentication and
-encryption.  Default is "no".  Note that encryption can only be used
-with managed connections, not plain ASCII.
+This option is deprecated. Use the
+.IR transport
+option to enable Kerberos support. If this option follows the transport
+configuration option, it will override the transport setting. This would
+be the normal expected behavior for backwards compatibility. If set to
+.IR yes ",
+Kerberos 5 will be used for authentication and encryption.  Default is
+.IR no ".  Note that encryption can only be used with managed connections,
+not plain ASCII.
 .TP
 .I krb5_principal
 If specified, This is the expected principal for the server.  The

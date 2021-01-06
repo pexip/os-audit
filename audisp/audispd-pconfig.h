@@ -26,11 +26,11 @@
 
 #include <sys/types.h>
 #include "libaudit.h"
-#define MAX_PLUGIN_ARGS 2
+#define MAX_PLUGIN_ARGS 3
 
 typedef enum { A_NO, A_YES } active_t;
 typedef enum { D_UNSET, D_IN, D_OUT } direction_t;
-typedef enum { S_ALWAYS, S_BUILTIN, S_AF_UNIX, S_SYSLOG } service_t;
+typedef enum { S_ALWAYS, S_BUILTIN, S_AF_UNIX } service_t;
 typedef enum { F_BINARY, F_STRING } format_t;
 
 typedef struct plugin_conf

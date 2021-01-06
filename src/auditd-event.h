@@ -27,7 +27,8 @@
 #include <stdio.h>
 #include "libaudit.h"
 
-typedef void (*ack_func_type)(void *ack_data, const unsigned char *header, const char *msg);
+typedef void (*ack_func_type)(void *ack_data, const unsigned char *header,
+			      const char *msg);
 
 struct auditd_event {
 	struct audit_reply reply;
@@ -35,6 +36,9 @@ struct auditd_event {
 	void *ack_data;
 	unsigned long sequence_id;
 };
+
+static inline int from_network(const struct auditd_event *e)
+{ if (e && e->ack_func) return 1; return 0; }
 
 #include "auditd-config.h"
 
