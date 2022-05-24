@@ -1,3 +1,10 @@
+audit (1:2.8.4-3pexip4) pexip; urgency=medium
+
+  * Remove /etc/audit/audit.rules in the preinst, to quieten dpkg
+    conffile noise.
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Tue, 24 May 2022 18:12:10 +0100
+
 audit (1:2.8.4-3pexip3) pexip; urgency=medium
 
   * Rebuild in buster environment

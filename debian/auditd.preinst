@@ -8,6 +8,12 @@ case "$1" in
         if dpkg --compare-versions "$2" le "1:2.2.1-1"; then
             pam-auth-update --package --remove auditd
         fi
+
+	# This used to be a conffile, but we don't want it to be any
+	# more as it's always generated at daemon startup
+	# now. Removing it in preinst will fix things up in dpkg's
+	# conffile tracking.
+	rm -f /etc/audit/audit.rules
     ;;
 
     install|abort-upgrade)
