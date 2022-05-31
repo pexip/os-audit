@@ -28,7 +28,7 @@ Vcs-Browser: https://salsa.debian.org/debian/audit
 Rules-Requires-Root: binary-targets
 X-Python-Version: >= 2.5
 X-Python3-Version: >= 3.2
-XS-Pexip-Upstream: http://ftp.debian.org/debian/ buster
+XS-Pexip-Upstream: http://deb.debian.org/debian/ bullseye
 
 Package: auditd
 Section: admin
