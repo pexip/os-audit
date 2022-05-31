@@ -1,6 +1,6 @@
 /*
 * interpret.c - Lookup values to something more readable
-* Copyright (c) 2007-09,2011-16 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2007-09,2011-16,2018-19 Red Hat Inc., Durham, North Carolina.
 * All Rights Reserved. 
 *
 * This library is free software; you can redistribute it and/or
@@ -58,6 +58,7 @@
 #endif
 #include "auparse-defs.h"
 #include "gen_tables.h"
+#include "common.h"
 
 #if !HAVE_DECL_ADDR_NO_RANDOMIZE
 # define ADDR_NO_RANDOMIZE       0x0040000
@@ -118,6 +119,7 @@
 #include "ioctlreqtabs.h"
 #include "inethooktabs.h"
 #include "netactiontabs.h"
+#include "bpftabs.h"
 
 typedef enum { AVC_UNSET, AVC_DENIED, AVC_GRANTED } avc_t;
 typedef enum { S_UNSET=-1, S_FAILED, S_SUCCESS } success_t;
@@ -209,9 +211,10 @@ static void shell_escape(const char *s, char *dest, unsigned int len)
 	}
 	dest[j] = '\0';	/* terminate string */
 }
-                                
+
 static const char quote_set[] = "\"'`$\\!()| ;#&*?[]<>{}";
-static unsigned int need_shell_quote_escape(const unsigned char *s, unsigned int len)
+static unsigned int need_shell_quote_escape(const unsigned char *s,
+					    unsigned int len)
 {
 	unsigned int i = 0, cnt = 0;
 	while (i < len) {
@@ -267,17 +270,20 @@ static void escape(const char *s, char *dest, unsigned int len,
 	switch (escape_mode)
 	{
 		case AUPARSE_ESC_RAW:
-			return;
+			break;
 		case AUPARSE_ESC_TTY:
-			return tty_escape(s, dest, len);
+			tty_escape(s, dest, len);
+			break;
 		case AUPARSE_ESC_SHELL:
-			return shell_escape(s, dest, len);
+			shell_escape(s, dest, len);
+			break;
 		case AUPARSE_ESC_SHELL_QUOTE:
-			return shell_quote_escape(s, dest, len);
+			shell_quote_escape(s, dest, len);
+			break;
 	}
 }
 
-static void key_escape(char *orig, char *dest, auparse_esc_t escape_mode)
+static void key_escape(const char *orig, char *dest, auparse_esc_t escape_mode)
 {
 	const char *optr = orig;
 	char *str, *dptr = dest, tmp;
@@ -309,6 +315,16 @@ static void key_escape(char *orig, char *dest, auparse_esc_t escape_mode)
 			dptr++;
 		}
 	}
+}
+
+static int is_int_string(const char *str)
+{
+	while (*str) {
+		if (!isdigit(*str))
+			return 0;
+		str++;
+	}
+	return 1;
 }
 
 static int is_hex_string(const char *str)
@@ -490,13 +506,10 @@ static const char *aulookup_success(int s)
 	{
 		default:
 			return success[0];
-			break;
 		case S_FAILED:
 			return success[1];
-			break;
 		case S_SUCCESS:
 			return success[2];
-			break;
 	}
 }
 
@@ -552,7 +565,7 @@ void aulookup_destroy_uid_list(void)
 	if (uid_cache_created == 0)
 		return;
 
-	destroy_lru(uid_cache); 
+	destroy_lru(uid_cache);
 	uid_cache_created = 0;
 }
 
@@ -607,7 +620,7 @@ void aulookup_destroy_gid_list(void)
 	if (gid_cache_created == 0)
 		return;
 
-	destroy_lru(gid_cache); 
+	destroy_lru(gid_cache);
 	gid_cache_created = 0;
 }
 
@@ -671,7 +684,7 @@ static const char *print_arch(const char *val, unsigned int machine)
 	if (ptr)
 	        return strdup(ptr);
 	else {
-		if (asprintf(&out, "unknown-machine-type(%d)", machine) < 0)
+		if (asprintf(&out, "unknown-machine-type(%u)", machine) < 0)
 			out = NULL;
                 return out;
 	}
@@ -686,10 +699,10 @@ static const char *print_ipccall(const char *val, unsigned int base)
 	errno = 0;
 	a0 = strtol(val, NULL, base);
 	if (errno) {
-		char *out;
-		if (asprintf(&out, "conversion error(%s)", val) < 0)
-			out = NULL;
-		return out;
+		char *out2;
+		if (asprintf(&out2, "conversion error(%s)", val) < 0)
+			out2 = NULL;
+		return out2;
 	}
 	func = ipc_i2s(a0);
 	if (func)
@@ -710,10 +723,10 @@ static const char *print_socketcall(const char *val, unsigned int base)
 	errno = 0;
 	a0 = strtol(val, NULL, base);
 	if (errno) {
-		char *out;
-		if (asprintf(&out, "conversion error(%s)", val) < 0)
-			out = NULL;
-		return out;
+		char *out2;
+		if (asprintf(&out2, "conversion error(%s)", val) < 0)
+			out2 = NULL;
+		return out2;
 	}
 	func = sock_i2s(a0);
 	if (func)
@@ -853,6 +866,13 @@ err_out:
 		return print_escaped(id->val);
 }
 
+// rawmemchr is faster. Let's use it if we have it.
+#ifdef HAVE_RAWMEMCHR
+#define STRCHR rawmemchr
+#else
+#define STRCHR strchr
+#endif
+
 static const char *print_proctitle(const char *val)
 {
 	char *out = (char *)print_escaped(val);
@@ -863,7 +883,7 @@ static const char *print_proctitle(const char *val)
 		// Proctitle has arguments separated by NUL bytes
 		// We need to write over the NUL bytes with a space
 		// so that we can see the arguments
-		while ((ptr  = rawmemchr(ptr, '\0'))) {
+		while ((ptr  = STRCHR(ptr, '\0'))) {
 			if (ptr >= end)
 				break;
 			*ptr = ' ';
@@ -1105,21 +1125,21 @@ static const char *print_sockaddr(const char *val)
                 case AF_LOCAL:
                         {
                                 const struct sockaddr_un *un =
-                                        (struct sockaddr_un *)saddr;
+                                        (const struct sockaddr_un *)saddr;
                                 if (un->sun_path[0])
 					rc = asprintf(&out,
-						"{ fam=%s path=%s }", str,
+						"{ saddr_fam=%s path=%s }", str,
 						      un->sun_path);
                                 else // abstract name
 					rc = asprintf(&out,
-						"{ fam=%s path=%.108s }",
+						"{ saddr_fam=%s path=%.108s }",
 							str, &un->sun_path[1]);
                         }
                         break;
                 case AF_INET:
                         if (slen < sizeof(struct sockaddr_in)) {
 				rc = asprintf(&out,
-					    "{ fam=%s sockaddr len too short }",
+				    "{ saddr_fam=%s sockaddr len too short }",
 					     str);
 				break;
                         }
@@ -1128,19 +1148,19 @@ static const char *print_sockaddr(const char *val)
                                 NI_MAXSERV, NI_NUMERICHOST |
                                         NI_NUMERICSERV) == 0 ) {
 				rc = asprintf(&out,
-					      "{ fam=%s laddr=%s lport=%s }",
+				      "{ saddr_fam=%s laddr=%s lport=%s }",
 					      str, name, serv);
                         } else
 				rc = asprintf(&out,
-					    "{ fam=%s (error resolving addr) }",
+				    "{ saddr_fam=%s (error resolving addr) }",
 					    str);
                         break;
                 case AF_AX25:
                         {
                                 const struct sockaddr_ax25 *x =
-                                                (struct sockaddr_ax25 *)saddr;
+                                           (const struct sockaddr_ax25 *)saddr;
 				rc = asprintf(&out,
-					      "{ fam=%s call=%c%c%c%c%c%c%c }",
+				      "{ saddr_fam=%s call=%c%c%c%c%c%c%c }",
 					      str,
 					      x->sax25_call.ax25_call[0],
 					      x->sax25_call.ax25_call[1],
@@ -1154,32 +1174,34 @@ static const char *print_sockaddr(const char *val)
                 case AF_IPX:
                         {
                                 const struct sockaddr_ipx *ip =
-                                                (struct sockaddr_ipx *)saddr;
+                                            (const struct sockaddr_ipx *)saddr;
 				rc = asprintf(&out,
-					"{ fam=%s lport=%d ipx-net=%u }",
+					"{ saddr_fam=%s lport=%d ipx-net=%u }",
 					str, ip->sipx_port, ip->sipx_network);
                         }
                         break;
                 case AF_ATMPVC:
                         {
                                 const struct sockaddr_atmpvc* at =
-                                        (struct sockaddr_atmpvc *)saddr;
-				rc = asprintf(&out, "{ fam=%s int=%d }", str,
+                                        (const struct sockaddr_atmpvc *)saddr;
+				rc = asprintf(&out, "{ saddr_fam=%s int=%d }",
+					      str,
 					      at->sap_addr.itf);
                         }
                         break;
                 case AF_X25:
                         {
                                 const struct sockaddr_x25* x =
-                                        (struct sockaddr_x25 *)saddr;
-				rc = asprintf(&out, "{ fam=%s laddr=%.15s }",
+                                        (const struct sockaddr_x25 *)saddr;
+				rc = asprintf(&out,
+					      "{ saddr_fam=%s laddr=%.15s }",
 					      str, x->sx25_addr.x25_addr);
                         }
                         break;
                 case AF_INET6:
                         if (slen < sizeof(struct sockaddr_in6)) {
 				rc = asprintf(&out,
-					   "{ fam=%s sockaddr6 len too short }",
+					"{ saddr_fam=%s sockaddr6 len too short }",
 					   str);
 				break;
                         }
@@ -1188,24 +1210,25 @@ static const char *print_sockaddr(const char *val)
                                 NI_MAXSERV, NI_NUMERICHOST |
                                         NI_NUMERICSERV) == 0 ) {
 				rc = asprintf(&out,
-						"{ fam=%s laddr=%s lport=%s }",
+					"{ saddr_fam=%s laddr=%s lport=%s }",
 						str, name, serv);
                         } else
 				rc = asprintf(&out,
-					    "{ fam=%s (error resolving addr) }",
+				    "{ saddr_fam=%s (error resolving addr) }",
 					    str);
                         break;
                 case AF_NETLINK:
                         {
                                 const struct sockaddr_nl *n =
-                                                (struct sockaddr_nl *)saddr;
+                                             (const struct sockaddr_nl *)saddr;
 				rc = asprintf(&out,
-					  "{ fam=%s nlnk-fam=%u nlnk-pid=%u }",
+					"{ saddr_fam=%s nlnk-fam=%u nlnk-pid=%u }",
 					  str, n->nl_family, n->nl_pid);
                         }
                         break;
 		default:
-			rc = asprintf(&out, "{ fam=%s (unsupported) }", str);
+			rc = asprintf(&out,
+				      "{ saddr_fam=%s (unsupported) }", str);
 			break;
         }
 	if (rc < 0)
@@ -1336,13 +1359,13 @@ static const char *print_success(const char *val)
 
 	if (isdigit(*val)) {
 	        errno = 0;
-        	res = strtoul(val, NULL, 10);
+		res = strtoul(val, NULL, 10);
 	        if (errno) {
 			char *out;
 			if (asprintf(&out, "conversion error(%s)", val) < 0)
 				out = NULL;
 	                return out;
-        	}
+		}
 
 	        return strdup(aulookup_success(res));
 	} else
@@ -1361,8 +1384,8 @@ static const char *print_open_flags(const char *val)
         if (errno) {
 		if (asprintf(&out, "conversion error(%s)", val) < 0)
 			out = NULL;
-               	return out;
-       	}
+		return out;
+	}
 
 	buf[0] = 0;
         if ((flags & O_ACCMODE) == 0) {
@@ -1399,8 +1422,8 @@ static const char *print_clone_flags(const char *val)
         if (errno) {
 		if (asprintf(&out, "conversion error(%s)", val) < 0)
 			out = NULL;
-               	return out;
-       	}
+		return out;
+	}
 
 	buf[0] = 0;
         for (i=0; i<CLONE_FLAG_NUM_ENTRIES; i++) {
@@ -1420,7 +1443,7 @@ static const char *print_clone_flags(const char *val)
 	if (clone_sig && (clone_sig < 32)) {
 		const char *s = signal_i2s(clone_sig);
 		if (s != NULL) {
-			if (buf[0] != 0) 
+			if (buf[0] != 0)
 				strcat(buf, "|");
 			strcat(buf, s);
 		}
@@ -1443,7 +1466,7 @@ static const char *print_fcntl_cmd(const char *val)
 		if (asprintf(&out, "conversion error(%s)", val) < 0)
 			out = NULL;
 		return out;
-       	}
+	}
 
 	s = fcntl_i2s(cmd);
 	if (s != NULL)
@@ -1591,7 +1614,7 @@ static const char *print_personality(const char *val)
                 return out;
         }
 
-	pers2 = pers & ~ADDR_NO_RANDOMIZE;
+	pers2 = pers & PER_MASK;
 	s = person_i2s(pers2);
 	if (s != NULL) {
 		if (pers & ADDR_NO_RANDOMIZE) {
@@ -1654,7 +1677,7 @@ static const char *print_mount(const char *val)
 {
 	unsigned int mounts, i;
 	int cnt = 0;
-	char buf[334];
+	char buf[sizeof(mount_strings)+8];
 	char *out;
 
 	errno = 0;
@@ -1995,8 +2018,8 @@ static const char *print_shmflags(const char *val)
         if (errno) {
 		if (asprintf(&out, "conversion error(%s)", val) < 0)
 			out = NULL;
-               	return out;
-       	}
+		return out;
+	}
 
 	partial = flags & 00003000;
 	buf[0] = 0;
@@ -2127,13 +2150,10 @@ static const char *aulookup_fanotify(unsigned s)
 	{
 		default:
 			return fanotify[0];
-			break;
 		case FAN_ALLOW:
 			return fanotify[1];
-			break;
 		case FAN_DENY:
 			return fanotify[2];
-			break;
 	}
 }
 
@@ -2143,13 +2163,13 @@ static const char *print_fanotify(const char *val)
 
 	if (isdigit(*val)) {
 	        errno = 0;
-        	res = strtoul(val, NULL, 10);
+		res = strtoul(val, NULL, 10);
 	        if (errno) {
 			char *out;
 			if (asprintf(&out, "conversion error(%s)", val) < 0)
 				out = NULL;
 	                return out;
-        	}
+		}
 
 	        return strdup(aulookup_fanotify(res));
 	} else
@@ -2169,6 +2189,28 @@ static const char *print_exit_syscall(const char *val)
 	return out;
 }
 
+static const char *print_bpf(const char *val)
+{
+	unsigned int cmd;
+	char *out;
+	const char *str;
+
+	errno = 0;
+	cmd = strtoul(val, NULL, 16);
+	if (errno) {
+		if (asprintf(&out, "conversion error(%s)", val) < 0)
+			out = NULL;
+		return out;
+	}
+	str = bpf_i2s(cmd);
+	if (str == NULL) {
+		if (asprintf(&out, "unknown-bpf-cmd(%s)", val) < 0)
+			out = NULL;
+		return out;
+	} else
+		return strdup(str);
+}
+
 static const char *print_a0(const char *val, const idata *id)
 {
 	char *out;
@@ -2177,7 +2219,7 @@ static const char *print_a0(const char *val, const idata *id)
 	if (sys) {
 		if (*sys == 'r') {
 			if (strcmp(sys, "rt_sigaction") == 0)
-        	                return print_signals(val, 16);
+		                return print_signals(val, 16);
 			else if (strcmp(sys, "renameat") == 0)
 				return print_dirfd(val);
 			else if (strcmp(sys, "readlinkat") == 0)
@@ -2190,7 +2232,7 @@ static const char *print_a0(const char *val, const idata *id)
 		} else if (*sys == 'p') {
 	                if (strcmp(sys, "personality") == 0)
 				return print_personality(val);
-                	else if (strcmp(sys, "ptrace") == 0)
+			else if (strcmp(sys, "ptrace") == 0)
 				return print_ptrace(val);
 			else if (strcmp(sys, "prctl") == 0)
 				return print_prctl_opt(val);
@@ -2220,25 +2262,25 @@ static const char *print_a0(const char *val, const idata *id)
 		} else if (strcmp(sys+1, "etrlimit") == 0)
 			return print_rlimit(val);
 		else if (*sys == 's') {
-                	if (strcmp(sys, "setuid") == 0)
+			if (strcmp(sys, "setuid") == 0)
 				return print_uid(val, 16);
-        	        else if (strcmp(sys, "setreuid") == 0)
+		        else if (strcmp(sys, "setreuid") == 0)
 				return print_uid(val, 16);
 	                else if (strcmp(sys, "setresuid") == 0)
 				return print_uid(val, 16);
-                	else if (strcmp(sys, "setfsuid") == 0)
+			else if (strcmp(sys, "setfsuid") == 0)
 				return print_uid(val, 16);
 	                else if (strcmp(sys, "setgid") == 0)
 				return print_gid(val, 16);
-                	else if (strcmp(sys, "setregid") == 0)
+		else if (strcmp(sys, "setregid") == 0)
 				return print_gid(val, 16);
 	                else if (strcmp(sys, "setresgid") == 0)
 				return print_gid(val, 16);
-                	else if (strcmp(sys, "socket") == 0)
+			else if (strcmp(sys, "socket") == 0)
 				return print_socket_domain(val);
-                	else if (strcmp(sys, "setfsgid") == 0)
+			else if (strcmp(sys, "setfsgid") == 0)
 				return print_gid(val, 16);
-                	else if (strcmp(sys, "socketcall") == 0)
+			else if (strcmp(sys, "socketcall") == 0)
 				return print_socketcall(val, 16);
 		}
 		else if (strcmp(sys, "linkat") == 0)
@@ -2247,10 +2289,12 @@ static const char *print_a0(const char *val, const idata *id)
 			return print_dirfd(val);
 		else if (strcmp(sys, "openat") == 0)
 			return print_dirfd(val);
-               	else if (strcmp(sys, "ipccall") == 0)
+		else if (strcmp(sys, "ipccall") == 0)
 			return print_ipccall(val, 16);
 		else if (strncmp(sys, "exit", 4) == 0)
 			return print_exit_syscall(val);
+		else if (strcmp(sys, "bpf") == 0)
+			return print_bpf(val);
 	}
 	if (asprintf(&out, "0x%s", val) < 0)
 			out = NULL;
@@ -2281,11 +2325,11 @@ static const char *print_a1(const char *val, const idata *id)
 		else if (*sys == 's') {
 	                if (strcmp(sys, "setreuid") == 0)
 				return print_uid(val, 16);
-                	else if (strcmp(sys, "setresuid") == 0)
+			else if (strcmp(sys, "setresuid") == 0)
 				return print_uid(val, 16);
 	                else if (strcmp(sys, "setregid") == 0)
 				return print_gid(val, 16);
-                	else if (strcmp(sys, "setresgid") == 0)
+			else if (strcmp(sys, "setresgid") == 0)
 				return print_gid(val, 16);
 	                else if (strcmp(sys, "socket") == 0)
 				return print_socket_type(val);
@@ -2343,8 +2387,8 @@ static const char *print_a2(const char *val, const idata *id)
 				if (asprintf(&out, "conversion error(%s)",
 					     val) < 0)
 					out = NULL;
-	                	return out;
-	        	}
+				return out;
+			}
 			switch (id->a1)
 			{
 				case F_SETOWN:
@@ -2385,11 +2429,11 @@ static const char *print_a2(const char *val, const idata *id)
 			else if (strcmp(sys, "faccessat") == 0)
 				return print_access(val);
 		} else if (*sys == 's') {
-                	if (strcmp(sys, "setresuid") == 0)
+			if (strcmp(sys, "setresuid") == 0)
 				return print_uid(val, 16);
 	                else if (strcmp(sys, "setresgid") == 0)
 				return print_gid(val, 16);
-                	else if (strcmp(sys, "socket") == 0)
+			else if (strcmp(sys, "socket") == 0)
 				return print_socket_proto(val);
 	                else if (strcmp(sys, "sendmsg") == 0)
 				return print_recv(val);
@@ -2408,7 +2452,7 @@ static const char *print_a2(const char *val, const idata *id)
 						(id->a1 & O_CREAT))
 				return print_mode_short(val, 16);
 		} else if (*sys == 'r') {
-                	if (strcmp(sys, "recvmsg") == 0)
+			if (strcmp(sys, "recvmsg") == 0)
 				return print_recv(val);
 			else if (strcmp(sys, "readlinkat") == 0)
 				return print_dirfd(val);
@@ -2535,7 +2579,7 @@ static const char *print_protocol(const char *val)
 
 	errno = 0;
         i = strtoul(val, NULL, 10);
-	if (errno) { 
+	if (errno) {
 		if (asprintf(&out, "conversion error(%s)", val) < 0)
 			out = NULL;
 	} else {
@@ -2626,7 +2670,7 @@ static const char *print_list(const char *val)
 
 	errno = 0;
         i = strtoul(val, NULL, 10);
-	if (errno) { 
+	if (errno) {
 		if (asprintf(&out, "conversion error(%s)", val) < 0)
 			out = NULL;
 	} else {
@@ -2836,7 +2880,7 @@ const char *interpret(const rnode *r, auparse_esc_t escape_mode)
 	return out;
 }
 
-/* 
+/*
  * rtype:   the record type
  * name:    the current field name
  * value:   the current field value
@@ -2875,6 +2919,17 @@ int auparse_interp_adjust_type(int rtype, const char *name, const char *val)
 		(rtype == AUDIT_ADD_GROUP || rtype == AUDIT_GRP_MGMT ||
 			rtype == AUDIT_DEL_GROUP))
 		type = AUPARSE_TYPE_GID;
+	else if (rtype == AUDIT_TRUSTED_APP) {
+		if (val[0] == '"')
+			type = AUPARSE_TYPE_ESCAPED;
+		else if (is_int_string(val))
+			type = AUPARSE_TYPE_UNCLASSIFIED;
+		/* Check if we have string with only HEX symbols */
+		else if (is_hex_string(val))
+			type = AUPARSE_TYPE_ESCAPED;
+		else
+			type = AUPARSE_TYPE_UNCLASSIFIED;
+	}
 	else
 		type = lookup_type(name);
 
@@ -2901,7 +2956,7 @@ char *auparse_do_interpretation(int type, const idata *id,
 				// recorded it, try it again incase the
 				// libraries have been updated to support it.
 				if (strncmp(val, "unknown-", 8 ) == 0)
-					goto unknown; 
+					goto unknown;
 				if (type == AUPARSE_TYPE_UID ||
 						type == AUPARSE_TYPE_GID)
 					return print_escaped(val);
@@ -2967,13 +3022,13 @@ unknown:
 			break;
 		case AUPARSE_TYPE_A2:
 			out = print_a2(id->val, id);
-			break; 
+			break;
 		case AUPARSE_TYPE_A3:
 			out = print_a3(id->val, id);
-			break; 
+			break;
 		case AUPARSE_TYPE_SIGNAL:
 			out = print_signals(id->val, 10);
-			break; 
+			break;
 		case AUPARSE_TYPE_LIST:
 			out = print_list(id->val);
 			break;
@@ -2988,13 +3043,13 @@ unknown:
 			break;
 		case AUPARSE_TYPE_NFPROTO:
 			out = print_nfproto(id->val);
-			break; 
+			break;
 		case AUPARSE_TYPE_ICMPTYPE:
 			out = print_icmptype(id->val);
-			break; 
+			break;
 		case AUPARSE_TYPE_PROTOCOL:
 			out = print_protocol(id->val);
-			break; 
+			break;
 		case AUPARSE_TYPE_ADDR:
 			out = print_addr(id->val);
 			break;
@@ -3056,9 +3111,9 @@ unknown:
 		} else {
 			// We have multiple keys. Need to look at each one.
 			unsigned int cnt = 0;
-			char *ptr = out;
+			char *ptr = (char *)out;
 
- 			while (*ptr) {
+			while (*ptr) {
 				unsigned int klen = str - ptr;
 				char tmp = *str;
 				*str = 0;
@@ -3087,5 +3142,6 @@ unknown:
 			}
 		}
 	}
-	return out;
+	return (char *)out;
 }
+

@@ -79,17 +79,17 @@ static int listen_socket[N_SOCKS];
 static int nlsocks;
 static struct ev_io tcp_listen_watcher;
 static struct ev_periodic periodic_watcher;
-static int min_port, max_port, max_per_addr;
+static unsigned min_port, max_port, max_per_addr;
 static int use_libwrap = 1;
-#ifdef USE_GSSAPI
-/* This is used to hold our own private key.  */
-static gss_cred_id_t server_creds;
-static char *my_service_name, *my_gss_realm;
-static int use_gss = 0;
+static int transport = T_TCP;
 static char msgbuf[MAX_AUDIT_MESSAGE_LENGTH + 1];
-#endif
-
 static struct ev_tcp *client_chain = NULL;
+#ifdef USE_GSSAPI
+/* This is our global credentials */
+static gss_cred_id_t server_creds; // This is used to hold our own private key
+static char *my_service_name, *my_gss_realm;
+#define USE_GSS (transport == T_KRB5)
+#endif
 
 static char *sockaddr_to_string(struct sockaddr_storage *addr)
 {
@@ -231,7 +231,7 @@ static int recv_token(int s, gss_buffer_t tok)
 	       | lenbuf[3]);
 	if (len > MAX_AUDIT_MESSAGE_LENGTH) {
 		audit_msg(LOG_ERR,
-			"GSS-API error: event length excedes MAX_AUDIT_LENGTH");
+			"GSS-API error: event length exceeds MAX_AUDIT_LENGTH");
 		return -1;
 	}
 	tok->length = len;
@@ -257,7 +257,7 @@ static int recv_token(int s, gss_buffer_t tok)
 }
 
 /* Same here.  */
-int send_token(int s, gss_buffer_t tok)
+static int send_token(int s, gss_buffer_t tok)
 {
 	int ret;
 	unsigned char lenbuf[4];
@@ -330,7 +330,7 @@ static void gss_failure(const char *msg, int major_status, int minor_status)
 /* These are our private credentials, which come from a key file on
    our server.  They are aquired once, at program start.  */
 static int server_acquire_creds(const char *service_name,
-		gss_cred_id_t *server_creds)
+		gss_cred_id_t *lserver_creds)
 {
 	gss_buffer_desc name_buf;
 	gss_name_t server_name;
@@ -353,7 +353,7 @@ static int server_acquire_creds(const char *service_name,
 	major_status = gss_acquire_cred(&minor_status,
 					server_name, GSS_C_INDEFINITE,
 					GSS_C_NULL_OID_SET, GSS_C_ACCEPT,
-					server_creds, NULL, NULL);
+					lserver_creds, NULL, NULL);
 	if (major_status != GSS_S_COMPLETE) {
 		gss_failure("acquiring credentials",
 				major_status, minor_status);
@@ -494,7 +494,7 @@ static void client_ack(void *ack_data, const unsigned char *header,
 {
 	ev_tcp *io = (ev_tcp *)ack_data;
 #ifdef USE_GSSAPI
-	if (use_gss) {
+	if (USE_GSS) {
 		OM_uint32 major_status, minor_status;
 		gss_buffer_desc utok, etok;
 		int rc, mlen;
@@ -623,7 +623,7 @@ more_messages:
 #ifdef USE_GSSAPI
 	/* If we're using GSS at all, everything will be encrypted,
 	   one record per token.  */
-	if (use_gss) {
+	if (USE_GSS) {
 		gss_buffer_desc utok, etok;
 		io->bufptr += r;
 		uint32_t len;
@@ -695,7 +695,7 @@ more_messages:
 		/* See if we have enough bytes to extract the whole message.  */
 		if (io->bufptr < i)
 			return;
-		
+
 		/* We have an I-byte message in buffer. Send ACK */
 		client_message(io, i, io->buffer);
 
@@ -766,11 +766,11 @@ static int check_num_connections(struct sockaddr_storage *aaddr)
 
 		if (aaddr->ss_family == AF_INET)
 			rc = memcmp(&((struct sockaddr_in *)aaddr)->sin_addr,
-				&((struct sockaddr_in *)cl_addr)->sin_addr, 
+				&((struct sockaddr_in *)cl_addr)->sin_addr,
 				sizeof(struct in_addr));
 		else
 			rc = memcmp(&((struct sockaddr_in6 *)aaddr)->sin6_addr,
-				&((struct sockaddr_in6 *)cl_addr)->sin6_addr, 
+				&((struct sockaddr_in6 *)cl_addr)->sin6_addr,
 				sizeof(struct in6_addr));
 		if (rc == 0) {
 			num++;
@@ -780,6 +780,25 @@ static int check_num_connections(struct sockaddr_storage *aaddr)
 		client = client->next;
 	}
 	return 0;
+}
+
+void write_connection_state(FILE *f)
+{
+	unsigned int num = 0, act = 0;
+	struct ev_tcp *client = client_chain;
+
+	fprintf(f, "listening for network connections = %s\n",
+		nlsocks ? "yes" : "no");
+	if (nlsocks) {
+		while (client) {
+			if (client->client_active)
+				act++;
+			num++;
+			client = client->next;
+		}
+		fprintf(f, "active connections = %u\n", act);
+		fprintf(f, "total connections = %u\n", num);
+	}
 }
 
 static void auditd_tcp_listen_handler( struct ev_loop *loop,
@@ -796,7 +815,7 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 	aaddrlen = sizeof(aaddr);
 	afd = accept(_io->fd, (struct sockaddr *)&aaddr, &aaddrlen);
 	if (afd == -1) {
-        	audit_msg(LOG_ERR, "Unable to accept TCP connection");
+		audit_msg(LOG_ERR, "Unable to accept TCP connection");
 		return;
 	}
 
@@ -805,10 +824,10 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 		if (auditd_tcpd_check(afd)) {
 			shutdown(afd, SHUT_RDWR);
 			close(afd);
-	        	audit_msg(LOG_ERR, "TCP connection from %s rejected",
+			audit_msg(LOG_ERR, "TCP connection from %s rejected",
 					sockaddr_to_addr(&aaddr));
 			snprintf(emsg, sizeof(emsg),
-				"op=wrap addr=%s port=%d res=no",
+				"op=wrap addr=%s port=%u res=no",
 				sockaddr_to_string(&aaddr),
 				sockaddr_to_port(&aaddr));
 			send_audit_event(AUDIT_DAEMON_ACCEPT, emsg);
@@ -821,10 +840,10 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 	 * will block attempts from unauthorized machines.  */
 	if (min_port > sockaddr_to_port(&aaddr) ||
 				sockaddr_to_port(&aaddr) > max_port) {
-        	audit_msg(LOG_ERR, "TCP connection from %s rejected",
+		audit_msg(LOG_ERR, "TCP connection from %s rejected",
 				sockaddr_to_addr(&aaddr));
 		snprintf(emsg, sizeof(emsg),
-			"op=port addr=%s port=%d res=no",
+			"op=port addr=%s port=%u res=no",
 			sockaddr_to_string(&aaddr),
 			sockaddr_to_port(&aaddr));
 		send_audit_event(AUDIT_DAEMON_ACCEPT, emsg);
@@ -835,10 +854,10 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 
 	/* Make sure we don't have too many connections */
 	if (check_num_connections(&aaddr)) {
-        	audit_msg(LOG_ERR, "Too many connections from %s - rejected",
+		audit_msg(LOG_ERR, "Too many connections from %s - rejected",
 				sockaddr_to_addr(&aaddr));
 		snprintf(emsg, sizeof(emsg),
-			"op=dup addr=%s port=%d res=no",
+			"op=dup addr=%s port=%u res=no",
 			sockaddr_to_string(&aaddr),
 			sockaddr_to_port(&aaddr));
 		send_audit_event(AUDIT_DAEMON_ACCEPT, emsg);
@@ -858,7 +877,7 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 	if (client == NULL) {
         	audit_msg(LOG_CRIT, "Unable to allocate TCP client data");
 		snprintf(emsg, sizeof(emsg),
-			"op=alloc addr=%s port=%d res=no",
+			"op=alloc addr=%s port=%u res=no",
 			sockaddr_to_string(&aaddr),
 			sockaddr_to_port(&aaddr));
 		send_audit_event(AUDIT_DAEMON_ACCEPT, emsg);
@@ -876,7 +895,7 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 	memcpy(&client->addr, &aaddr, sizeof (struct sockaddr_storage));
 
 #ifdef USE_GSSAPI
-	if (use_gss && negotiate_credentials (client)) {
+	if (USE_GSS && negotiate_credentials (client)) {
 		shutdown(afd, SHUT_RDWR);
 		close(afd);
 		free(client->remote_name);
@@ -896,12 +915,12 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 
 	/* And finally log that we accepted the connection */
 	snprintf(emsg, sizeof(emsg),
-		"addr=%s port=%d res=success", sockaddr_to_string(&aaddr),
+		"addr=%s port=%u res=success", sockaddr_to_string(&aaddr),
 		sockaddr_to_port(&aaddr));
 	send_audit_event(AUDIT_DAEMON_ACCEPT, emsg);
 }
 
-static void auditd_set_ports(int minp, int maxp, int max_p_addr)
+static void auditd_set_ports(unsigned minp, unsigned maxp, unsigned max_p_addr)
 {
 	min_port = minp;
 	max_port = maxp;
@@ -942,6 +961,7 @@ int auditd_tcp_listen_init(struct ev_loop *loop, struct daemon_conf *config)
 	int one = 1, rc;
 	int prefer_ipv6 = 0;
 
+	transport = config->transport;
 	ev_periodic_init(&periodic_watcher, periodic_handler,
 			  0, config->tcp_client_max_idle, NULL);
 	periodic_watcher.data = config;
@@ -957,7 +977,7 @@ int auditd_tcp_listen_init(struct ev_loop *loop, struct daemon_conf *config)
 	hints.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_family = AF_UNSPEC;
-	snprintf(local, sizeof(local), "%ld", config->tcp_listen_port);
+	snprintf(local, sizeof(local), "%lu", config->tcp_listen_port);
 
 	rc = getaddrinfo(NULL, local, &hints, &ai);
 	if (rc) {
@@ -994,7 +1014,8 @@ int auditd_tcp_listen_init(struct ev_loop *loop, struct daemon_conf *config)
 		listen_socket[nlsocks] = socket(runp->ai_family,
 				 runp->ai_socktype, runp->ai_protocol);
 		if (listen_socket[nlsocks] < 0) {
-        		audit_msg(LOG_ERR, "Cannot create tcp listener socket");
+        		audit_msg(LOG_ERR, "Cannot create %s listener socket",
+				runp->ai_family == AF_INET ? "IPv4" : "IPv6");
 			goto next_try;
 		}
 
@@ -1056,14 +1077,13 @@ next_try:
 			config->tcp_max_per_addr);
 
 #ifdef USE_GSSAPI
-	if (config->enable_krb5) {
+	if (USE_GSS) {
 		const char *princ = config->krb5_principal;
 		const char *key_file;
 		struct stat st;
 
 		if (!princ)
 			princ = "auditd";
-		use_gss = 1;
 		/* This may fail, but we don't care.  */
 		unsetenv ("KRB5_KTNAME");
 		if (config->krb5_key_file)
@@ -1087,7 +1107,11 @@ next_try:
 			}
 		}
 
-		server_acquire_creds(princ, &server_creds);
+		if (server_acquire_creds(princ, &server_creds)) {
+			free(my_service_name);
+			my_service_name = NULL;
+			return -1;
+		}
 	}
 #endif
 
@@ -1101,15 +1125,16 @@ void auditd_tcp_listen_uninit(struct ev_loop *loop, struct daemon_conf *config)
 #endif
 
 	ev_io_stop(loop, &tcp_listen_watcher);
-	while (nlsocks >= 0) {
+	while (nlsocks > 0) {
 		nlsocks--;
-		close (listen_socket[nlsocks]);
+		close(listen_socket[nlsocks]);
 	}
 
 #ifdef USE_GSSAPI
-	if (use_gss) {
-		use_gss = 0;
+	if (USE_GSS) {
 		gss_release_cred(&status, &server_creds);
+		free(my_service_name);
+		my_service_name = NULL;
 	}
 #endif
 
@@ -1124,6 +1149,7 @@ void auditd_tcp_listen_uninit(struct ev_loop *loop, struct daemon_conf *config)
 
 	if (config->tcp_client_max_idle)
 		ev_periodic_stop(loop, &periodic_watcher);
+	transport = T_TCP;
 }
 
 static void periodic_reconfigure(struct daemon_conf *config)

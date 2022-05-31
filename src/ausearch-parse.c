@@ -1,6 +1,6 @@
 /*
 * ausearch-parse.c - Extract interesting fields and check for match
-* Copyright (c) 2005-08,2011,2013-14 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-08,2011,2013-14,2018-20 Red Hat
 * Copyright (c) 2011 IBM Corp. 
 * All Rights Reserved. 
 *
@@ -39,8 +39,9 @@
 #include "ausearch-lookup.h"
 #include "ausearch-parse.h"
 #include "auparse-idata.h"
+#include "ausearch-nvpair.h"
 
-#define NAME_OFFSET 36
+#define NAME_OFFSET 28
 static const char key_sep[2] = { AUDIT_KEY_SEPARATOR, 0 };
 
 static int parse_task_info(lnode *n, search_items *s);
@@ -49,7 +50,7 @@ static int parse_dir(const lnode *n, search_items *s);
 static int common_path_parser(search_items *s, char *path);
 static int avc_parse_path(const lnode *n, search_items *s);
 static int parse_path(const lnode *n, search_items *s);
-static int parse_user(const lnode *n, search_items *s);
+static int parse_user(const lnode *n, search_items *s, anode *avc);
 static int parse_obj(const lnode *n, search_items *s);
 static int parse_login(const lnode *n, search_items *s);
 static int parse_daemon1(const lnode *n, search_items *s);
@@ -102,9 +103,10 @@ int extract_search_items(llist *l)
 				ret = parse_path(n, s);
 				break;
 			case AUDIT_USER:
-			case AUDIT_FIRST_USER_MSG...AUDIT_LAST_USER_MSG:
+			case AUDIT_FIRST_USER_MSG...AUDIT_USER_END:
+			case AUDIT_USER_CHAUTHTOK...AUDIT_LAST_USER_MSG:
 			case AUDIT_FIRST_USER_MSG2...AUDIT_LAST_USER_MSG2:
-				ret = parse_user(n, s);
+				ret = parse_user(n, s, NULL);
 				break;
 			case AUDIT_SOCKADDR:
 				ret = parse_sockaddr(n, s);
@@ -136,6 +138,7 @@ int extract_search_items(llist *l)
 				avc_parse_path(n, s);
 				break;
 			case AUDIT_AVC:
+			case AUDIT_USER_AVC:
 				ret = parse_avc(n, s);
 				break;
 			case AUDIT_NETFILTER_PKT:
@@ -171,7 +174,7 @@ int extract_search_items(llist *l)
 			case AUDIT_MMAP:
 			case AUDIT_NETFILTER_CFG:
 			case AUDIT_PROCTITLE:
-			case AUDIT_KERN_MODULE:
+			case AUDIT_REPLACE...AUDIT_BPF:
 				// Nothing to parse
 				break;
 			case AUDIT_TTY:
@@ -196,6 +199,8 @@ int extract_search_items(llist *l)
 /*
  * returns malloc'ed buffer on success and NULL on failure
  */
+static nvlist uid_nvl;
+static int uid_list_created=0;
 static const char *lookup_uid(const char *field, uid_t uid)
 {
 	const char *value;
@@ -206,13 +211,36 @@ static const char *lookup_uid(const char *field, uid_t uid)
 		return strdup("root");
 	else if (uid == -1)
 		return strdup("unset");
-	else {
+
+	if (uid_list_created == 0) {
+		nvlist_create(&uid_nvl);
+		nvlist_clear(&uid_nvl);
+		uid_list_created = 1;
+	}
+
+	if (nvlist_find_val(&uid_nvl, uid)) {
+		return strdup(uid_nvl.cur->name);
+	} else {
 		struct passwd *pw;
 		pw = getpwuid(uid);
-		if (pw)
+		if (pw) {
+			nvnode nv;
+			nv.name = strdup(pw->pw_name);
+			nv.val = uid;
+			nvlist_append(&uid_nvl, &nv);
 			return strdup(pw->pw_name);
+		}
 	}
 	return NULL;
+}
+
+void lookup_uid_destroy_list(void)
+{
+	if (uid_list_created == 0)
+		return;
+
+	nvlist_clear(&uid_nvl);
+	uid_list_created = 0;
 }
 
 static int parse_task_info(lnode *n, search_items *s)
@@ -601,6 +629,8 @@ static int parse_syscall(lnode *n, search_items *s)
 				if (s->key) {
 					char *saved;
 					char *keyptr = unescape(str);
+					if (keyptr == NULL)
+						return 45;
 					char *kptr = strtok_r(keyptr,
 							key_sep, &saved);
 					while (kptr) {
@@ -710,6 +740,8 @@ static int common_path_parser(search_items *s, char *path)
 				sn.str = unescape(path);
 				*term = ' ';
 			}
+			if (sn.str == NULL)
+				return 7;
 			// Attempt to rebuild path if relative
 			if ((sn.str[0] == '.') && ((sn.str[1] == '.') ||
 				(sn.str[1] == '/')) && s->cwd) {
@@ -824,7 +856,7 @@ static int parse_obj(const lnode *n, search_items *s)
 	return 0;
 }
 
-static int parse_user(const lnode *n, search_items *s)
+static int parse_user(const lnode *n, search_items *s, anode *avc)
 {
 	char *ptr, *str, *term, saved, *mptr;
 
@@ -909,7 +941,10 @@ static int parse_user(const lnode *n, search_items *s)
 			if (term == NULL)
 				return 12;
 			*term = 0;
-			if (audit_avc_init(s) == 0) {
+			if (avc) {
+				avc->scontext = strdup(str);
+				*term = ' ';
+			} else if (audit_avc_init(s) == 0) {
 				anode an;
 
 				anode_init(&an);
@@ -918,6 +953,33 @@ static int parse_user(const lnode *n, search_items *s)
 				*term = ' ';
 			} else
 				return 13;
+		}
+	}
+	// optionally get tcontext
+	if (avc && event_object) {
+		// USER_AVC tcontext
+		str = strstr(term, "tcontext=");
+		if (str != NULL) {
+			str += 9;
+			term = strchr(str, ' ');
+			if (term) {
+				*term = 0;
+				avc->tcontext = strdup(str);
+				*term = ' ';
+			} else
+				term = str;
+		}
+		// Grab tclass if it exists
+		str = strstr(term, "tclass=");
+		if (str) {
+			str += 7;
+			term = strchr(str, ' ');
+			if (term) {
+				*term = 0;
+				avc->avc_class = strdup(str);
+				*term = ' ';
+			} else
+				term = str;
 		}
 	}
 	// optionally get gid
@@ -1561,9 +1623,9 @@ static int parse_daemon2(const lnode *n, search_items *s)
 	}
 
 	if (event_success != S_UNSET) {
-		char *str = strstr(term, "res=");
+		str = strstr(term, "res=");
 		if (str) {
-			char *ptr, *term, saved;
+			char *ptr;
 
 			ptr = term = str + 4;
 			while (isalpha(*term))
@@ -1597,6 +1659,8 @@ static int parse_sockaddr(const lnode *n, search_items *s)
 			str += 6;
 			len = strlen(str)/2;
 			s->hostname = unescape(str);
+			if (s->hostname == NULL)
+				return 4;
 			saddr = (struct sockaddr *)s->hostname;
 			if (saddr->sa_family == AF_INET) {
 				if (len < sizeof(struct sockaddr_in)) {
@@ -1837,8 +1901,10 @@ static int parse_avc(const lnode *n, search_items *s)
 	if (str) {
 		str += 5;
 		term = strchr(str, '{');
-		if (term == NULL)
-			return 1;
+		if (term == NULL) {
+			term = n->message;
+			goto other_avc;
+		}
 		if (event_success != S_UNSET) {
 			*term = 0;
 			// FIXME. Do not override syscall success if already
@@ -1865,6 +1931,21 @@ static int parse_avc(const lnode *n, search_items *s)
 		*term = 0;
 		an.avc_perm = strdup(str);
 		*term = ' ';
+	}
+
+other_avc:
+	// User AVC's are not formatted like a kernel AVC
+	if (n->type == AUDIT_USER_AVC) {
+		rc = parse_user(n, s, &an);
+		if (rc > 20)
+			rc = 0;
+		if (audit_avc_init(s) == 0) {
+			alist_append(s->avc, &an);
+		} else {
+			rc = 10;
+			goto err;
+		}
+		return rc;
 	}
 
 	// get pid
@@ -2281,6 +2362,8 @@ static int parse_simple_message(const lnode *n, search_items *s)
 				if (s->key) {
 					char *saved;
 					char *keyptr = unescape(ptr);
+					if (keyptr == NULL)
+						return 8;
 					char *kptr = strtok_r(keyptr,
 						key_sep, &saved);
 					while (kptr) {

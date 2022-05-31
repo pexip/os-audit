@@ -1,5 +1,5 @@
 /* x86_64_table.h --
- * Copyright 2005-17 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-20 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -303,7 +303,7 @@ _S(279, "move_pages")
 _S(280, "utimensat")
 _S(281, "epoll_pwait")
 _S(282, "signalfd")
-_S(283, "timerfd")
+_S(283, "timerfd_create")
 _S(284, "eventfd")
 _S(285, "fallocate")
 _S(286, "timerfd_settime")
@@ -353,3 +353,17 @@ _S(329, "pkey_mprotect")
 _S(330, "pkey_alloc")
 _S(331, "pkey_free")
 _S(332, "statx")
+_S(333, "io_pgetevents")
+_S(334, "rseq")
+_S(424, "pidfd_send_signal")
+_S(425, "io_uring_setup")
+_S(426, "io_uring_enter")
+_S(427, "io_uring_register")
+_S(428, "open_tree")
+_S(429, "move_mount")
+_S(430, "fsopen")
+_S(431, "fsconfig")
+_S(432, "fsmount")
+_S(433, "fspick")
+_S(434, "pidfd_open")
+_S(435, "clone3")

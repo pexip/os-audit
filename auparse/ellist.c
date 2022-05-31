@@ -28,6 +28,7 @@
 #include "libaudit.h"
 #include "ellist.h"
 #include "interpret.h"
+#include "common.h"
 
 static const char key_sep[2] = { AUDIT_KEY_SEPARATOR, 0 };
 
@@ -174,7 +175,7 @@ static int parse_up_record(rnode* r)
 				if (*n.val == '"')
 					nvlist_append(&r->nv, &n);
 				else {
-					char *key, *ptr, *saved2;
+					char *key, *ptr2, *saved2;
 
 					key = (char *)au_unescape(n.val);
 					if (key == NULL) {
@@ -182,14 +183,14 @@ static int parse_up_record(rnode* r)
 						nvlist_append(&r->nv, &n);
 						continue;
 					}
-					ptr = strtok_r(key, key_sep, &saved2);
+					ptr2 = strtok_r(key, key_sep, &saved2);
 					free(n.name);
 					free(n.val);
-					while (ptr) {
+					while (ptr2) {
 						n.name = strdup("key");
-						n.val = escape(ptr);
+						n.val = escape(ptr2);
 						nvlist_append(&r->nv, &n);
-						ptr = strtok_r(NULL,
+						ptr2 = strtok_r(NULL,
 							key_sep, &saved2);
 					}
 					free(key);
@@ -330,8 +331,11 @@ int aup_list_append(event_list_t *l, char *record, int list_idx,
 
 	// Then parse the record up into nvlist
 	rc = parse_up_record(r);
-	if (r->cwd)
+	if (r->cwd) {
+		// Should never be 2 cwd records unless log is corrupted
+		free((void *)l->cwd);
 		l->cwd = r->cwd;
+	}
 	return rc;
 }
 

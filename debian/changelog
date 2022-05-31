@@ -1,3 +1,93 @@
+audit (1:3.0-2) unstable; urgency=medium
+
+  [ Helmut Grohne ]
+  * Missing Build-Depends: linux-libc-dev (>= 5.9). (Closes: #978056)
+
+  [ Laurent Bigonville ]
+  * d/t/libaudit-static-build: Add test for static linking against libaudit
+  * Fix missing symbol in the static library, patch from upstream
+    (Closes: #978448)
+
+ -- Laurent Bigonville <bigon@debian.org>  Wed, 06 Jan 2021 15:47:08 +0100
+
+audit (1:3.0-1) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * Trim trailing whitespace.
+  * debian/copyright: use spaces rather than tabs to start continuation lines.
+
+  [ Laurent Bigonville ]
+  * New upstream version 3.0
+    - Fix FTBFS with gcc-10 (Closes: #957020)
+  * debian/control: Drop ancient Breaks/Replaces
+  * d/auditd.postinst, d/audispd-plugins.postinst: Make removal of /etc/audisp
+    non fatal
+  * Drop d/p/06-do_not_hardcode_stdint_path.patch, merged upstream
+  * debian/libaudit1.symbols: Add new export symbol
+  * d/auditd.lintian-overrides: Drop
+    init.d-script-missing-dependency-on-remote_fs override
+  * debian/control: Bump Standards-Version to 4.5.1 (no further changes)
+
+ -- Laurent Bigonville <bigon@debian.org>  Sun, 20 Dec 2020 22:19:42 +0100
+
+audit (1:3.0~alpha9-1) experimental; urgency=medium
+
+  * debian/watch: Start tracking the 3.0 branch
+  * New upstream version 3.0~alpha9
+  * Drop debian/patches/05-use_bin_sh.patch, applied upstream
+  * d/p/03-Set-log_group-adm.patch, d/p/06-do_not_hardcode_stdint_path.patch:
+    Refreshed
+  * debian/rules: Stop compiling alpha support on alpha architecture.
+    The support for alpha architecture is gone, running audit should still
+    work, but the translation of the syscalls will not work anymore
+  * debian/rules: Remove --with-hppa flag, this is gone for a long time
+  * Prelude support has been removed, drop flags, BD and installed files
+  * debian/libaudit1.symbols: Add newly exported symbols.
+    audit_strsplit and audit_strsplit_r are not exported anymore, but they
+    were never meant to be public.
+  * debian/rules: Drop the override for dh_missing, --list-missing is the
+    default
+  * debian/not-installed: sample-rules are already installed as examples
+  * debian/libaudit-dev.examples: Drop contrib/skeleton.c, gone upstream
+  * audispd executable has been merged back into the main auditd daemon.
+    All configuration files have moved from /etc/audisp/plugins.d to
+    /etc/audit/plugins.d.
+
+ -- Laurent Bigonville <bigon@debian.org>  Sun, 05 Apr 2020 15:19:09 +0200
+
+audit (1:2.8.5-3) unstable; urgency=medium
+
+  * d/p/06-do_not_hardcode_stdint_path.patch: Update the patch to fix the
+    python binding (Closes: #954257)
+  * debian/control.in: Bump Standards-Version to 4.5.0 (no further changes)
+  * Bump debhelper version to 12, drop autoreconf and systemd sequences, they
+    are enabled by default now
+  * debian/auditd.preinst: Drop ancient pam-auth-update cleanup
+  * Add basic dep8 tests
+  * Add debian/salsa-ci.yml file
+
+ -- Laurent Bigonville <bigon@debian.org>  Sat, 28 Mar 2020 10:13:52 +0100
+
+audit (1:2.8.5-2) unstable; urgency=medium
+
+  * Drop python-audit package, python 2 is EOL and it has not rdeps
+  * debian/control: Bump Standards-Version to 4.4.0 (no further changes)
+
+ -- Laurent Bigonville <bigon@debian.org>  Mon, 22 Jul 2019 09:16:54 +0200
+
+audit (1:2.8.5-1) unstable; urgency=medium
+
+  * New upstream version
+    - debian/patches/01-no-refusemanualstop.patch: Refreshed
+    - debian/patches/04-fix_ftbfs_tests.patch: Dropped, merged upstream
+    - debian/patches/06-do_not_hardcode_stdint_path.patch: Refreshed
+  * debian/rules: On Ubuntu and derivatives, disable auditd network listener
+    with --disable-listener
+  * debian/control: Bump Standards-Version to 4.3.0 (no further changes)
+  * debian/control: Mark golang-redhat-audit-dev as Multi-Arch: foreign
+
+ -- Laurent Bigonville <bigon@debian.org>  Mon, 08 Jul 2019 16:10:07 +0200
+
 audit (1:2.8.4-3pexip4) pexip; urgency=medium
 
   * Remove /etc/audit/audit.rules in the preinst, to quieten dpkg
@@ -689,4 +779,3 @@ audit (1.5.1-1) unstable; urgency=low
   * Initial release (Closes: #311214)
 
  -- Philipp Matthias Hahn <pmhahn@debian.org>  Wed, 21 Mar 2007 09:47:19 +0100
-

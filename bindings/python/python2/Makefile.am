@@ -29,5 +29,6 @@ pyexec_LTLIBRARIES = auparse.la
 
 auparse_la_SOURCES = $(top_srcdir)/bindings/python/auparse_python.c
 auparse_la_CPPFLAGS = -I$(top_srcdir)/auparse $(AM_CPPFLAGS)
+auparse_la_CFLAGS = -shared
 auparse_la_LDFLAGS = -module -avoid-version -Wl,-z,relro
 auparse_la_LIBADD = ${top_builddir}/auparse/libauparse.la ${top_builddir}/lib/libaudit.la

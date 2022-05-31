@@ -1,0 +1,113 @@
+From: Laurent Bigonville <bigon@users.noreply.github.com>
+Date: Tue, 5 Jan 2021 19:29:44 +0100
+Subject: Turn libaucommon into a libtool convenience library (#147)
+
+This makes sure that the functions compiled into libaucommon
+(audit_strsplit_r,...) end up in the libaudit/libauparse static library
+
+Fixes: #146
+---
+ audisp/plugins/remote/Makefile.am | 2 +-
+ audisp/plugins/syslog/Makefile.am | 2 +-
+ auparse/Makefile.am               | 4 ++--
+ auparse/test/Makefile.am          | 6 +++---
+ common/Makefile.am                | 6 +++---
+ lib/Makefile.am                   | 4 ++--
+ 6 files changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/audisp/plugins/remote/Makefile.am b/audisp/plugins/remote/Makefile.am
+index 0066e25..bd3f301 100644
+--- a/audisp/plugins/remote/Makefile.am
++++ b/audisp/plugins/remote/Makefile.am
+@@ -33,7 +33,7 @@ man_MANS = audisp-remote.8 audisp-remote.conf.5
+ check_PROGRAMS = test-queue
+ TESTS = $(check_PROGRAMS)
+ 
+-audisp_remote_DEPENDENCIES = ${top_builddir}/common/libaucommon.a
++audisp_remote_DEPENDENCIES = ${top_builddir}/common/libaucommon.la
+ audisp_remote_SOURCES = audisp-remote.c remote-config.c queue.c
+ audisp_remote_CFLAGS = -fPIE -DPIE -g -D_REENTRANT -D_GNU_SOURCE -Wundef
+ audisp_remote_LDFLAGS = -pie -Wl,-z,relro -Wl,-z,now
+diff --git a/audisp/plugins/syslog/Makefile.am b/audisp/plugins/syslog/Makefile.am
+index 55ca77b..353229e 100644
+--- a/audisp/plugins/syslog/Makefile.am
++++ b/audisp/plugins/syslog/Makefile.am
+@@ -29,7 +29,7 @@ plugin_conf = syslog.conf
+ sbin_PROGRAMS = audisp-syslog
+ man_MANS = audisp-syslog.8
+ 
+-audisp_syslog_DEPENDENCIES = ${top_builddir}/common/libaucommon.a
++audisp_syslog_DEPENDENCIES = ${top_builddir}/common/libaucommon.la
+ audisp_syslog_SOURCES = audisp-syslog.c
+ audisp_syslog_CFLAGS = -fPIE -DPIE -g -D_GNU_SOURCE -Wundef
+ audisp_syslog_LDFLAGS = -pie -Wl,-z,relro -Wl,-z,now
+diff --git a/auparse/Makefile.am b/auparse/Makefile.am
+index b853003..d180c34 100644
+--- a/auparse/Makefile.am
++++ b/auparse/Makefile.am
+@@ -45,8 +45,8 @@ libauparse_la_SOURCES = lru.c interpret.c nvlist.c ellist.c		\
+ 	normalize_record_map.h normalize_syscall_map.h
+ nodist_libauparse_la_SOURCES = $(BUILT_SOURCES)
+ 
+-libauparse_la_LIBADD = ${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.a
+-libauparse_la_DEPENDENCIES = $(libauparse_la_SOURCES) ${top_builddir}/config.h ${top_builddir}/common/libaucommon.a
++libauparse_la_LIBADD = ${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.la
++libauparse_la_DEPENDENCIES = $(libauparse_la_SOURCES) ${top_builddir}/config.h ${top_builddir}/common/libaucommon.la
+ libauparse_la_LDFLAGS = -Wl,-z,relro
+ 
+ message.c:
+diff --git a/auparse/test/Makefile.am b/auparse/test/Makefile.am
+index 89ffcc4..11d10b0 100644
+--- a/auparse/test/Makefile.am
++++ b/auparse/test/Makefile.am
+@@ -29,17 +29,17 @@ AM_CPPFLAGS = -I${top_srcdir}/auparse -I${top_srcdir}/lib
+ 
+ lookup_test_SOURCES = lookup_test.c
+ lookup_test_LDADD = ${top_builddir}/auparse/libauparse.la \
+-	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.a
++	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.la
+ 
+ auparse_test_SOURCES = auparse_test.c
+ auparse_test_LDFLAGS = -static
+ auparse_test_LDADD = ${top_builddir}/auparse/libauparse.la \
+-	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.a
++	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.la
+ 
+ auparselol_test_SOURCES = auparselol_test.c
+ auparselol_test_LDFLAGS = -static
+ auparselol_test_LDADD = ${top_builddir}/auparse/libauparse.la \
+-	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.a
++	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.la
+ 
+ drop_srcdir = sed 's,$(srcdir)/test,test,'
+ 
+diff --git a/common/Makefile.am b/common/Makefile.am
+index 9e00cbc..8b9aacb 100644
+--- a/common/Makefile.am
++++ b/common/Makefile.am
+@@ -24,7 +24,7 @@ CONFIG_CLEAN_FILES = *.rej *.orig
+ AM_CPPFLAGS = -D_GNU_SOURCE -fPIC -DPIC -I${top_srcdir} -I${top_srcdir}/lib
+ 
+ noinst_HEADERS = common.h
+-libaucommon_a_DEPENDENCIES = ../config.h
+-libaucommon_a_SOURCES = audit-fgets.c strsplit.c
+-noinst_LIBRARIES = libaucommon.a
++libaucommon_la_DEPENDENCIES = ../config.h
++libaucommon_la_SOURCES = audit-fgets.c strsplit.c
++noinst_LTLIBRARIES = libaucommon.la
+ 
+diff --git a/lib/Makefile.am b/lib/Makefile.am
+index 107c444..12e5861 100644
+--- a/lib/Makefile.am
++++ b/lib/Makefile.am
+@@ -38,8 +38,8 @@ include_HEADERS = libaudit.h
+ libaudit_la_SOURCES = libaudit.c message.c netlink.c \
+ 	lookup_table.c audit_logging.c deprecated.c \
+ 	dso.h private.h errormsg.h
+-libaudit_la_LIBADD = $(CAPNG_LDADD) ${top_builddir}/common/libaucommon.a
+-libaudit_la_DEPENDENCIES = $(libaudit_la_SOURCES) ../config.h ${top_builddir}/common/libaucommon.a
++libaudit_la_LIBADD = $(CAPNG_LDADD) ${top_builddir}/common/libaucommon.la
++libaudit_la_DEPENDENCIES = $(libaudit_la_SOURCES) ../config.h ${top_builddir}/common/libaucommon.la
+ libaudit_la_LDFLAGS = -Wl,-z,relro -version-info $(VERSION_INFO)
+ nodist_libaudit_la_SOURCES = $(BUILT_SOURCES)
+ 

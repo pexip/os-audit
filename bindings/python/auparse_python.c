@@ -1,3 +1,4 @@
+#define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include "structmember.h"
 
@@ -27,6 +28,9 @@ auparse_timestamp_compare: because AuEvent calls this via the cmp operator
 
 #if PY_MAJOR_VERSION > 2
 #define IS_PY3K
+#if PY_MINOR_VERSION > 5
+#define USE_RICH_COMPARISON
+#endif
 #define MODINITERROR return NULL
 #define PYNUM_FROMLONG PyLong_FromLong
 #define PYSTR_CHECK PyUnicode_Check
@@ -80,6 +84,36 @@ AuEvent_dealloc(AuEvent* self)
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
+#ifdef USE_RICH_COMPARISON
+static PyObject *
+AuEvent_rich_compare(PyObject *obj1, PyObject *obj2, int op)
+{
+    PyObject *result = Py_False;
+    AuEvent *au_event1 = (AuEvent *)obj1;
+    AuEvent *au_event2 = (AuEvent *)obj2;
+    int res = auparse_timestamp_compare(&au_event1->event, &au_event2->event);
+
+    switch (op) {
+    case Py_LT:
+           if (res < 0)
+                   result = Py_True;
+           break;
+    case Py_EQ:
+           if (res == 0)
+                   result = Py_True;
+           break;
+    case Py_GT:
+           if (res > 0)
+                   result = Py_True;
+           break;
+    default:
+           result = Py_NotImplemented;
+           break;
+    }
+    Py_INCREF(result);
+    return result;
+}
+#else
 static int
 AuEvent_compare(PyObject *obj1, PyObject *obj2)
 {
@@ -88,6 +122,7 @@ AuEvent_compare(PyObject *obj1, PyObject *obj2)
 
     return auparse_timestamp_compare(&au_event1->event, &au_event2->event);
 }
+#endif
 
 static PyObject *
 AuEvent_get_sec(AuEvent *self, void *closure)
@@ -187,43 +222,20 @@ audit parsing API.");
 
 static PyTypeObject AuEventType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    "auparse.AuEvent",         /*tp_name*/
-    sizeof(AuEvent),           /*tp_basicsize*/
-    0,                         /*tp_itemsize*/
-    (destructor)AuEvent_dealloc, /*tp_dealloc*/
-    0,                         /*tp_print*/
-    0,                         /*tp_getattr*/
-    0,                         /*tp_setattr*/
-    AuEvent_compare,           /*tp_compare*/
-    0,                         /*tp_repr*/
-    0,                         /*tp_as_number*/
-    0,                         /*tp_as_sequence*/
-    0,                         /*tp_as_mapping*/
-    0,                         /*tp_hash */
-    0,                         /*tp_call*/
-    AuEvent_str,               /*tp_str*/
-    0,                         /*tp_getattro*/
-    0,                         /*tp_setattro*/
-    0,                         /*tp_as_buffer*/
-    Py_TPFLAGS_DEFAULT,        /*tp_flags*/
-    AuEvent_doc,               /* tp_doc */
-    0,		               /* tp_traverse */
-    0,		               /* tp_clear */
-    0,		               /* tp_richcompare */
-    0,		               /* tp_weaklistoffset */
-    0,		               /* tp_iter */
-    0,		               /* tp_iternext */
-    AuEvent_methods,           /* tp_methods */
-    AuEvent_members,                        /* tp_members */
-    AuEvent_getseters,         /* tp_getset */
-    0,                         /* tp_base */
-    0,                         /* tp_dict */
-    0,                         /* tp_descr_get */
-    0,                         /* tp_descr_set */
-    0,                         /* tp_dictoffset */
-    0,                         /* tp_init */
-    0,                         /* tp_alloc */
-    0,               /* tp_new */
+    .tp_name = "auparse.AuEvent",
+    .tp_basicsize = sizeof(AuEvent),
+    .tp_dealloc = (destructor)AuEvent_dealloc,
+#ifdef USE_RICH_COMPARISON
+    .tp_richcompare = AuEvent_rich_compare,
+#else
+    .tp_compare = AuEvent_compare,
+#endif
+    .tp_str = AuEvent_str,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = AuEvent_doc,
+    .tp_methods = AuEvent_methods,
+    .tp_members = AuEvent_members,
+    .tp_getset = AuEvent_getseters,
 };
 
 static PyObject *
@@ -335,7 +347,7 @@ AuParser_init(AuParser *self, PyObject *args, PyObject *kwds)
         }
     } break;
     case AUSOURCE_FILE: {
-        char *filename = NULL;
+        const char *filename = NULL;
 
         if (!PYSTR_CHECK(source)) {
             PyErr_SetString(PyExc_ValueError, "source must be a string when source_type is AUSOURCE_FILE");
@@ -374,7 +386,7 @@ AuParser_init(AuParser *self, PyObject *args, PyObject *kwds)
             PyErr_SetString(PyExc_ValueError, "source must be a sequence when source_type is AUSOURCE_FILE_ARRAY");
             return -1;
         }
-        
+
         if ((self->au = auparse_init(source_type, files)) == NULL) {
             PyErr_SetFromErrno(PyExc_IOError);
             PyMem_Del(files);
@@ -383,7 +395,7 @@ AuParser_init(AuParser *self, PyObject *args, PyObject *kwds)
         PyMem_Del(files);
     } break;
     case AUSOURCE_BUFFER: {
-        char *buf;
+        const char *buf;
         if ((buf = PYSTR_ASSTRING(source)) == NULL) return -1;
         if ((self->au = auparse_init(source_type, buf)) == NULL) {
             PyErr_SetFromErrno(PyExc_EnvironmentError);
@@ -417,7 +429,7 @@ AuParser_init(AuParser *self, PyObject *args, PyObject *kwds)
             PyErr_SetString(PyExc_ValueError, "source must be a sequence when source_type is AUSOURCE_FILE_ARRAY");
             return -1;
         }
-        
+
         if ((self->au = auparse_init(source_type, buffers)) == NULL) {
             PyErr_SetFromErrno(PyExc_EnvironmentError);
             PyMem_Del(buffers);
@@ -501,7 +513,7 @@ static PyObject *
 AuParser_feed(AuParser *self, PyObject *args)
 {
     char *data;
-    int data_len;
+    Py_ssize_t data_len;
     int result;
 
     if (!PyArg_ParseTuple(args, "s#:feed", &data, &data_len)) return NULL;
@@ -2202,43 +2214,16 @@ AUSOURCE_FEED:         None (data supplied via feed()\n\
 
 static PyTypeObject AuParserType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    "auparse.AuParser",         /*tp_name*/
-    sizeof(AuParser),           /*tp_basicsize*/
-    0,                         /*tp_itemsize*/
-    (destructor)AuParser_dealloc, /*tp_dealloc*/
-    0,                         /*tp_print*/
-    0,                         /*tp_getattr*/
-    0,                         /*tp_setattr*/
-    0,                         /*tp_compare*/
-    0,                         /*tp_repr*/
-    0,                         /*tp_as_number*/
-    0,                         /*tp_as_sequence*/
-    0,                         /*tp_as_mapping*/
-    0,                         /*tp_hash */
-    0,                         /*tp_call*/
-    0,                         /*tp_str*/
-    0,                         /*tp_getattro*/
-    0,                         /*tp_setattro*/
-    0,                         /*tp_as_buffer*/
-    Py_TPFLAGS_DEFAULT,        /*tp_flags*/
-    AuParser_doc,              /* tp_doc */
-    0,		               /* tp_traverse */
-    0,		               /* tp_clear */
-    0,		               /* tp_richcompare */
-    0,		               /* tp_weaklistoffset */
-    0,		               /* tp_iter */
-    0,		               /* tp_iternext */
-    AuParser_methods,           /* tp_methods */
-    AuParser_members,                        /* tp_members */
-    AuParser_getseters,         /* tp_getset */
-    0,                         /* tp_base */
-    0,                         /* tp_dict */
-    0,                         /* tp_descr_get */
-    0,                         /* tp_descr_set */
-    0,                         /* tp_dictoffset */
-    (initproc)AuParser_init,  /* tp_init */
-    0,                         /* tp_alloc */
-    AuParser_new,              /* tp_new */
+    .tp_name = "auparse.AuParser",
+    .tp_basicsize = sizeof(AuParser),
+    .tp_dealloc = (destructor)AuParser_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = AuParser_doc,
+    .tp_methods = AuParser_methods,
+    .tp_members = AuParser_members,
+    .tp_getset = AuParser_getseters,
+    .tp_init = (initproc)AuParser_init,
+    .tp_new = AuParser_new,
 };
 
 

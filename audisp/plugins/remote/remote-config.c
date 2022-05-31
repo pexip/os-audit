@@ -1,5 +1,5 @@
 /* remote-config.c -- 
- * Copyright 2008,2009,2011,2015-16 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2008,2009,2011,2015-16,2018 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -99,6 +99,7 @@ AP(disk_error)
 AP(generic_error)
 AP(generic_warning)
 AP(queue_error)
+AP(startup_failure)
 #undef AP
 static int remote_ending_action_parser(struct nv_pair *nv, int line,
                 remote_conf_t *config);
@@ -133,12 +134,16 @@ static const struct kw_pair keywords[] =
   {"generic_warning_action", generic_warning_action_parser,	1 },
   {"queue_error_action",     queue_error_action_parser,		1 },
   {"overflow_action",        overflow_action_parser,		1 },
+  {"startup_failure_action", startup_failure_action_parser,	1 },
   { NULL,                    NULL,                              0 }
 };
 
 static const struct nv_list transport_words[] =
 {
   {"tcp",  T_TCP  },
+#ifdef USE_GSSAPI
+  {"krb5", T_KRB5 },
+#endif
   { NULL,  0 }
 };
 
@@ -217,10 +222,10 @@ void clear_config(remote_conf_t *config)
 	IA(generic_error, FA_SYSLOG);
 	IA(generic_warning, FA_SYSLOG);
 	IA(queue_error, FA_STOP);
+	IA(startup_failure, FA_WARN_ONCE_CONT);
 #undef IA
 	config->overflow_action = OA_SYSLOG;
 
-	config->enable_krb5 = 0;
 	config->krb5_principal = NULL;
 	config->krb5_client_name = NULL;
 	config->krb5_key_file = NULL;
@@ -606,6 +611,7 @@ AP(disk_error)
 AP(generic_error)
 AP(generic_warning)
 AP(queue_error)
+AP(startup_failure)
 #undef AP
 
 static int overflow_action_parser(struct nv_pair *nv, int line,
@@ -645,7 +651,7 @@ static int format_parser(struct nv_pair *nv, int line,
 		}
 	}
 	syslog(LOG_ERR, "Option %s not found - line %d", nv->value, line);
- 	return 1;
+	return 1;
 }
 
 static int network_retry_time_parser(struct nv_pair *nv, int line,
@@ -685,7 +691,8 @@ static int enable_krb5_parser(struct nv_pair *nv, int line,
 
 	for (i=0; enable_krb5_values[i].name != NULL; i++) {
 		if (strcasecmp(nv->value, enable_krb5_values[i].name) == 0) {
-			config->enable_krb5 = enable_krb5_values[i].option;
+			if (enable_krb5_values[i].option == 1)
+				config->transport = T_KRB5;
 			return 0;
 		}
 	}
@@ -760,6 +767,10 @@ static int sanity_check(remote_conf_t *config, const char *file)
 		       "\"format=managed\"");
 		return 1;
 	}
+	if (config->startup_failure_action > FA_EXEC) {
+		syslog(LOG_ERR, "startup_failure_action has invalid option");
+		return 1;
+	}
 	return 0;
 }
 
@@ -775,6 +786,7 @@ void free_config(remote_conf_t *config)
 	free((void *)config->generic_error_exe);
 	free((void *)config->generic_warning_exe);
 	free((void *)config->queue_error_exe);
+	free((void *)config->startup_failure_exe);
 	free((void *)config->krb5_principal);
 	free((void *)config->krb5_client_name);
 	free((void *)config->krb5_key_file);
