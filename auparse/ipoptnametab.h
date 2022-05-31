@@ -1,5 +1,5 @@
 /* ipoptnametab.h --
- * Copyright 2013,2015 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2013,2015,2018,2020 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -35,6 +35,7 @@ _S(9, "IP_PKTOPTIONS")
 _S(10, "IP_MTU_DISCOVER")
 _S(11, "IP_RECVERR")
 _S(12, "IP_RECVTTL")
+_S(13, "IP_RECVTOS")
 _S(14, "IP_MTU")
 _S(15, "IP_FREEBIND")
 _S(16, "IP_IPSEC_POLICY")
@@ -45,6 +46,8 @@ _S(20, "IP_ORIGDSTADDR")
 _S(21, "IP_MINTTL")
 _S(22, "IP_NODEFRAG")
 _S(23, "IP_CHECKSUM")
+_S(24, "IP_BIND_ADDRESS_NO_PORT")
+_S(25, "IP_RECVFRAGSIZE")
 _S(32, "IP_MULTICAST_IF")
 _S(33, "IP_MULTICAST_TTL")
 _S(34, "IP_MULTICAST_LOOP")

@@ -1,5 +1,5 @@
 # Makefile.am --
-# Copyright 2008-09,2015 Red Hat Inc., Durham, North Carolina.
+# Copyright 2018,19 Red Hat Inc., Durham, North Carolina.
 # All Rights Reserved.
 #
 # This library is free software; you can redistribute it and/or
@@ -20,31 +20,25 @@
 #   Steve Grubb <sgrubb@redhat.com>
 # 
 
-CONFIG_CLEAN_FILES = *.rej *.orig
-EXTRA_DIST = au-prelude.conf audisp-prelude.conf
-AUTOMAKE_OPTIONS = no-dependencies
-AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/lib -I${top_srcdir}/auparse
-LIBS = -L${top_builddir}/auparse/.libs -lauparse -lprelude 
-LDADD = -lpthread $(CAPNG_LDADD) 
-prog_confdir = $(sysconfdir)/audisp
-prog_conf = audisp-prelude.conf
+CONFIG_CLEAN_FILES = *.loT *.rej *.orig
+EXTRA_DIST = syslog.conf $(man_MANS)
+AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/lib -I${top_srcdir}/common -I${top_srcdir}/auparse
+prog_confdir = $(sysconfdir)/audit
 plugin_confdir=$(prog_confdir)/plugins.d
-plugin_conf = au-prelude.conf
-sbin_PROGRAMS = audisp-prelude
-noinst_HEADERS = prelude-config.h audisp-int.h
-dist_man_MANS = audisp-prelude.8 audisp-prelude.conf.5
+plugin_conf = syslog.conf
+sbin_PROGRAMS = audisp-syslog
+man_MANS = audisp-syslog.8
 
-audisp_prelude_SOURCES = audisp-prelude.c prelude-config.c audisp-int.c
-audisp_prelude_CFLAGS = -fPIE -DPIE -g -D_REENTRANT -D_GNU_SOURCE -Wundef \
-	@LIBPRELUDE_CFLAGS@
-audisp_prelude_LDFLAGS = -pie -Wl,-z,relro -Wl,-z,now @LIBPRELUDE_LDFLAGS@
+audisp_syslog_DEPENDENCIES = ${top_builddir}/common/libaucommon.a
+audisp_syslog_SOURCES = audisp-syslog.c
+audisp_syslog_CFLAGS = -fPIE -DPIE -g -D_GNU_SOURCE -Wundef
+audisp_syslog_LDFLAGS = -pie -Wl,-z,relro -Wl,-z,now
+audisp_syslog_LDADD = $(CAPNG_LDADD) -L${top_builddir}/common -laucommon -L${top_builddir}/auparse -lauparse
 
 install-data-hook:
 	mkdir -p -m 0750 ${DESTDIR}${plugin_confdir}
 	$(INSTALL_DATA) -D -m 640 ${srcdir}/$(plugin_conf) ${DESTDIR}${plugin_confdir}
-	$(INSTALL_DATA) -D -m 640 ${srcdir}/$(prog_conf) ${DESTDIR}${prog_confdir}
 
 uninstall-hook:
 	rm ${DESTDIR}${plugin_confdir}/$(plugin_conf)
-	rm ${DESTDIR}${prog_confdir}/$(prog_conf)
 

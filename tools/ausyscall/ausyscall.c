@@ -66,12 +66,13 @@ int main(int argc, char *argv[])
 			dump=1;
 		} else if (strcmp("--exact", argv[i]) == 0) {
 			exact=1;
-#ifndef WITH_ALPHA
 		} else if (strcmp("alpha", argv[i]) == 0) {
-			fputs("Alpha processor support is not enabled\n",
+			fputs("Alpha processor support is deprecated\n",
 					stderr);
 			exit(1);
-#endif
+		} else if (strcmp("ia64", argv[i]) == 0) {
+			fputs("IA64 processor support is deprecated\n",
+					stderr);
 #ifndef WITH_ARM
 		} else if (strcmp("arm", argv[i]) == 0) {
 			fputs("Arm eabi processor support is not enabled\n",

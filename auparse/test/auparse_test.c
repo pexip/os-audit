@@ -7,7 +7,7 @@
 #include "libaudit.h"
 #include "auparse.h"
 
-
+// NOTE: First two run together on purpose, #3 is buf[1]
 static const char *buf[] = {
 		"type=LOGIN msg=audit(1143146623.787:142): login pid=2027 uid=0 old auid=4294967295 new auid=848\n"
 		"type=SYSCALL msg=audit(1143146623.875:143): arch=c000003e syscall=188 success=yes exit=0 a0=7fffffa9a9f0 a1=3958d11333 a2=5131f0 a3=20 items=1 pid=2027 auid=848 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=tty3 comm=\"login\" exe=\"/bin/login\" subj=system_u:system_r:local_login_t:s0-s0:c0.c255\n",
@@ -28,16 +28,16 @@ static void walk_test(auparse_state_t *au)
 						strerror(errno));
 			exit(1);
 		}
-		printf("event %d has %d records\n", event_cnt,
+		printf("event %d has %u records\n", event_cnt,
 						auparse_get_num_records(au));
 		record_cnt = 1;
 		do {
-			printf("    record %d of type %d(%s) has %d fields\n",
+			printf("    record %d of type %d(%s) has %u fields\n",
 				record_cnt, 
 				auparse_get_type(au),
 				audit_msg_type_to_name(auparse_get_type(au)),
 				auparse_get_num_fields(au));
-			printf("    line=%d file=%s\n",
+			printf("    line=%u file=%s\n",
 				auparse_get_line_number(au),
 				auparse_get_filename(au) ?
 					auparse_get_filename(au) : "None");
@@ -72,15 +72,15 @@ void light_test(auparse_state_t *au)
 			puts("Error getting first record");
 			exit(1);
 		}
-		printf("event has %d records\n", auparse_get_num_records(au));
+		printf("event has %u records\n", auparse_get_num_records(au));
 		record_cnt = 1;
 		do {
-			printf("    record %d of type %d(%s) has %d fields\n",
+			printf("    record %d of type %d(%s) has %u fields\n",
 				record_cnt, 
 				auparse_get_type(au),
 				audit_msg_type_to_name(auparse_get_type(au)),
 				auparse_get_num_fields(au));
-			printf("    line=%d file=%s\n",
+			printf("    line=%u file=%s\n",
 				auparse_get_line_number(au),
 				auparse_get_filename(au) ?
 					auparse_get_filename(au) : "None");
@@ -228,16 +228,16 @@ static void auparse_callback(auparse_state_t *au, auparse_cb_event_t cb_event_ty
 			printf("can't get first record\n");
 			return;
 		}
-		printf("event %d has %d records\n", *event_cnt,
+		printf("event %d has %u records\n", *event_cnt,
 					auparse_get_num_records(au));
 		record_cnt = 1;
 		do {
-			printf("    record %d of type %d(%s) has %d fields\n",
+			printf("    record %d of type %d(%s) has %u fields\n",
 				record_cnt, 
 				auparse_get_type(au),
 				audit_msg_type_to_name(auparse_get_type(au)),
 				auparse_get_num_fields(au));
-			printf("    line=%d file=%s\n",
+			printf("    line=%u file=%s\n",
 				auparse_get_line_number(au),
 				auparse_get_filename(au) ?
 					auparse_get_filename(au) : "None");

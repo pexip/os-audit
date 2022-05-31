@@ -42,7 +42,7 @@ static void do_syscall_summary_output(slist *sptr);
 static void do_type_summary_output(ilist *sptr);
 
 /* Local Data */
-unsigned int line_item;
+static unsigned int line_item;
 
 
 void print_title(void)
@@ -581,13 +581,13 @@ void print_per_event_item(llist *l)
 			slist *s = l->s.filename;
 			slist_first(s);
 			if (s->cnt > 1) {
-				char *key = s->cur->key;
+				char *key = s->cur ? s->cur->key : NULL;
 				while (key && strcmp(key, "PARENT") == 0) {
 					slist_next(s);
-					key = s->cur->key;
+					key = s->cur ? s->cur->key : NULL;
 				}
 			}
-			safe_print_string(s->cur->str,0);
+			safe_print_string(s->cur ? s->cur->str : "", 0);
 			printf(" %s %s ",
 				aulookup_syscall(l,buf,sizeof(buf)),
 				aulookup_success(l->s.success));

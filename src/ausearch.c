@@ -1,6 +1,6 @@
 /*
- * ausearch.c - main file for ausearch utility 
- * Copyright 2005-08,2010,2013,2014 Red Hat Inc., Durham, North Carolina.
+ * ausearch.c - main file for ausearch utility
+ * Copyright 2005-08,2010,2013,2014,2020 Red Hat
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -43,6 +43,7 @@
 #include "ausearch-lookup.h"
 #include "auparse.h"
 #include "ausearch-checkpt.h"
+#include "ausearch-parse.h"
 
 
 static FILE *log_fd = NULL;
@@ -138,18 +139,27 @@ int main(int argc, char *argv[])
 			case S_IFREG:
 			default:
 				rc = process_file(user_file);
+				if (checkpt_filename)
+					/* we deal with failures via
+					 * checkpt_failure later */
+					(void)set_ChkPtFileDetails(user_file);
 				break;
 		}
 	} else if (force_logs)
 		rc = process_logs();
-	else if (is_pipe(0))
+	else if (is_pipe(0)) {
 		rc = process_stdin();
-	else
+		if (checkpt_filename)
+	       	        fprintf(stderr,
+			    "Warning - checkpointing stdin is not supported");
+		goto skip_checkpt; // Don't overwrite chkpt when reading a pipe
+	} else
 		rc = process_logs();
 
 	/* Generate a checkpoint if required */
 	if (checkpt_filename) {
-		/* Providing haven't failed and have sucessfully read data records, save a checkpoint */
+		/* Providing haven't failed and have sucessfully read data
+		 *  records, save a checkpoint */
 		if (!checkpt_failure && (rc == 0))
 			save_ChkPt(checkpt_filename);
 		free_ChkPtMemory();
@@ -166,7 +176,9 @@ int main(int argc, char *argv[])
 		}
 	}
 
+skip_checkpt:
 	lol_clear(&lo);
+	lookup_uid_destroy_list();
 	ilist_clear(event_type);
 	free(event_type);
 	free(user_file);

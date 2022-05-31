@@ -25,15 +25,11 @@ _S(MACH_X86,     "i486"   )
 _S(MACH_X86,     "i586"   )
 _S(MACH_X86,     "i686"   )
 _S(MACH_86_64,   "x86_64" )
-_S(MACH_IA64,    "ia64"   )
 _S(MACH_PPC64,   "ppc64"  )
 _S(MACH_PPC64LE, "ppc64le")
 _S(MACH_PPC,     "ppc"    )
 _S(MACH_S390X,   "s390x"  )
 _S(MACH_S390,    "s390"   )
-#ifdef WITH_ALPHA
-_S(MACH_ALPHA,   "alpha"  )
-#endif
 #ifdef WITH_ARM
 _S(MACH_ARM,   "armeb"  )
 _S(MACH_ARM,   "arm"  )
