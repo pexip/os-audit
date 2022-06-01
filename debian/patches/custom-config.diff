@@ -1,6 +1,6 @@
 --- a/init.d/auditd.conf
 +++ b/init.d/auditd.conf
-@@ -23,8 +23,8 @@
+@@ -21,8 +21,8 @@
  action_mail_acct = root
  admin_space_left = 50
  admin_space_left_action = SUSPEND
@@ -11,8 +11,8 @@
  use_libwrap = yes
  ##tcp_listen_port = 60
  tcp_listen_queue = 5
---- a/audisp/plugins/builtins/syslog.conf
-+++ b/audisp/plugins/builtins/syslog.conf
+--- a/audisp/plugins/syslog/syslog.conf
++++ b/audisp/plugins/syslog/syslog.conf
 @@ -6,9 +6,9 @@
  # logged to. Valid options are LOG_LOCAL0 through 7, LOG_AUTH,
  # LOG_AUTHPRIV, LOG_DAEMON, LOG_SYSLOG, and LOG_USER.
@@ -20,8 +20,8 @@
 -active = no
 +active = yes
  direction = out
- path = builtin_syslog
- type = builtin 
+ path = /sbin/audisp-syslog
+ type = always 
 -args = LOG_INFO
 +args = LOG_INFO LOG_LOCAL6
  format = string
