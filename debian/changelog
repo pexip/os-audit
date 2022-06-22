@@ -1,6 +1,9 @@
 audit (1:3.0-2pexip1) pexip; urgency=medium
 
   * Initial bullseye build
+  * Backport upstream commit 6b09724c69d91668418ddb3af00da6db6755208c
+    to make IPX packet support optional: otherwise compiling breaks with
+    linux-libc6-dev from newer kernels.
 
  -- Mark Hymers <mark.hymers@pexip.com>  Thu, 02 Jun 2022 14:42:01 +0100
 
