@@ -4,19 +4,6 @@ Date:   Thu Sep 2 15:01:12 2021 -0400
 
     Make IPX packet interpretation dependent on the ipx header file existing
 
-diff --git a/ChangeLog b/ChangeLog
-index 8b8ad42..b8e7434 100644
---- a/ChangeLog
-+++ b/ChangeLog
-@@ -1,5 +1,6 @@
- 3.0.6
- - Fixed various issues when dealing with corrupted logs
-+- Make IPX packet interpretation dependent on the ipx header file existing
- 
- 3.0.5
- - In auditd, flush uid/gid caches when user/group added/deleted/modified
-diff --git a/auparse/interpret.c b/auparse/interpret.c
-index 63829aa..6c31645 100644
 --- a/auparse/interpret.c
 +++ b/auparse/interpret.c
 @@ -44,8 +44,10 @@
@@ -32,7 +19,7 @@ index 63829aa..6c31645 100644
  #include <linux/capability.h>
  #include <sys/personality.h>
  #include <sys/prctl.h>
-@@ -1279,6 +1281,7 @@ static const char *print_sockaddr(const char *val)
+@@ -1171,6 +1173,7 @@
  					      x->sax25_call.ax25_call[6]);
                          }
                          break;
@@ -40,7 +27,7 @@ index 63829aa..6c31645 100644
                  case AF_IPX:
                          {
                                  const struct sockaddr_ipx *ip =
-@@ -1288,6 +1291,7 @@ static const char *print_sockaddr(const char *val)
+@@ -1180,6 +1183,7 @@
  					str, ip->sipx_port, ip->sipx_network);
                          }
                          break;
@@ -48,11 +35,9 @@ index 63829aa..6c31645 100644
                  case AF_ATMPVC:
                          {
                                  const struct sockaddr_atmpvc* at =
-diff --git a/configure.ac b/configure.ac
-index 8f541e4..005eb0b 100644
 --- a/configure.ac
 +++ b/configure.ac
-@@ -418,6 +418,12 @@ if test x"$LIBWRAP_LIBS" != "x"; then
+@@ -399,6 +399,12 @@
  	AC_DEFINE_UNQUOTED(HAVE_LIBWRAP, [], Define if tcp_wrappers support is enabled )
  fi
  
