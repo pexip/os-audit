@@ -30,6 +30,11 @@ ifeq ($(shell dpkg-vendor --derives-from Ubuntu && echo yes), yes)
   CONFIGURE_FLAGS += --disable-listener
 endif
 
+# Also for Pexip
+ifeq ($(shell dpkg-vendor --derives-from Pexip && echo yes), yes)
+  CONFIGURE_FLAGS += --disable-listener
+endif
+
 %:
 	dh $@ --builddirectory=debian/build --buildsystem=autoconf $(DH_ADDONS)
 
