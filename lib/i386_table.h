@@ -1,5 +1,5 @@
 /* i386_table.h --
- * Copyright 2005-20 Red Hat Inc.
+ * Copyright 2005-21 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -447,4 +447,19 @@ _S(432, "fsmount")
 _S(433, "fspick")
 _S(434, "pidfd_open")
 _S(435, "clone3")
+_S(436, "close_range")
+_S(437, "openat2")
+_S(438, "pidfd_getfd")
+_S(439, "faccessat2")
+_S(440, "process_madvise")
+_S(441, "epoll_pwait2")
+_S(442, "mount_setattr")
+_S(443, "quotactl_fd")
+_S(444, "landlock_create_ruleset")
+_S(445, "landlock_add_rule")
+_S(446, "landlock_restrict_self")
+_S(447, "memfd_secret")
+_S(448, "process_mrelease")
+_S(449, "futex_waitv")
+_S(450, "set_mempolicy_home_node")
 

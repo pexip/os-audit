@@ -103,7 +103,7 @@ static char *escape(const char *tmp)
 static int parse_up_record(rnode* r)
 {
 	char *ptr, *buf, *saved=NULL;
-	unsigned int offset = 0;
+	unsigned int offset = 0, len;
 
 	// Potentially cut the record in two
 	ptr = strchr(r->record, AUDIT_INTERP_SEPARATOR);
@@ -112,10 +112,19 @@ static int parse_up_record(rnode* r)
 		ptr++;
 	}
 	r->interp = ptr;
-	buf = strdup(r->record);
+	// Rather than call strndup, we will do it ourselves to reduce
+	// the number of interations across the record.
+	// len includes the string terminator.
+	len = strlen(r->record) + 1;
+	r->nv.record = buf = malloc(len);
+	if (r->nv.record == NULL)
+		return -1;
+	memcpy(r->nv.record, r->record, len);
+	r->nv.end = r->nv.record + len;
 	ptr = audit_strsplit_r(buf, &saved);
 	if (ptr == NULL) {
 		free(buf);
+		r->nv.record = NULL;
 		return -1;
 	}
 
@@ -147,10 +156,13 @@ static int parse_up_record(rnode* r)
 			// Remove beginning cruft of name
 			if (*ptr == '(')
 				ptr++;
-			n.name = strdup(ptr);
-			n.val = strdup(val);
+			n.name = ptr;
+			n.val = val;
 			// Remove trailing punctuation
 			len = strlen(n.val);
+			// Check for invalid val
+			if (!len)
+				continue;
 			if (len && n.val[len-1] == ':') {
 				n.val[len-1] = 0;
 				len--;
@@ -172,32 +184,59 @@ static int parse_up_record(rnode* r)
 			}
 			// Make virtual keys or just store it
 			if (strcmp(n.name, "key") == 0 && *n.val != '(') {
-				if (*n.val == '"')
-					nvlist_append(&r->nv, &n);
-				else {
+				if (*n.val == '"') {
+					// This is a normal single key.
+					n.name = strdup("key");
+					char *t = strdup(n.val);
+					n.val = t;
+					if (nvlist_append(&r->nv, &n)) {
+						free(n.name);
+						free(n.val);
+						continue;
+					}
+				} else {
+					// Virtual keys
 					char *key, *ptr2, *saved2;
 
 					key = (char *)au_unescape(n.val);
 					if (key == NULL) {
+						n.name = strdup("key");
+						n.val = NULL;
 						// Malformed key - save as is
-						nvlist_append(&r->nv, &n);
+						if (nvlist_append(&r->nv, &n)) {
+							free(n.name);
+							free(n.val);
+						}
 						continue;
 					}
 					ptr2 = strtok_r(key, key_sep, &saved2);
-					free(n.name);
-					free(n.val);
 					while (ptr2) {
 						n.name = strdup("key");
 						n.val = escape(ptr2);
-						nvlist_append(&r->nv, &n);
+						if (nvlist_append(&r->nv, &n)) {
+							free(n.name);
+							free(n.val);
+						}
 						ptr2 = strtok_r(NULL,
 							key_sep, &saved2);
 					}
 					free(key);
 				}
 				continue;
-			} else
-				nvlist_append(&r->nv, &n);
+			} else {
+				if (strcmp(n.name, "key") == 0) {
+					// This is a null key
+					n.name = strdup("key");
+					char *t = strdup(n.val);
+					n.val = t;
+					if (nvlist_append(&r->nv, &n)) {
+						free(n.name);
+						free(n.val);
+						continue;
+					}
+				} else	// everything not a key
+					nvlist_append(&r->nv, &n);
+			}
 
 			// Do some info gathering for use later
 			if (r->nv.cnt == 1 && strcmp(n.name, "node") == 0)
@@ -208,7 +247,7 @@ static int parse_up_record(rnode* r)
 				r->type = audit_name_to_msg_type(n.val);
 				// This has to account for seccomp records
 			} else if ((r->nv.cnt == (2 + offset) ||
-					r->nv.cnt == (11 + offset)) && 
+					r->nv.cnt == (11 + offset)) &&
 					strcmp(n.name, "arch")== 0){
 				unsigned int ival;
 				errno = 0;
@@ -260,7 +299,9 @@ static int parse_up_record(rnode* r)
 					while (ptr && *ptr != '}') {
 						len = strlen(ptr);
 						if ((len+1) >= (256-total)) {
-							free(buf);
+						   if (nvlist_get_cnt(&r->nv)
+									 == 0)
+								free(buf);
 							return -1;
 						}
 						if (tmpctx[0]) {
@@ -274,18 +315,28 @@ static int parse_up_record(rnode* r)
 					}
 					n.name = strdup("seperms");
 					n.val = strdup(tmpctx);
-					nvlist_append(&r->nv, &n);
+					if (nvlist_append(&r->nv, &n)) {
+						free(n.name);
+						free(n.val);
+					}
 					continue;
 				}
 			} else
 				continue;
-			n.val = strdup(ptr);
+			n.val = ptr;
 			nvlist_append(&r->nv, &n);
 		}
 	} while((ptr = audit_strsplit_r(NULL, &saved)));
 
-	free(buf);
-	r->nv.cur = r->nv.head;	// reset to beginning
+	// If for some reason it was useless, delete buf
+	if (r->nv.cnt == 0) {
+		free(buf);
+		r->nv.record = NULL;
+		r->nv.end = NULL;
+		free((void *)r->cwd);
+	}
+
+	r->nv.cur = 0;	// reset to beginning
 	return 0;
 }
 
@@ -350,7 +401,7 @@ void aup_list_clear(event_list_t* l)
 	current = l->head;
 	while (current) {
 		nextnode=current->next;
-		nvlist_clear(&current->nv);
+		nvlist_clear(&current->nv, 1);
 		free(current->record);
 		free(current);
 		current=nextnode;
@@ -431,7 +482,7 @@ rnode *aup_list_find_rec_range(event_list_t *l, int low, int high)
 	if (high <= low)
 		return NULL;
 
-       	node = l->head;	/* Start at the beginning */
+	node = l->head;	/* Start at the beginning */
 	while (node) {
 		if (node->type >= low && node->type <= high) {
 			l->cur = node;

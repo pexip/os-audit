@@ -1,3 +1,68 @@
+audit (1:3.0.9-1) unstable; urgency=medium
+
+  * Add missing debian/changelog entry
+  * New upstream version 3.0.9
+  * debian/patches/01-no-refusemanualstop.patch: Refreshed
+  * Fix some lintian overrides
+  * debian/control: Move golang-redhat-audit-dev to golang section
+  * debian/control: Drop lsb-base package as it's deprecated
+  * debian/tests: Use the "supported" python3 version and not the "requested"
+    one. That will please lintian
+  * debian/control: Bump Standards-Version to 4.6.2 (no further changes)
+
+ -- Laurent Bigonville <bigon@debian.org>  Thu, 09 Feb 2023 10:36:04 +0100
+
+audit (1:3.0.7-1.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  [ Paul Gevers ]
+  * d/p/04-auditswig-i-avoid-setter-generation-for-audit-rule-data.patch:
+    Fix FTBFS by backporting proposed patch from upstream to avoid
+    generating setters for audit_rule_data::buf in SWIG bindings as SWIG
+    fails to properly generate correct code now that the kernel headers
+    use flexible-length arrays. This patch has not been merged upstream
+    since their preferred fix is to rewrite the python bindings to not use
+    SWIG. Other distributions have worked around this by patching the
+    header files from the kernel when building audit to temporarily remove
+    the flexible-length array. However its use will be buggy when used
+    against a kernel header that expects a flexible-length array (as is
+    the case for the previous version of audit). (Thanks to Alex Murray)
+    (Closes: #1010289)
+
+  [ Laurent Bigonville ]
+  * debian/: Fix some typo and capitalisation errors
+
+ -- Paul Gevers <elbrus@debian.org>  Tue, 20 Sep 2022 21:05:52 +0200
+
+audit (1:3.0.7-1) unstable; urgency=medium
+
+  * New upstream version 3.0.7
+    - debian/libaudit1.symbols: audit_add_dir has been dropped upstream
+  * debian/control: Tighten the dependencies against the libraries
+  * debian/control: Drop the Built-Using field from golang-redhat-audit-dev
+
+ -- Laurent Bigonville <bigon@debian.org>  Fri, 11 Feb 2022 11:34:48 +0100
+
+audit (1:3.0.6-1) unstable; urgency=medium
+
+  * New upstream version 3.0.6
+  * debian/control: Bump Standards-Version to 4.6.0 (no further changes)
+
+ -- Laurent Bigonville <bigon@debian.org>  Sat, 09 Oct 2021 11:45:31 +0200
+
+audit (1:3.0.5-1) unstable; urgency=medium
+
+  [ Helmut Grohne ]
+  * Drop unused intltool build dependency. (Closes: #981262)
+
+  [ Laurent Bigonville ]
+  * New upstream version 3.0.5
+    - debian/libauparse0.symbols: Add new exported symbols
+  * Drop d/p/0004-Turn-libaucommon-into-a-libtool-convenience-library-.patch,
+    merged upstream
+
+ -- Laurent Bigonville <bigon@debian.org>  Mon, 16 Aug 2021 11:22:57 +0200
+
 audit (1:3.0-2) unstable; urgency=medium
 
   [ Helmut Grohne ]

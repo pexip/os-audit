@@ -1,3 +1,82 @@
+3.0.9
+- In auditd, release the async flush lock on stop
+- Don't allow auditd to log directly into /var/log when log_group is non-zero
+- Cleanup krb5 memory leaks on error paths
+- Update auditd.cron to use auditctl --signal
+- In auparse, if too many fields, realloc array bigger (Paul Wolneykien)
+- In auparse, special case kernel module name interpretation
+- If overflow_action is ignore, don't treat as an error
+
+3.0.8
+- Add gcc function attributes for access and allocation
+- Add some more man pages (MIZUTA Takeshi)
+- In auditd, change the reinitializing of the plugin queue
+- Fix path normalization in auparse (Sergio Correia)
+- In libaudit, handle ECONNREFUSED for network uid/gid lookups (Enzo Matsumiya)
+- In audisp-remote, fix hang with disk_low_action=suspend (Enzo Matsumiya)
+- Drop ProtectHome from auditd.service as it interferes with rules
+
+3.0.7
+- Add support for the OPENAT2 record type (Richard Guy Briggs)
+- In auditd, close the logging file descriptor when logging is suspended
+- Update the capabilities lookup table to match 5.16 kernel
+- Improve interpretation of renamat & faccessat family of syscalls
+- Update syscall table for the 5.16 kernel
+- Reduce dependency from initscripts to initscripts-service
+
+3.0.6
+- Fixed various issues when dealing with corrupted logs
+- Make IPX packet interpretation dependent on the ipx header file existing
+- Add b32/b64 support to ausyscall (Egor Ignatov)
+- Add support for armv8l (Egor Ignatov)
+- Fix auditctl list of syscalls in PPC (Egor Ignatov)
+- auditd.service now restarts auditd under some conditions (Timothée Ravier)
+
+3.0.5
+- In auditd, flush uid/gid caches when user/group added/deleted/modified
+- Fixed various issues when dealing with corrupted logs
+- In auditd, check if log_file is valid before closing handle
+
+3.0.4
+- Apply performance speedups to auparse library
+- Optimize rule loading in auditctl
+- Fix an auparse memory leak caused by glibc-2.33 by replacing realpath
+- Update syscall table to the 5.14 kernel
+- Fixed various issues when dealing with corrupted logs
+
+3.0.3
+- Dont interpret audit netlink groups unless AUDIT_NLGRP_MAX is defined
+- Add support for AUDIT_RESP_ORIGIN_UNBLOCK_TIMED to ids
+- Change auparse_feed_has_data in auparse to include incomplete events
+- Auditd, stop linking against -lrt
+- Add ProtectHome and RestrictRealtime to auditd.service
+- In auditd, read up to 3 netlink packets in a row
+- In auditd, do not validate path to plugin unless active
+- In auparse, only emit config errors when AUPARSE_DEBUG env variable exists
+
+3.0.2
+- In audispd-statsd plugin, use struct sockaddr_storage (Ville Heikkinen)
+- Optionally interpret auid in auditctl -l
+- Update some syscall argument interpretations
+- In auditd, do not allow spaces in the hostname name format
+- Big documentation cleanup (MIZUTA Takeshi)
+- Update syscall table to the 5.12 kernel
+- Update the auparse normalizer for new event types
+- Fix compiler warnings in ids subsystem
+- Block a couple signals from flush & reconfigure threads
+- In auditd, don't wait on flush thread when exiting
+- Output error message if the path of input files are too long ausearch/report
+
+3.0.1
+- Update syscall table to the 5.11 kernel
+- Add new --eoe-timeout option to ausearch and aureport (Burn Alting)
+- Only enable periodic timers when listening on the network
+- Upgrade libev to 4.33
+- Add auparse_new_buffer function to auparse library
+- Use the select libev backend unless aggregating events
+- Add sudoers to some base audit rules
+- Update the auparse normalizer for some new syscalls and event types
+
 3.0
 - Generate checkpoint file even when no results are returned (Burn Alting)
 - Fix log file creation when file logging is disabled entirely (Vlad Glagolev)
@@ -54,7 +133,7 @@
 - Update to libev-4.25
 - Fix ausearch when checkpointing a single file (Burn Alting)
 - Fix scripting in 31-privileged.rules wrt filecap (#1662516)
-- In ausearch, do not checkpt if stdin is input source
+- In ausearch, do not checkpoint if stdin is input source
 - In libev, remove __cold__ attribute for functions to allow proper hardening
 - Add tests to configure.ac for openldap support
 - Make systemd support files use /run rather than /var/run (Christian Hesse)
@@ -62,7 +141,7 @@
 - Allow exclude and user filter by executable name (Ondrej Mosnacek)
 - Fix auditd regression where keep_logs is limited by rotate_logs 2 file test
 - In ausearch/report fix --end to use midnight time instead of now (#1671338)
-- Add substitue functions for strndupa & rawmemchr
+- Add substitute functions for strndupa & rawmemchr
 - Fix memleak in auparse caused by corrected event ordering
 - Fix legacy reload script to reload audit rules when daemon is reloaded
 - Support for unescaping in trusted messages (Dmitry Voronin)
@@ -90,7 +169,7 @@
 - Add error messages for watch permissions
 - If audit rules file doesn't exist log error message instead of info message
 - Revise error message for unmatched options in auditctl
-- In audisp-remote, fixup remote endpoint disappearin in ascii format
+- In audisp-remote, fixup remote endpoint disappearing in ascii format
 - Add backlog_wait_time_actual reporting / resetting to auditctl (Max Englander)
 - In auditctl, add support for sending a signal to auditd
 

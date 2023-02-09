@@ -1,4 +1,4 @@
-.TH AUREPORT: "8" "March 2017" "Red Hat" "System Administration Utilities"
+.TH AUREPORT "8" "March 2017" "Red Hat" "System Administration Utilities"
 .SH NAME
 aureport \- a tool that produces summary reports of audit daemon logs
 .SH SYNOPSIS
@@ -24,6 +24,12 @@ Report about config changes
 .BR \-cr ,\  \-\-crypto
 Report about crypto events
 .TP
+.BR \-\-debug
+Write malformed events that are skipped to stderr.
+.TP
+.BR \-\-eoe\-timeout \ \fIseconds\fP
+Set the end of event parsing timeout. See \fBend_of_event_timeout\fP in \fIauditd.conf(5)\fP for details. Note that setting this value will override any configured value found in /etc/auditd/auditd.conf.
+.TP
 .BR \-e ,\  \-\-event
 Report about events
 .TP
@@ -46,7 +52,7 @@ Print brief command summary
 Interpret  numeric  entities into text. For example, uid is converted to account name. The conversion is done using the current resources  of  the machine where the search is being run. If you have renamed the accounts, or don't have the  same  accounts  on your machine, you could get misleading results.
 .TP
 .BR \-if ,\  \-\-input \ \fIfile\fP\ |\ \fIdirectory\fP
-Use the given \fIfile\fP or \fIdirectory\fP instead of the logs. This is to aid analysis where the logs have been moved to another machine or only part of a log was saved.
+Use the given \fIfile\fP or \fIdirectory\fP instead of the logs. This is to aid analysis where the logs have been moved to another machine or only part of a log was saved. The path length is limited to 4064 bytes.
 .TP
 .B \-\-input\-logs
 Use the log file location from auditd.conf as input for analysis. This is needed if you are using aureport from a cron job.
@@ -136,4 +142,5 @@ date -d "`cut \-f1 \-d. /proc/uptime` seconds ago"
 
 .SH "SEE ALSO"
 .BR ausearch (8),
-.BR auditd (8).
+.BR auditd (8),
+.BR auditd.conf (5).

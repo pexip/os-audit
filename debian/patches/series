@@ -1,4 +1,4 @@
 01-no-refusemanualstop.patch
 02-restorecon-path.patch
 03-Set-log_group-adm.patch
-0004-Turn-libaucommon-into-a-libtool-convenience-library-.patch
+04-auditswig-i-avoid-setter-generation-for-audit-rule-data.patch

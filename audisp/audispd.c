@@ -306,7 +306,16 @@ static int reconfigure(void)
 	return plist_count_active(&plugin_conf);
 }
 
-/* Return 0 on success and 1 on failure */
+/*
+ * Return 0 on success and 1 on failure
+ *
+ * Call tree:	auditd.c main
+ *		auditd-dispatch.c init_dispatcher
+ *
+ * And:		auditd-event.c reconfigure
+ *		auditd-dispatch.c reconfigure_dispatcher
+ *
+ * */
 int libdisp_init(const struct daemon_conf *c)
 {
 	int i;
@@ -474,9 +483,8 @@ static int event_loop(void)
 	/* Figure out the format for the af_unix socket */
 	while (stop == 0) {
 		event_t *e;
-		const char *type;
 		char *v, *ptr, unknown[32];
-		unsigned int len;
+		int len;
 		lnode *conf;
 
 		/* This is where we block until we have an event */
@@ -487,15 +495,17 @@ static int event_loop(void)
 			continue;
 		}
 
-		/* Get the event formatted */
-		type = audit_msg_type_to_name(e->hdr.type);
-		if (type == NULL) {
-			snprintf(unknown, sizeof(unknown),
-				"UNKNOWN[%u]", e->hdr.type);
-			type = unknown;
-		}
 		// Protocol 1 is not formatted
 		if (e->hdr.ver == AUDISP_PROTOCOL_VER) {
+			const char *type;
+
+			/* Get the event formatted */
+			type = audit_msg_type_to_name(e->hdr.type);
+			if (type == NULL) {
+				snprintf(unknown, sizeof(unknown),
+					"UNKNOWN[%u]", e->hdr.type);
+				type = unknown;
+			}
 			len = asprintf(&v, "type=%s msg=%.*s\n",
 					type, e->hdr.size, e->data);
 		// Protocol 2 events are already formatted
@@ -538,20 +548,21 @@ static int event_loop(void)
 				rc = write_to_plugin(e, v, len, conf);
 				if (rc < 0 && errno == EPIPE) {
 					/* Child disappeared ? */
-					audit_msg(LOG_ERR,
+					if (!stop)
+						audit_msg(LOG_ERR,
 					"plugin %s terminated unexpectedly",
 								conf->p->path);
 					conf->p->pid = 0;
 					conf->p->restart_cnt++;
-					if (conf->p->restart_cnt >
+					close(conf->p->plug_pipe[1]);
+					conf->p->plug_pipe[1] = -1;
+					conf->p->active = A_NO;
+					if (!stop && conf->p->restart_cnt >
 						daemon_config.max_restarts) {
 						audit_msg(LOG_ERR,
 					"plugin %s has exceeded max_restarts",
 								conf->p->path);
 					}
-					close(conf->p->plug_pipe[1]);
-					conf->p->plug_pipe[1] = -1;
-					conf->p->active = A_NO;
 					if (!stop && start_one_plugin(conf)) {
 						rc = write_to_plugin(e, v, len,
 								     conf);
@@ -597,6 +608,10 @@ void libdisp_nudge_queue(void)
 		nudge_queue();
 }
 
+/*
+ * Called by:	auditd-event.c reconfigure
+ *		auditd-dispatch.c reconfigure_dispatcher
+ */
 void libdisp_reconfigure(const struct daemon_conf *c)
 {
 	// If the dispatcher thread is dead, start a new one

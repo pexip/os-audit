@@ -1,5 +1,5 @@
 /* msg_typetab.h --
- * Copyright 2005-07,2009-18 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-07,2009-18,21 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -127,6 +127,8 @@ _S(AUDIT_TIME_INJOFFSET,             "TIME_INJOFFSET"                )
 _S(AUDIT_TIME_ADJNTPVAL,             "TIME_ADJNTPVAL"                )
 _S(AUDIT_BPF,                        "BPF"                           )
 _S(AUDIT_EVENT_LISTENER,             "EVENT_LISTENER"                )
+_S(AUDIT_URINGOP,                    "URINGOP"                       )
+_S(AUDIT_OPENAT2,                    "OPENAT2"                       )
 _S(AUDIT_AVC,                        "AVC"                           )
 _S(AUDIT_SELINUX_ERR,                "SELINUX_ERR"                   )
 _S(AUDIT_AVC_PATH,                   "AVC_PATH"                      )
@@ -158,6 +160,7 @@ _S(AUDIT_INTEGRITY_HASH,             "INTEGRITY_HASH"                )
 _S(AUDIT_INTEGRITY_PCR,              "INTEGRITY_PCR"                 )
 _S(AUDIT_INTEGRITY_RULE,             "INTEGRITY_RULE"                )
 _S(AUDIT_INTEGRITY_EVM_XATTR,        "INTEGRITY_EVM_XATTR"           )
+_S(AUDIT_INTEGRITY_POLICY_RULE,      "INTEGRITY_POLICY_RULE"         )
 
 #ifdef WITH_APPARMOR
 _S(AUDIT_AA,                         "APPARMOR"                      )
@@ -167,6 +170,7 @@ _S(AUDIT_APPARMOR_DENIED,            "APPARMOR_DENIED"               )
 _S(AUDIT_APPARMOR_HINT,              "APPARMOR_HINT"                 )
 _S(AUDIT_APPARMOR_STATUS,            "APPARMOR_STATUS"               )
 _S(AUDIT_APPARMOR_ERROR,             "APPARMOR_ERROR"                )
+_S(AUDIT_APPARMOR_KILL,              "APPARMOR_KILL"                 )
 #endif
 _S(AUDIT_KERNEL,                     "KERNEL"                        )
 _S(AUDIT_ANOM_LOGIN_FAILURES,        "ANOM_LOGIN_FAILURES"           )
@@ -188,6 +192,9 @@ _S(AUDIT_ANOM_DEL_ACCT,              "ANOM_DEL_ACCT"                 )
 _S(AUDIT_ANOM_MOD_ACCT,              "ANOM_MOD_ACCT"                 )
 _S(AUDIT_ANOM_ROOT_TRANS,            "ANOM_ROOT_TRANS"               )
 _S(AUDIT_ANOM_LOGIN_SERVICE,         "ANOM_LOGIN_SERVICE"            )
+_S(AUDIT_ANOM_LOGIN_ROOT,            "ANOM_LOGIN_ROOT"               )
+_S(AUDIT_ANOM_ORIGIN_FAILURES,       "ANOM_ORIGIN_FAILURES"          )
+_S(AUDIT_ANOM_SESSION,               "ANOM_SESSION"                  )
 _S(AUDIT_RESP_ANOMALY,               "RESP_ANOMALY"                  )
 _S(AUDIT_RESP_ALERT,                 "RESP_ALERT"                    )
 _S(AUDIT_RESP_KILL_PROC,             "RESP_KILL_PROC"                )
@@ -203,6 +210,7 @@ _S(AUDIT_RESP_SINGLE,                "RESP_SINGLE"                   )
 _S(AUDIT_RESP_HALT,                  "RESP_HALT"                     )
 _S(AUDIT_RESP_ORIGIN_BLOCK,          "RESP_ORIGIN_BLOCK"             )
 _S(AUDIT_RESP_ORIGIN_BLOCK_TIMED,    "RESP_ORIGIN_BLOCK_TIMED"       )
+_S(AUDIT_RESP_ORIGIN_UNBLOCK_TIMED,  "RESP_ORIGIN_UNBLOCK_TIMED"     )
 _S(AUDIT_USER_ROLE_CHANGE,           "USER_ROLE_CHANGE"              )
 _S(AUDIT_ROLE_ASSIGN,                "ROLE_ASSIGN"                   )
 _S(AUDIT_ROLE_REMOVE,                "ROLE_REMOVE"                   )

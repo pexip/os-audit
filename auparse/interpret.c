@@ -1,7 +1,7 @@
 /*
 * interpret.c - Lookup values to something more readable
-* Copyright (c) 2007-09,2011-16,2018-19 Red Hat Inc., Durham, North Carolina.
-* All Rights Reserved. 
+* Copyright (c) 2007-09,2011-16,2018-21 Red Hat Inc.
+* All Rights Reserved.
 *
 * This library is free software; you can redistribute it and/or
 * modify it under the terms of the GNU Lesser General Public
@@ -44,12 +44,15 @@
 #include <linux/ax25.h>
 #include <linux/atm.h>
 #include <linux/x25.h>
-#include <linux/if.h>   // FIXME: remove when ipx.h is fixed
-#include <linux/ipx.h>
+#ifdef HAVE_IPX_HEADERS
+  #include <linux/if.h>   // FIXME: remove when ipx.h is fixed
+  #include <linux/ipx.h>
+#endif
 #include <linux/capability.h>
 #include <sys/personality.h>
 #include <sys/prctl.h>
 #include <sched.h>
+#include <limits.h>     /* PATH_MAX */
 #ifdef USE_FANOTIFY
 #include <linux/fanotify.h>
 #else
@@ -120,6 +123,7 @@
 #include "inethooktabs.h"
 #include "netactiontabs.h"
 #include "bpftabs.h"
+#include "openat2-resolvetabs.h"
 
 typedef enum { AVC_UNSET, AVC_DENIED, AVC_GRANTED } avc_t;
 typedef enum { S_UNSET=-1, S_FAILED, S_SUCCESS } success_t;
@@ -394,9 +398,11 @@ char *au_unescape(char *buf)
 }
 
 /////////// Interpretation list functions ///////////////
+#define NEVER_LOADED 0xFFFF
 void init_interpretation_list(void)
 {
 	nvlist_create(&il);
+	il.cnt = NEVER_LOADED;
 }
 
 /*
@@ -411,7 +417,10 @@ int load_interpretation_list(const char *buffer)
 	if (buffer == NULL)
 		return 0;
 
-	buf = strdup(buffer);
+	if (il.cnt == NEVER_LOADED)
+		il.cnt = 0;
+
+	il.record = buf = strdup(buffer);
 	if (strncmp(buf, "SADDR=", 6) == 0) {
 		// We have SOCKADDR record. It has no other values.
 		// Handle it by itself.
@@ -420,23 +429,25 @@ int load_interpretation_list(const char *buffer)
 			val = ptr;
 			ptr = strchr(val, '}');
 			if (ptr) {
-				n.name = strdup("saddr");
-				n.val = strdup(val);
-				nvlist_append(&il, &n);
+				// Just change the case
+				n.name = strcpy(buf, "saddr");
+				n.val = val;
+				if (nvlist_append(&il, &n))
+					goto err_out;
 				nvlist_interp_fixup(&il);
-				free(buf);
 				return 1;
 			}
 		}
+err_out:
 		free(buf);
+		il.record = NULL;
+		il.cnt = NEVER_LOADED;
 		return 0;
 	} else {
 		// We handle everything else in this branch
 		ptr = audit_strsplit_r(buf, &saved);
-		if (ptr == NULL) {
-			free(buf);
-			return 0;
-		}
+		if (ptr == NULL)
+			goto err_out;
 
 		do {
 			char tmp;
@@ -447,7 +458,7 @@ int load_interpretation_list(const char *buffer)
 				val++;
 			} else	// Malformed - skip
 				continue;
-			n.name = strdup(ptr);
+			n.name = ptr;
 			char *c = n.name;
 			while (*c) {
 				*c = tolower(*c);
@@ -460,14 +471,19 @@ int load_interpretation_list(const char *buffer)
 			} else
 				tmp = 0;
 
-			n.val = strdup(val);
-			nvlist_append(&il, &n);
+			n.val = val;
+			if (nvlist_append(&il, &n))
+				continue; // assuming we loaded something
 			nvlist_interp_fixup(&il);
 			if (ptr)
 				*ptr = tmp;
-		} while((ptr = audit_strsplit_r(NULL, &saved)));
+		} while ((ptr = audit_strsplit_r(NULL, &saved)));
 	}
-	free(buf);
+
+	// If for some reason it was useless, delete buf
+	if (il.cnt == 0)
+		goto err_out;
+
 	return 1;
 }
 
@@ -477,6 +493,9 @@ int load_interpretation_list(const char *buffer)
 const char *_auparse_lookup_interpretation(const char *name)
 {
 	nvnode *n;
+
+	if (il.cnt == NEVER_LOADED)
+		return NULL;
 
 	nvlist_first(&il);
 	if (nvlist_find_name(&il, name)) {
@@ -494,7 +513,20 @@ const char *_auparse_lookup_interpretation(const char *name)
 
 void free_interpretation_list(void)
 {
-	nvlist_clear(&il);
+	if (il.cnt != NEVER_LOADED) {
+		nvlist_clear(&il, 0);
+		il.cnt = NEVER_LOADED;
+	}
+}
+
+// This uses a sentinel to determine if the list has ever been loaded.
+// If never loaded, returns 0. Otherwise it returns 1 higher than how
+// many interpretations are loaded.
+unsigned int interpretation_list_cnt(void)
+{
+	if (il.cnt == NEVER_LOADED)
+		return 0;
+	return il.cnt+1;
 }
 
 //////////// Start Field Value Interpretations /////////////
@@ -560,7 +592,7 @@ static const char *aulookup_uid(uid_t uid, char *buf, size_t size)
 	return buf;
 }
 
-void aulookup_destroy_uid_list(void)
+void lookup_destroy_uid_list(void)
 {
 	if (uid_cache_created == 0)
 		return;
@@ -622,6 +654,18 @@ void aulookup_destroy_gid_list(void)
 
 	destroy_lru(gid_cache);
 	gid_cache_created = 0;
+}
+
+void _auparse_flush_caches(void)
+{
+	if (uid_cache_created) {
+		destroy_lru(uid_cache);
+		uid_cache_created = 0;
+	}
+	if (gid_cache_created) {
+		destroy_lru(gid_cache);
+		gid_cache_created = 0;
+	}
 }
 
 static const char *print_uid(const char *val, unsigned int base)
@@ -799,6 +843,9 @@ static char *print_escaped(const char *val)
 {
 	char *out;
 
+	if (val == NULL)
+                        return strdup(" ");
+
         if (*val == '"') {
                 char *term;
                 val++;
@@ -828,6 +875,65 @@ static char *print_escaped(const char *val)
 	return strdup(val); // Something is wrong with string, just send as is
 }
 
+// This code is loosely based on glibc-2.27 realpath.
+static char working[PATH_MAX];
+static char *path_norm(const char *name)
+{
+	char *rpath, *dest;
+	const char *start, *end, *rpath_limit;
+	int old_errno = errno;
+
+	errno = EINVAL;
+	if (name == NULL)
+		return NULL;
+	if (name[0] == 0)
+		return NULL;
+	errno = old_errno;
+
+	// If not absolute, give it back as is
+	if (name[0] == '.')
+		return strdup(name);
+
+	rpath = working;
+	dest = rpath;
+	rpath_limit = rpath + PATH_MAX;
+
+	for (start = name; *start; start = end) {
+		// Remove duplicate '/'
+		while (*start == '/')
+			++start;
+
+		// Find end of path component
+		for (end = start; *end && *end != '/'; ++end)
+			; //empty
+
+		// if it ends with a slash, we're done
+		if (end - start == 0)
+			break;
+		else if (end - start == 1 && start[0] == '.')
+			; //empty
+		else if (end - start == 2 && start[0] == '.' &&
+					 start[1] == '.') {
+			// Back up to previous component, ignore if root
+			if (dest > rpath + 1)
+				while ((--dest)[-1] != '/');
+		} else {
+			if (dest[-1] != '/')
+				*dest++ = '/';
+
+			// If it will overflow, chop it at last component
+			if (dest + (end - start) >= rpath_limit) {
+				*dest = 0;
+				break;
+			}
+			// Otherwise copy next component
+			dest = mempcpy (dest, start, end - start);
+			*dest = 0;
+		}
+	}
+	return strdup(working);
+}
+
 static const char *print_escaped_ext(const idata *id)
 {
 	if (id->cwd) {
@@ -850,9 +956,8 @@ static const char *print_escaped_ext(const idata *id)
 			str2 = NULL;
 			str1 = NULL;
 		}
-		errno = 0;
-		out = realpath(str3, NULL);
-		if (errno) { // If there's an error, just return the original
+		out = path_norm(str3);
+		if (!out) { // If there's an error, just return the original
 			free(str1);
 			free(str2);
 			return str3;
@@ -1123,13 +1228,19 @@ static const char *print_sockaddr(const char *val)
 	// Now print address for some families
         switch (saddr->sa_family) {
                 case AF_LOCAL:
-                        {
+			if (slen < 4) {
+				rc = asprintf(&out,
+				    "{ saddr_fam=%s sockaddr len too short }",
+							str);
+				break;
+			} else {
                                 const struct sockaddr_un *un =
                                         (const struct sockaddr_un *)saddr;
+
                                 if (un->sun_path[0])
 					rc = asprintf(&out,
-						"{ saddr_fam=%s path=%s }", str,
-						      un->sun_path);
+						"{ saddr_fam=%s path=%.108s }",
+							str, un->sun_path);
                                 else // abstract name
 					rc = asprintf(&out,
 						"{ saddr_fam=%s path=%.108s }",
@@ -1171,6 +1282,7 @@ static const char *print_sockaddr(const char *val)
 					      x->sax25_call.ax25_call[6]);
                         }
                         break;
+#ifdef HAVE_IPX_HEADERS
                 case AF_IPX:
                         {
                                 const struct sockaddr_ipx *ip =
@@ -1180,6 +1292,7 @@ static const char *print_sockaddr(const char *val)
 					str, ip->sipx_port, ip->sipx_network);
                         }
                         break;
+#endif
                 case AF_ATMPVC:
                         {
                                 const struct sockaddr_atmpvc* at =
@@ -1218,11 +1331,16 @@ static const char *print_sockaddr(const char *val)
 					    str);
                         break;
                 case AF_NETLINK:
-                        {
+			if (slen < sizeof(struct sockaddr_nl)) {
+				rc = asprintf(&out,
+				    "{ saddr_fam=%s len too short }",
+					   str);
+				break;
+			} else {
                                 const struct sockaddr_nl *n =
                                              (const struct sockaddr_nl *)saddr;
 				rc = asprintf(&out,
-					"{ saddr_fam=%s nlnk-fam=%u nlnk-pid=%u }",
+				    "{ saddr_fam=%s nlnk-fam=%u nlnk-pid=%u }",
 					  str, n->nl_family, n->nl_pid);
                         }
                         break;
@@ -1242,7 +1360,7 @@ static const char *print_flags(const char *val)
 {
         int flags, cnt = 0;
 	size_t i;
-	char *out, buf[80];
+	char *out, buf[sizeof(flag_strings)+FLAG_NUM_ENTRIES+1];
 
         errno = 0;
         flags = strtoul(val, NULL, 16);
@@ -1377,7 +1495,7 @@ static const char *print_open_flags(const char *val)
 	size_t i;
 	unsigned int flags;
 	int cnt = 0;
-	char *out, buf[sizeof(open_flag_strings)+8];
+	char *out, buf[sizeof(open_flag_strings)+OPEN_FLAG_NUM_ENTRIES+1];
 
 	errno = 0;
 	flags = strtoul(val, NULL, 16);
@@ -1414,8 +1532,8 @@ static const char *print_open_flags(const char *val)
 static const char *print_clone_flags(const char *val)
 {
 	unsigned int flags, i, clone_sig;
-	int cnt = 0;
-	char *out, buf[sizeof(clone_flag_strings)+16];// + 10 for signal name
+	int cnt = 0;                                  // + 10 for signal name
+	char *out, buf[sizeof(clone_flag_strings)+CLONE_FLAG_NUM_ENTRIES+10];
 
 	errno = 0;
 	flags = strtoul(val, NULL, 16);
@@ -1524,7 +1642,7 @@ static const char *print_prot(const char *val, unsigned int is_mmap)
 {
 	unsigned int prot, i, limit;
 	int cnt = 0;
-	char buf[144];
+	char buf[sizeof(prot_strings)+PROT_NUM_ENTRIES+1];
 	char *out;
 
 	errno = 0;
@@ -1566,7 +1684,7 @@ static const char *print_mmap(const char *val)
 {
 	unsigned int maps, i;
 	int cnt = 0;
-	char buf[sizeof(mmap_strings)+8];
+	char buf[sizeof(mmap_strings)+MMAP_NUM_ENTRIES+1];
 	char *out;
 
 	errno = 0;
@@ -1677,7 +1795,7 @@ static const char *print_mount(const char *val)
 {
 	unsigned int mounts, i;
 	int cnt = 0;
-	char buf[sizeof(mount_strings)+8];
+	char buf[sizeof(mount_strings)+MOUNT_NUM_ENTRIES+1];
 	char *out;
 
 	errno = 0;
@@ -1732,7 +1850,7 @@ static const char *print_recv(const char *val)
 {
 	unsigned int rec, i;
 	int cnt = 0;
-	char buf[sizeof(recv_strings)+8];
+	char buf[sizeof(recv_strings)+RECV_NUM_ENTRIES+1];
 	char *out;
 
 	errno = 0;
@@ -1764,7 +1882,7 @@ static const char *print_recv(const char *val)
 static const char *print_access(const char *val)
 {
 	unsigned long mode;
-	char buf[16];
+	char buf[sizeof(access_strings)+ACCESS_NUM_ENTRIES+1];
 	unsigned int i, cnt = 0;
 
 	errno = 0;
@@ -1801,7 +1919,16 @@ static char *print_dirfd(const char *val)
 {
 	char *out;
 
-	if (strcmp(val, "-100") == 0) {
+	errno = 0;
+	uint32_t i = strtoul(val, NULL, 16);
+	if (errno) {
+		char *out;
+		if (asprintf(&out, "conversion error(%s)", val) < 0)
+			out = NULL;
+		return out;
+	}
+
+	if (i == 0xffffff9c) {
 		if (asprintf(&out, "AT_FDCWD") < 0)
 			out = NULL;
 	} else {
@@ -2011,7 +2138,7 @@ static const char *print_shmflags(const char *val)
 {
 	unsigned int flags, partial, i;
 	int cnt = 0;
-	char *out, buf[sizeof(shm_mode_strings)+sizeof(ipccmd_strings)+8];
+	char *out, buf[sizeof(shm_mode_strings)+sizeof(ipccmd_strings)+SHM_MODE_NUM_ENTRIES+IPCCMD_NUM_ENTRIES+1];
 
 	errno = 0;
 	flags = strtoul(val, NULL, 16);
@@ -2092,7 +2219,7 @@ static const char *print_umount(const char *val)
 {
 	unsigned int flags, i;
 	int cnt = 0;
-	char buf[sizeof(umount_strings)+8];
+	char buf[sizeof(umount_strings)+UMOUNT_NUM_ENTRIES+1];
 	char *out;
 
 	errno = 0;
@@ -2211,6 +2338,40 @@ static const char *print_bpf(const char *val)
 		return strdup(str);
 }
 
+static const char *print_openat2_resolve(const char *val)
+{
+	size_t i;
+	unsigned long long resolve;
+	int cnt = 0;
+	char *out, buf[sizeof(openat2_resolve_strings)+8];
+
+	errno = 0;
+	resolve = strtoull(val, NULL, 16);
+	if (errno) {
+		if (asprintf(&out, "conversion error(%s)", val) < 0)
+			out = NULL;
+		return out;
+	}
+
+	buf[0] = 0;
+	for (i=0; i<OPENAT2_RESOLVE_NUM_ENTRIES; i++) {
+		if (openat2_resolve_table[i].value & resolve) {
+			if (!cnt) {
+				strcat(buf,
+				openat2_resolve_strings + openat2_resolve_table[i].offset);
+				cnt++;
+			} else {
+				strcat(buf, "|");
+				strcat(buf,
+				openat2_resolve_strings + openat2_resolve_table[i].offset);
+			}
+		}
+	}
+	if (buf[0] == 0)
+		snprintf(buf, sizeof(buf), "0x%s", val);
+	return strdup(buf);
+}
+
 static const char *print_a0(const char *val, const idata *id)
 {
 	char *out;
@@ -2220,14 +2381,12 @@ static const char *print_a0(const char *val, const idata *id)
 		if (*sys == 'r') {
 			if (strcmp(sys, "rt_sigaction") == 0)
 		                return print_signals(val, 16);
-			else if (strcmp(sys, "renameat") == 0)
+			else if (strncmp(sys, "renameat", 8) == 0)
 				return print_dirfd(val);
 			else if (strcmp(sys, "readlinkat") == 0)
 				return print_dirfd(val);
 		} else if (*sys == 'c') {
-			if (strcmp(sys, "clone") == 0)
-				return print_clone_flags(val);
-	                else if (strcmp(sys, "clock_settime") == 0)
+	                if (strcmp(sys, "clock_settime") == 0)
 				return print_clock_id(val);
 		} else if (*sys == 'p') {
 	                if (strcmp(sys, "personality") == 0)
@@ -2248,7 +2407,7 @@ static const char *print_a0(const char *val, const idata *id)
 				return print_dirfd(val);
 			else if (strcmp(sys, "fchmodat") == 0)
 				return print_dirfd(val);
-			else if (strcmp(sys, "faccessat") == 0)
+			else if (strncmp(sys, "faccessat", 9) == 0)
 				return print_dirfd(val);
 			else if (strcmp(sys, "futimensat") == 0)
 				return print_dirfd(val);
@@ -2287,7 +2446,9 @@ static const char *print_a0(const char *val, const idata *id)
 			return print_dirfd(val);
 		else if (strcmp(sys, "newfstatat") == 0)
 			return print_dirfd(val);
-		else if (strcmp(sys, "openat") == 0)
+		else if (strncmp(sys, "openat", 6) == 0)
+			return print_dirfd(val);
+		else if (strcmp(sys, "name_to_handle_at") == 0)
 			return print_dirfd(val);
 		else if (strcmp(sys, "ipccall") == 0)
 			return print_ipccall(val, 16);
@@ -2423,10 +2584,12 @@ static const char *print_a2(const char *val, const idata *id)
 				return print_open_flags(val);
 			if ((strcmp(sys, "open") == 0) && (id->a1 & O_CREAT))
 				return print_mode_short(val, 16);
+			if (strcmp(sys, "open_by_handle_at") == 0)
+			    return print_open_flags(val);
 		} else if (*sys == 'f') {
 			if (strcmp(sys, "fchmodat") == 0)
 				return print_mode_short(val, 16);
-			else if (strcmp(sys, "faccessat") == 0)
+			else if (strncmp(sys, "faccessat", 9) == 0)
 				return print_access(val);
 		} else if (*sys == 's') {
 			if (strcmp(sys, "setresuid") == 0)
@@ -2456,11 +2619,18 @@ static const char *print_a2(const char *val, const idata *id)
 				return print_recv(val);
 			else if (strcmp(sys, "readlinkat") == 0)
 				return print_dirfd(val);
+			else if (strncmp(sys, "renameat", 8) == 0)
+				return print_dirfd(val);
 		} else if (*sys == 'l') {
 			if (strcmp(sys, "linkat") == 0)
 				return print_dirfd(val);
 			else if (strcmp(sys, "lseek") == 0)
 				return print_seek(val);
+		} else if (*sys == 'c') {
+			if (strcmp(sys, "clone") == 0)
+				return print_clone_flags(val);
+			else if (strcmp(sys, "clone2") == 0)
+				return print_clone_flags(val);
 		}
 		else if (strstr(sys, "chown"))
 			return print_gid(val, 16);
@@ -2843,6 +3013,31 @@ static const char *print_seccomp_code(const char *val)
 	return out;
 }
 
+static const char *nlmcgrp[2]= { "audit-none", "audit-netlink-multicast" };
+static const char *print_nlmcgrp(const char *val)
+{
+	unsigned long nl;
+
+	errno = 0;
+        nl = strtoul(val, NULL, 16);
+	if (errno) {
+		char *out;
+		if (asprintf(&out, "conversion error(%s)", val) < 0)
+			out = NULL;
+		return out;
+	}
+
+	switch (nl)
+	{
+		default:
+			return strdup(nlmcgrp[0]);
+#ifdef AUDIT_NLGRP_MAX
+		case AUDIT_NLGRP_READLOG:
+			return strdup(nlmcgrp[1]);
+#endif
+	}
+}
+
 int lookup_type(const char *name)
 {
 	int i;
@@ -2854,11 +3049,11 @@ int lookup_type(const char *name)
 
 /*
  * This is the main entry point for the auparse library. Call chain is:
- * auparse_interpret_field -> nvlist_interp_cur_val -> interpret
+ * auparse_interpret_field -> nvlist_interp_cur_val -> do_interpret
  */
-const char *interpret(const rnode *r, auparse_esc_t escape_mode)
+const char *do_interpret(rnode *r, auparse_esc_t escape_mode)
 {
-	const nvlist *nv = &r->nv;
+	nvlist *nv = &r->nv;
 	int type;
 	idata id;
 	nvnode *n;
@@ -2929,7 +3124,8 @@ int auparse_interp_adjust_type(int rtype, const char *name, const char *val)
 			type = AUPARSE_TYPE_ESCAPED;
 		else
 			type = AUPARSE_TYPE_UNCLASSIFIED;
-	}
+	} else if (rtype == AUDIT_KERN_MODULE && strcmp(name, "name") == 0)
+		type = AUPARSE_TYPE_ESCAPED;
 	else
 		type = lookup_type(name);
 
@@ -2946,10 +3142,11 @@ char *auparse_do_interpretation(int type, const idata *id,
 	const char *out;
 
 	// Check the interpretations list first
-	if (il.head) {
+	if (interpretation_list_cnt()) {
 		nvlist_first(&il);
 		if (nvlist_find_name(&il, id->name)) {
-			const char *val = il.cur->interp_val;
+			nvnode* node = &il.array[il.cur];
+			const char *val = node->interp_val;
 
 			if (val) {
 				// If we don't know what it is when auditd
@@ -3082,6 +3279,12 @@ unknown:
 			break;
 		case AUPARSE_TYPE_FANOTIFY:
 			out = print_fanotify(id->val);
+			break;
+		case AUPARSE_TYPE_NLMCGRP:
+			out = print_nlmcgrp(id->val);
+			break;
+		case AUPARSE_TYPE_RESOLVE:
+			out = print_openat2_resolve(id->val);
 			break;
 		case AUPARSE_TYPE_MAC_LABEL:
 		case AUPARSE_TYPE_UNCLASSIFIED:

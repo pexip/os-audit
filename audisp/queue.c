@@ -1,5 +1,5 @@
 /* queue.c --
- * Copyright 2007,2013,2015,2018 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2007,2013,2015,2018,2022 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -46,26 +46,31 @@ void reset_suspended(void)
 
 int init_queue(unsigned int size)
 {
-	unsigned int i;
+	// The global variables are initialized to zero by the
+	// compiler. We can sometimes get here by a reconfigure.
+	// If the queue was already initialized, q_depth will be
+	// non-zero. In that case, leave everything alone. If the
+	// queue was destroyed due to lack of plugins, q_depth,
+	// as well as other queue variables, is set to zero so
+	// they do not need reinitializing.
+	if (q_depth == 0) {
+		unsigned int i;
 
-	processing_suspended = 0;
-	q_next = 0;
-	q_last = 0;
-	currently_used = 0;
-	max_used = 0;
-	overflowed = 0;
-	q_depth = size;
-	q = malloc(q_depth * sizeof(event_t *));
-	if (q == NULL)
-		return -1;
+		q_depth = size;
+		q = malloc(q_depth * sizeof(event_t *));
+		if (q == NULL) {
+			processing_suspended = 1;
+			return -1;
+		}
 
-	for (i=0; i < q_depth; i++) 
-		q[i] = NULL;
+		for (i=0; i < q_depth; i++)
+			q[i] = NULL;
 
-	/* Setup IPC mechanisms */
-	pthread_mutex_init(&queue_lock, NULL);
-	pthread_cond_init(&queue_nonempty, NULL);
-
+		/* Setup IPC mechanisms */
+		pthread_mutex_init(&queue_lock, NULL);
+		pthread_cond_init(&queue_nonempty, NULL);
+		reset_suspended();
+	}
 	return 0;
 }
 
@@ -91,12 +96,14 @@ static void change_runlevel(const char *level)
 	exit(1);
 }
 
-static void do_overflow_action(struct disp_conf *config)
+static int do_overflow_action(struct disp_conf *config)
 {
+	int rc = -1;
 	overflowed = 1;
         switch (config->overflow_action)
         {
                 case O_IGNORE:
+			rc = 0;
 			break;
                 case O_SYSLOG:
 			if (queue_full_warning < QUEUE_FULL_LIMIT) {
@@ -129,6 +136,7 @@ static void do_overflow_action(struct disp_conf *config)
                         syslog(LOG_ALERT, "Unknown overflow action requested");
                         break;
         }
+	return rc;
 }
 
 /* returns 0 on success and -1 on error */
@@ -144,9 +152,9 @@ int enqueue(event_t *e, struct disp_conf *config)
 retry:
 	// We allow 3 retries and then its over
 	if (retry_cnt > 3) {
-		do_overflow_action(config);
 		free(e);
-		return -1;
+
+		return do_overflow_action(config);
 	}
 	pthread_mutex_lock(&queue_lock);
 
@@ -225,6 +233,7 @@ void increase_queue_depth(unsigned int size)
 		for (i=q_depth; i<size; i++)
 			q[i] = NULL;
 		q_depth = size;
+		overflowed = 0;
 	}
 	pthread_mutex_unlock(&queue_lock);
 }
@@ -253,5 +262,11 @@ void destroy_queue(void)
 		free((void *)q[i]);
 
 	free(q);
+	q_last = 0;
+	q_depth = 0;
+	processing_suspended = 1;
+	currently_used = 0;
+	max_used = 0;
+	overflowed = 0;
 }
 

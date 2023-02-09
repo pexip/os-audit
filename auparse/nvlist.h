@@ -1,6 +1,6 @@
 /*
 * nvlist.h - Header file for nvlist.c
-* Copyright (c) 2006-07,2016 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2006-07,2016,2021 Red Hat Inc.
 * All Rights Reserved.
 *
 * This library is free software; you can redistribute it and/or
@@ -32,20 +32,24 @@
 
 
 static inline unsigned int nvlist_get_cnt(nvlist *l) { return l->cnt; }
-static inline void nvlist_first(nvlist *l) { l->cur = l->head; }
-static inline nvnode *nvlist_get_cur(const nvlist *l) { return l->cur; }
-static inline const char *nvlist_get_cur_name(const nvlist *l) {if (l->cur) return l->cur->name; else return NULL;}
-static inline const char *nvlist_get_cur_val(const nvlist *l) {if (l->cur) return l->cur->val; else return NULL;}
-static inline const char *nvlist_get_cur_val_interp(const nvlist *l) {if (l->cur) return l->cur->interp_val; else return NULL;}
+static inline void nvlist_first(nvlist *l) { l->cur = 0; }
+static inline nvnode *nvlist_get_cur(nvlist *l)
+	{ return &l->array[l->cur]; }
+static inline const char *nvlist_get_cur_name(nvlist *l)
+	{if (l->cnt) { nvnode *node = &l->array[l->cur]; return node->name; } else return NULL;}
+static inline const char *nvlist_get_cur_val(nvlist *l)
+	{if (l->cnt) { nvnode *node = &l->array[l->cur]; return node->val; } else return NULL;}
+static inline const char *nvlist_get_cur_val_interp(nvlist *l)
+	{if (l->cnt) { nvnode *node = &l->array[l->cur]; return node->interp_val; } else return NULL;}
 
 AUDIT_HIDDEN_START
 
 void nvlist_create(nvlist *l);
-void nvlist_clear(nvlist* l);
+void nvlist_clear(nvlist *l, int free_interp);
 nvnode *nvlist_next(nvlist *l);
-int nvlist_get_cur_type(const rnode *r);
-const char *nvlist_interp_cur_val(const rnode *r, auparse_esc_t escape_mode);
-void nvlist_append(nvlist *l, nvnode *node);
+int nvlist_get_cur_type(rnode *r);
+const char *nvlist_interp_cur_val(rnode *r, auparse_esc_t escape_mode);
+int nvlist_append(nvlist *l, nvnode *node);
 void nvlist_interp_fixup(nvlist *l);
 
 /* Given a numeric index, find that record. */

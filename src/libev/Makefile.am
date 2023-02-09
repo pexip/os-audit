@@ -13,17 +13,19 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# along with this program; see the file COPYING. If not, write to the
+# Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+# Boston, MA 02110-1335, USA.
 #
 # Authors:
 #   Steve Grubb <sgrubb@redhat.com>
 #
 VERSION_INFO = 4:0:0
-EXTRA_DIST = README ev_epoll.c ev_poll.c ev_select.c libev.m4
+EXTRA_DIST = README ev_epoll.c ev_poll.c ev_select.c ev_iouring.c ev_linuxaio.c libev.m4
 AM_CFLAGS = -fPIC -DPIC -g -fno-strict-aliasing ${DEBUG}
 
 noinst_HEADERS = ev.h ev_vars.h ev_wrap.h event.h
-noinst_LIBRARIES = libev.a
+noinst_LTLIBRARIES = libev.la
 
-libev_a_SOURCES = ev.c event.c
+libev_la_SOURCES = ev.c event.c
+libev_la_LDFLAGS = -no-undefined -static

@@ -119,9 +119,9 @@ static unsigned int sockaddr_to_port(struct sockaddr_storage *addr)
 
 static char *sockaddr_to_addr(struct sockaddr_storage *addr)
 {
-	static char buf[40];
+	static char buf[64];
 
-	snprintf(buf, sizeof(buf), "%s:%u",
+	snprintf(buf, sizeof(buf), "%52s:%u",
 		sockaddr_to_string(addr),
 		sockaddr_to_port(addr));
 	return buf;
@@ -321,14 +321,16 @@ static void gss_failure(const char *msg, int major_status, int minor_status)
 		gss_failure_2(msg, minor_status, GSS_C_MECH_CODE);
 }
 
-#define KCHECK(x,f) if (x) { \
+#define KCHECK(x,f, k) if (x) { \
 		const char *kstr = krb5_get_error_message(kcontext, x); \
 		audit_msg(LOG_ERR, "krb5 error: %s in %s\n", kstr, f); \
 		krb5_free_error_message(kcontext, kstr); \
+		krb5_free_context(k); k = NULL; \
 		return -1; }
 
 /* These are our private credentials, which come from a key file on
    our server.  They are aquired once, at program start.  */
+static krb5_context kcontext = NULL;
 static int server_acquire_creds(const char *service_name,
 		gss_cred_id_t *lserver_creds)
 {
@@ -336,7 +338,6 @@ static int server_acquire_creds(const char *service_name,
 	gss_name_t server_name;
 	OM_uint32 major_status, minor_status;
 
-	krb5_context kcontext = NULL;
 	int krberr;
 
 	my_service_name = strdup(service_name);
@@ -363,9 +364,9 @@ static int server_acquire_creds(const char *service_name,
 	(void) gss_release_name(&minor_status, &server_name);
 
 	krberr = krb5_init_context(&kcontext);
-	KCHECK (krberr, "krb5_init_context");
+	KCHECK (krberr, "krb5_init_context", kcontext);
 	krberr = krb5_get_default_realm(kcontext, &my_gss_realm);
-	KCHECK (krberr, "krb5_get_default_realm");
+	KCHECK (krberr, "krb5_get_default_realm", kcontext);
 
 	audit_msg(LOG_DEBUG, "GSS creds for %s acquired", service_name);
 
@@ -413,10 +414,9 @@ static int negotiate_credentials(ev_tcp *io)
 					GSS_C_NO_CHANNEL_BINDINGS, &client,
 					NULL, &send_tok, &sess_flags,
 					NULL, NULL);
-		if (recv_tok.value) {
-			free(recv_tok.value);
-			recv_tok.value = NULL;
-		}
+		if (recv_tok.value)
+			gss_release_buffer(&min_stat, &recv_tok);
+
 		if (maj_stat != GSS_S_COMPLETE
 		    && maj_stat != GSS_S_CONTINUE_NEEDED) {
 			gss_release_buffer(&min_stat, &send_tok);
@@ -440,6 +440,7 @@ static int negotiate_credentials(ev_tcp *io)
 				if (*context != GSS_C_NO_CONTEXT)
 					gss_delete_sec_context(&min_stat,
 						context, GSS_C_NO_BUFFER);
+				gss_release_name(&min_stat, &client);
 				return -1;
 			}
 			gss_release_buffer(&min_stat, &send_tok);
@@ -454,14 +455,22 @@ static int negotiate_credentials(ev_tcp *io)
 		return -1;
 	}
 
-	audit_msg(LOG_INFO, "GSS-API Accepted connection from: %s",
-		  (char *)recv_tok.value);
-	io->remote_name = strdup(recv_tok.value);
-	io->remote_name_len = strlen(recv_tok.value);
+	if (asprintf(&io->remote_name, "%.*s", (int)recv_tok.length,
+		    (char *)recv_tok.value) < 0) {
+		io->remote_name = strdup("?");
+		io->remote_name_len = 1;
+	} else
+		io->remote_name_len = recv_tok.length;
+
+	audit_msg(LOG_INFO, "GSS-API Accepted connection from: %s", 
+		  io->remote_name);
 	gss_release_buffer(&min_stat, &recv_tok);
 
-	slashptr = strchr(io->remote_name, '/');
-	atptr = strchr(io->remote_name, '@');
+	if (io->remote_name) {
+		slashptr = strchr(io->remote_name, '/');
+		atptr = strchr(io->remote_name, '@');
+	} else
+		slashptr = NULL;
 
 	if (!slashptr || !atptr) {
 		audit_msg(LOG_ERR, "Invalid GSS name from remote client: %s",
@@ -875,7 +884,7 @@ static void auditd_tcp_listen_handler( struct ev_loop *loop,
 	/* Make the client data structure */
 	client = (struct ev_tcp *)malloc (sizeof (struct ev_tcp));
 	if (client == NULL) {
-        	audit_msg(LOG_CRIT, "Unable to allocate TCP client data");
+		audit_msg(LOG_CRIT, "Unable to allocate TCP client data");
 		snprintf(emsg, sizeof(emsg),
 			"op=alloc addr=%s port=%u res=no",
 			sockaddr_to_string(&aaddr),
@@ -961,15 +970,8 @@ int auditd_tcp_listen_init(struct ev_loop *loop, struct daemon_conf *config)
 	int one = 1, rc;
 	int prefer_ipv6 = 0;
 
-	transport = config->transport;
-	ev_periodic_init(&periodic_watcher, periodic_handler,
-			  0, config->tcp_client_max_idle, NULL);
-	periodic_watcher.data = config;
-	if (config->tcp_client_max_idle)
-		ev_periodic_start(loop, &periodic_watcher);
-
 	/* If the port is not set, that means we aren't going to
-	  listen for connections.  */
+	   listen for connections.  */
 	if (config->tcp_listen_port == 0)
 		return 0;
 
@@ -977,11 +979,11 @@ int auditd_tcp_listen_init(struct ev_loop *loop, struct daemon_conf *config)
 	hints.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_family = AF_UNSPEC;
-	snprintf(local, sizeof(local), "%lu", config->tcp_listen_port);
+	snprintf(local, sizeof(local), "%u", (unsigned)config->tcp_listen_port);
 
 	rc = getaddrinfo(NULL, local, &hints, &ai);
 	if (rc) {
-        	audit_msg(LOG_ERR, "Cannot lookup addresses");
+		audit_msg(LOG_ERR, "Cannot lookup addresses");
 		return 1;
 	}
 
@@ -1010,11 +1012,11 @@ int auditd_tcp_listen_init(struct ev_loop *loop, struct daemon_conf *config)
 		// we only need one.
 		if (runp->ai_family == AF_INET && prefer_ipv6)
 			goto next_try;
-			
+
 		listen_socket[nlsocks] = socket(runp->ai_family,
 				 runp->ai_socktype, runp->ai_protocol);
 		if (listen_socket[nlsocks] < 0) {
-        		audit_msg(LOG_ERR, "Cannot create %s listener socket",
+			audit_msg(LOG_ERR, "Cannot create %s listener socket",
 				runp->ai_family == AF_INET ? "IPv4" : "IPv6");
 			goto next_try;
 		}
@@ -1034,7 +1036,7 @@ int auditd_tcp_listen_init(struct ev_loop *loop, struct daemon_conf *config)
 		if (bind(listen_socket[nlsocks], runp->ai_addr,
 						runp->ai_addrlen)) {
 			if (errno != EADDRINUSE)
-		        	audit_msg(LOG_ERR,
+				audit_msg(LOG_ERR,
 				"Cannot bind listener socket to port %ld (%s)",
 				config->tcp_listen_port, strerror(errno));
 			close(listen_socket[nlsocks]);
@@ -1043,7 +1045,7 @@ int auditd_tcp_listen_init(struct ev_loop *loop, struct daemon_conf *config)
 		}
 
 		if (listen(listen_socket[nlsocks], config->tcp_listen_queue)) {
-        		audit_msg(LOG_ERR, "Unable to listen on %ld (%s)",
+			audit_msg(LOG_ERR, "Unable to listen on %ld (%s)",
 				config->tcp_listen_port,
 				strerror(errno));
 			close(listen_socket[nlsocks]);
@@ -1070,6 +1072,14 @@ next_try:
 	freeaddrinfo(ai);
 	if (nlsocks == 0)
 		return -1;
+
+	// Now that we have sockets, start the periodic timers
+	transport = config->transport;
+	ev_periodic_init(&periodic_watcher, periodic_handler,
+			  0, config->tcp_client_max_idle, NULL);
+	periodic_watcher.data = config;
+	if (config->tcp_client_max_idle)
+		ev_periodic_start(loop, &periodic_watcher);
 
 	use_libwrap = config->use_libwrap;
 	auditd_set_ports(config->tcp_client_min_port,
@@ -1123,6 +1133,10 @@ void auditd_tcp_listen_uninit(struct ev_loop *loop, struct daemon_conf *config)
 #ifdef USE_GSSAPI
 	OM_uint32 status;
 #endif
+	/* If the port isn't set, we didn't listen for connections. */
+	if (config->tcp_listen_port == 0)
+		return;
+
 
 	ev_io_stop(loop, &tcp_listen_watcher);
 	while (nlsocks > 0) {
@@ -1133,6 +1147,8 @@ void auditd_tcp_listen_uninit(struct ev_loop *loop, struct daemon_conf *config)
 #ifdef USE_GSSAPI
 	if (USE_GSS) {
 		gss_release_cred(&status, &server_creds);
+		krb5_free_context(kcontext);
+		kcontext = NULL;
 		free(my_service_name);
 		my_service_name = NULL;
 	}
@@ -1155,7 +1171,7 @@ void auditd_tcp_listen_uninit(struct ev_loop *loop, struct daemon_conf *config)
 static void periodic_reconfigure(struct daemon_conf *config)
 {
 	struct ev_loop *loop = ev_default_loop(EVFLAG_AUTO);
-	if (config->tcp_client_max_idle) {
+	if (config->tcp_listen_port && config->tcp_client_max_idle) {
 		ev_periodic_set(&periodic_watcher, ev_now(loop),
 				 config->tcp_client_max_idle, NULL);
 		ev_periodic_start(loop, &periodic_watcher);

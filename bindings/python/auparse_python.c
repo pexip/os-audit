@@ -28,7 +28,7 @@ auparse_timestamp_compare: because AuEvent calls this via the cmp operator
 
 #if PY_MAJOR_VERSION > 2
 #define IS_PY3K
-#if PY_MINOR_VERSION > 5
+#if PY_MINOR_VERSION >= 5
 #define USE_RICH_COMPARISON
 #endif
 #define MODINITERROR return NULL
@@ -660,6 +660,26 @@ AuParser_set_escape_mode(AuParser *self, PyObject *args)
 
     if (!PyArg_ParseTuple(args, "i", &mode)) return NULL;
     auparse_set_escape_mode(self->au, mode);
+
+    Py_RETURN_NONE;
+}
+
+/********************************
+ * auparse_set_eoe_timeout
+ ********************************/
+PyDoc_STRVAR(set_eoe_timeout_doc,
+"set_eoe_timeout(tmo) Set audit parser end of event timeout\n\
+\n\
+This function sets the timeout used to determine if an event is complete.\n\
+Returns None.\n\
+");
+static PyObject *
+AuParser_set_eoe_timeout(AuParser *self, PyObject *args)
+{
+    int tmo;
+
+    if (!PyArg_ParseTuple(args, "i", &tmo)) return NULL;
+    auparse_set_eoe_timeout(tmo);
 
     Py_RETURN_NONE;
 }
@@ -2140,6 +2160,7 @@ static PyMethodDef AuParser_methods[] = {
     {"feed_age_events",   (PyCFunction)AuParser_feed_age_events,   METH_NOARGS,  feed_age_events_doc},
     {"add_callback",      (PyCFunction)AuParser_add_callback,      METH_VARARGS, add_callback_doc},
     {"set_escape_mode",   (PyCFunction)AuParser_set_escape_mode,   METH_VARARGS, set_escape_mode_doc},
+    {"set_eoe_timeout",   (PyCFunction)AuParser_set_eoe_timeout,   METH_VARARGS, set_eoe_timeout_doc},
     {"reset",             (PyCFunction)AuParser_reset,             METH_NOARGS,  reset_doc},
     {"search_add_expression", (PyCFunction)AuParser_search_add_expression, METH_VARARGS, search_add_expression_doc},
     {"search_add_item",   (PyCFunction)AuParser_search_add_item,   METH_VARARGS, search_add_item_doc},
@@ -2366,10 +2387,13 @@ initauparse(void)
     PyModule_AddIntConstant(m, "AUPARSE_TYPE_PROCTITLE", AUPARSE_TYPE_PROCTITLE);
     PyModule_AddIntConstant(m, "AUPARSE_TYPE_HOOK", AUPARSE_TYPE_HOOK);
     PyModule_AddIntConstant(m, "AUPARSE_TYPE_NETACTION", AUPARSE_TYPE_NETACTION);
+    PyModule_AddIntConstant(m, "AUPARSE_TYPE_MACPROTO,", AUPARSE_TYPE_MACPROTO);
     PyModule_AddIntConstant(m, "AUPARSE_TYPE_IOCTL_REQ", AUPARSE_TYPE_IOCTL_REQ);
     PyModule_AddIntConstant(m, "AUPARSE_TYPE_ESCAPED_KEY", AUPARSE_TYPE_ESCAPED_KEY);
     PyModule_AddIntConstant(m, "AUPARSE_TYPE_ESCAPED_FILE", AUPARSE_TYPE_ESCAPED_FILE);
     PyModule_AddIntConstant(m, "AUPARSE_TYPE_FANOTIFY", AUPARSE_TYPE_FANOTIFY);
+    PyModule_AddIntConstant(m, "AUPARSE_TYPE_NLMCGRP", AUPARSE_TYPE_NLMCGRP);
+    PyModule_AddIntConstant(m, "AUPARSE_TYPE_RESOLVE", AUPARSE_TYPE_RESOLVE);
 
     /* Escape types */
     PyModule_AddIntConstant(m, "AUPARSE_ESC_RAW", AUPARSE_ESC_RAW);

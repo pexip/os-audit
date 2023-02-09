@@ -1,20 +1,20 @@
-/* auditctl-listing.c -- 
- * Copyright 2014,16 Red Hat Inc., Durham, North Carolina.
+/* auditctl-listing.c --
+ * Copyright 2014,16,2021 Red Hat Inc.
  * All Rights Reserved.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
+ * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this program; if not, write to the Free Software
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
  * Boston, MA 02110-1335, USA.
  *
  * Authors:
@@ -122,7 +122,7 @@ static int print_arch(unsigned int value, int op)
 			else
 				printf(" -F arch%sb32",
 						audit_operator_to_symbol(op));
-		} else {	
+		} else {
 			const char *ptr = audit_machine_to_name(machine);
 			printf(" -F arch%s%s", audit_operator_to_symbol(op),
 						ptr);
@@ -398,7 +398,7 @@ static void print_rule(const struct audit_rule_data *r)
 					printf(" -F perm=%s", perms);
 			} else if (field == AUDIT_INODE) {
 				// This is unsigned
-				printf(" -F %s%s%u", name, 
+				printf(" -F %s%s%u", name,
 						audit_operator_to_symbol(op),
 						r->values[i]);
 			} else if (field == AUDIT_FIELD_COMPARE) {
@@ -411,7 +411,7 @@ static void print_rule(const struct audit_rule_data *r)
 
 				// Show these as hex
 				if (count > 1 || interpret == 0)
-					printf(" -F %s%s0x%X", name, 
+					printf(" -F %s%s0x%X", name,
 						audit_operator_to_symbol(op),
 						r->values[i]);
 				else {	// Use ignore to mean interpret
@@ -460,14 +460,23 @@ static void print_rule(const struct audit_rule_data *r)
 						audit_operator_to_symbol(op),
 						audit_fstype_to_name(
 						r->values[i]));
+			} else if (field == AUDIT_LOGINUID ||
+				   field == AUDIT_SESSIONID) {
+				if (r->values[i] == -1 && interpret)
+					printf(" -F %s%sunset", name,
+					       audit_operator_to_symbol(op));
+				else
+					printf(" -F %s%s%d", name,
+					       audit_operator_to_symbol(op),
+					       r->values[i]);
 			} else {
 				// The default is signed decimal
-				printf(" -F %s%s%d", name, 
+				printf(" -F %s%s%d", name,
 						audit_operator_to_symbol(op),
 						r->values[i]);
 			}
 		} else {
-			 // The field name is unknown 
+			 // The field name is unknown
 			printf(" f%d%s%d", r->fields[i],
 						audit_operator_to_symbol(op),
 						r->values[i]);
@@ -576,8 +585,7 @@ int audit_print_reply(struct audit_reply *rep, int fd)
 #endif
 			printed = 1;
 			break;
-#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
-    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+#if HAVE_DECL_AUDIT_FEATURE_VERSION == 1
 		case AUDIT_GET_FEATURE:
 			{
 			uint32_t mask = AUDIT_FEATURE_TO_MASK(
@@ -600,7 +608,7 @@ int audit_print_reply(struct audit_reply *rep, int fd)
 			printed = 1;
 			return 1;
 		default:
-			printf("Unknown: type=%d, len=%d\n", rep->type, 
+			printf("Unknown: type=%d, len=%d\n", rep->type,
 				rep->nlh->nlmsg_len);
 			printed = 1;
 			break;

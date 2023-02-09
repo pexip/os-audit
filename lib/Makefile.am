@@ -13,8 +13,9 @@
 # Lesser General Public License for more details.
 # 
 # You should have received a copy of the GNU Lesser General Public
-# License along with this library; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# License along with this program; see the file COPYING.lib. If not, write to
+# the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+# Boston, MA 02110-1335, USA.
 # 
 # Authors:
 #   Steve Grubb <sgrubb@redhat.com>
@@ -25,7 +26,7 @@ CLEANFILES = $(BUILT_SOURCES)
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
 EXTRA_DIST = syscall-update.txt
 VERSION_INFO = 1:0
-AM_CFLAGS = -fPIC -DPIC -D_GNU_SOURCE
+AM_CFLAGS = -fPIC -DPIC -D_GNU_SOURCE ${WFLAGS}
 AM_CPPFLAGS = -I. -I${top_srcdir} -I${top_srcdir}/auparse -I${top_srcdir}/common
 
 pkgconfigdir = $(libdir)/pkgconfig
@@ -38,8 +39,8 @@ include_HEADERS = libaudit.h
 libaudit_la_SOURCES = libaudit.c message.c netlink.c \
 	lookup_table.c audit_logging.c deprecated.c \
 	dso.h private.h errormsg.h
-libaudit_la_LIBADD = $(CAPNG_LDADD) ${top_builddir}/common/libaucommon.a
-libaudit_la_DEPENDENCIES = $(libaudit_la_SOURCES) ../config.h ${top_builddir}/common/libaucommon.a
+libaudit_la_LIBADD = $(CAPNG_LDADD) ${top_builddir}/common/libaucommon.la
+libaudit_la_DEPENDENCIES = $(libaudit_la_SOURCES) ../config.h ${top_builddir}/common/libaucommon.la
 libaudit_la_LDFLAGS = -Wl,-z,relro -version-info $(VERSION_INFO)
 nodist_libaudit_la_SOURCES = $(BUILT_SOURCES)
 

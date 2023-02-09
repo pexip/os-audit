@@ -1,5 +1,5 @@
 /* audisp-example.c --
- * Copyright 2012 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2012 Red Hat Inc.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -30,10 +30,19 @@
  * It will print things to stdout. In a real program, you wouldn't
  * do anything with stdout since that is likely to be pointing to /dev/null.
  *
- * Excluding some init/destroy items you might need to add to main, the 
+ * Excluding some init/destroy items you might need to add to main, the
  * event_handler function is the main place that you would modify to do
- * things specific to your plugin. 
+ * things specific to your plugin.
  *
+ * Also, note that for a "real" plugin, you may have to add an internal queue
+ * to your application. If plugins do any kind of networking or in depth
+ * processing of incoming events, auditd's internal queue can overflow because
+ * the socket connecting to the plugin's stdin get backed up. When audit has
+ * nowhere to put events, the kernel's audit backlog can get filled up.
+ * If that happens, the backlog_wait_time is consulted by the kernel which
+ * may have the effect of slowing down the whole system. A good design would be
+ * to have 2 threads, one watching for inbound events and one doing the
+ * processing of the events with a configurable queue in between.
  */
 
 #define _GNU_SOURCE
@@ -58,7 +67,7 @@ static void handle_event(auparse_state_t *au,
 /*
  * SIGTERM handler
  */
-static void term_handler( int sig )
+static void term_handler(int sig)
 {
         stop = 1;
 }
@@ -66,7 +75,7 @@ static void term_handler( int sig )
 /*
  * SIGHUP handler: re-read config
  */
-static void hup_handler( int sig )
+static void hup_handler(int sig)
 {
         hup = 1;
 }
@@ -74,6 +83,11 @@ static void hup_handler( int sig )
 static void reload_config(void)
 {
 	hup = 0;
+
+	/*
+	 * Add your code here that re-reads the config file and changes
+	 * how your plugin works.
+	 */
 }
 
 int main(int argc, char *argv[])
@@ -98,39 +112,43 @@ int main(int argc, char *argv[])
 		printf("audisp-example is exiting due to auparse init errors");
 		return -1;
 	}
+	auparse_set_eoe_timeout(2);
 	auparse_add_callback(au, handle_event, NULL, NULL);
 	do {
 		fd_set read_mask;
-		struct timeval tv;
-		int retval = 0;
-		int read_size = 0;
+		int retval;
+		int read_size = 1; /* Set to 1 so it's not EOF */
 
 		/* Load configuration */
 		if (hup) {
 			reload_config();
 		}
 		do {
+			FD_ZERO(&read_mask);
+			FD_SET(0, &read_mask);
+
+			if (auparse_feed_has_data(au)) {
+				struct timeval tv;
+				tv.tv_sec = 1;
+				tv.tv_usec = 0;
+				retval= select(1, &read_mask, NULL, NULL, &tv);
+			} else
+				retval= select(1, &read_mask, NULL, NULL, NULL);
+
 			/* If we timed out & have events, shake them loose */
 			if (retval == 0 && auparse_feed_has_data(au))
 				auparse_feed_age_events(au);
 
-			tv.tv_sec = 3;
-			tv.tv_usec = 0;
-			FD_ZERO(&read_mask);
-			FD_SET(0, &read_mask);
-			if (auparse_feed_has_data(au))
-				retval= select(1, &read_mask, NULL, NULL, &tv);
-			else
-				retval= select(1, &read_mask, NULL, NULL, NULL);
 		} while (retval == -1 && errno == EINTR && !hup && !stop);
 
 		/* Now the event loop */
 		if (!stop && !hup && retval > 0) {
-			while ((read_size = read(0, tmp, MAX_AUDIT_MESSAGE_LENGTH)) > 0) {
+			while ((read_size = read(0, tmp,
+					     MAX_AUDIT_MESSAGE_LENGTH)) > 0) {
 				auparse_feed(au, tmp, read_size);
 			}
 		}
-		if (read_size == 0) /* check eof */
+		if (read_size == 0) /* EOF */
 			break;
 	} while (stop == 0);
 
@@ -164,7 +182,7 @@ static void dump_whole_record(auparse_state_t *au)
 }
 
 /* This function shows how to iterate through the fields of a record
- * and print its name and raw value and interpretted value. */
+ * and print its name and raw value and interpreted value. */
 static void dump_fields_of_record(auparse_state_t *au)
 {
 	printf("record type %d(%s) has %d fields\n", auparse_get_type(au),

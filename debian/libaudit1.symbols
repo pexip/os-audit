@@ -8,7 +8,6 @@ libaudit.so.1 libaudit1 #MINVER#
  _audit_permadded@Base 1:2.2.1
  _audit_syscalladded@Base 1:2.2.1
  audit_action_to_name@Base 1:2.2.1
- audit_add_dir@Base 1:2.2.1
  audit_add_rule_data@Base 1:2.2.1
  audit_add_watch@Base 1:2.2.1
  audit_add_watch_dir@Base 1:2.2.1

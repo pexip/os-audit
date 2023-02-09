@@ -1,6 +1,5 @@
-
 /* rnode.h --
- * Copyright 2007,2016-17 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2007,2016-17,21 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -24,21 +23,25 @@
 #ifndef RNODE_HEADER
 #define RNODE_HEADER
 
-/* This is the node of the linked list. Any data elements that are
+#define NFIELDS 36
+
+/* This is the data node of the fields list. Any data elements that are
  * per field goes here. */
 typedef struct _nvnode{
   char *name;           // The name string
   char *val;            // The value field
-  char *interp_val;     // The value field interpretted
+  char *interp_val;     // The value field interpreted
   unsigned int item;    // Which item of the same event
-  struct _nvnode* next; // Next nvpair node pointer
 } nvnode;
 
-/* This is the field linked list head. */
+/* This is the field list head. */
 typedef struct {
-  nvnode *head;         // List head
-  nvnode *cur;          // Pointer to current node
+  nvnode *array;    // array of fields
+  unsigned int cur;     // Index to current node
   unsigned int cnt;     // How many items in this list
+  unsigned int size;    // Number of allocated items
+  char *record;		// Holds the parsed up record
+  char *end;		// End of the parsed up record
 } nvlist;
 
 

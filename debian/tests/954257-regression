@@ -2,7 +2,7 @@
 
 set -ex
 
-for py in $(py3versions -r 2>/dev/null); do
+for py in $(py3versions -s 2>/dev/null); do
   cd "$AUTOPKGTEST_TMP"
 
   echo "Testing with $py:"
