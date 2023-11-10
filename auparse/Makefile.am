@@ -13,18 +13,20 @@
 # Lesser General Public License for more details.
 # 
 # You should have received a copy of the GNU Lesser General Public
-# License along with this library; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# License along with this program; see the file COPYING.lib. If not, write to
+# the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+# Boston, MA 02110-1335, USA.
 # 
 # Authors:
 #   Steve Grubb <sgrubb@redhat.com>
+#   Richard Guy Briggs <rgb@redhat.com>
 #
 
 SUBDIRS = test
 EXTRA_DIST = expression-design.txt
 CLEANFILES = $(BUILT_SOURCES)
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
-AM_CFLAGS = -fPIC -DPIC -D_GNU_SOURCE -g ${DEBUG} -Wno-pointer-sign -Wno-enum-compare -Wno-switch
+AM_CFLAGS = -fPIC -DPIC -D_GNU_SOURCE -g ${DEBUG} -Wno-pointer-sign -Wno-enum-compare -Wno-switch ${WFLAGS}
 AM_CPPFLAGS = -I. -I${top_srcdir} -I${top_srcdir}/src -I${top_srcdir}/lib -I${top_srcdir}/common
 LIBS =
 
@@ -45,8 +47,8 @@ libauparse_la_SOURCES = lru.c interpret.c nvlist.c ellist.c		\
 	normalize_record_map.h normalize_syscall_map.h
 nodist_libauparse_la_SOURCES = $(BUILT_SOURCES)
 
-libauparse_la_LIBADD = ${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.a
-libauparse_la_DEPENDENCIES = $(libauparse_la_SOURCES) ${top_builddir}/config.h ${top_builddir}/common/libaucommon.a
+libauparse_la_LIBADD = ${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.la
+libauparse_la_DEPENDENCIES = $(libauparse_la_SOURCES) ${top_builddir}/config.h ${top_builddir}/common/libaucommon.la
 libauparse_la_LDFLAGS = -Wl,-z,relro
 
 message.c:
@@ -65,7 +67,8 @@ BUILT_SOURCES = accesstabs.h captabs.h clocktabs.h clone-flagtabs.h \
 	tcpoptnametabs.h typetabs.h umounttabs.h inethooktabs.h \
 	netactiontabs.h \
 	normalize_obj_kind_maps.h normalize_record_maps.h \
-	normalize_syscall_maps.h normalize_evtypetabs.h bpftabs.h
+	normalize_syscall_maps.h normalize_evtypetabs.h bpftabs.h \
+	openat2-resolvetabs.h
 noinst_PROGRAMS = gen_accesstabs_h gen_captabs_h gen_clock_h \
 	gen_clone-flagtabs_h \
 	gen_epoll_ctls_h gen_famtabs_h \
@@ -82,7 +85,8 @@ noinst_PROGRAMS = gen_accesstabs_h gen_captabs_h gen_clock_h \
 	gen_socktypetabs_h gen_tcpoptnametabs_h gen_typetabs_h \
 	gen_umounttabs_h gen_inethooktabs_h gen_netactiontabs_h \
 	gen_normalize_record_map gen_normalize_syscall_map \
-	gen_normalize_obj_kind_map gen_normalize_evtypetabs_h gen_bpftabs_h
+	gen_normalize_obj_kind_map gen_normalize_evtypetabs_h gen_bpftabs_h \
+	gen_openat2-resolvetabs_h
 
 gen_accesstabs_h_SOURCES = ../lib/gen_tables.c ../lib/gen_tables.h accesstab.h
 gen_accesstabs_h_CFLAGS = '-DTABLE_H="accesstab.h"'
@@ -659,4 +663,18 @@ gen_bpftabs_h$(BUILD_EXEEXT): CPPFLAGS=$(CPPFLAGS_FOR_BUILD)
 gen_bpftabs_h$(BUILD_EXEEXT): LDFLAGS=$(LDFLAGS_FOR_BUILD)
 bpftabs.h: gen_bpftabs_h Makefile
 	./gen_bpftabs_h --i2s bpf > $@
+
+gen_openat2_resolvetabs_h_SOURCES = ../lib/gen_tables.c ../lib/gen_tables.h \
+	openat2-resolvetab.h
+gen_openat2_resolvetabs_h_CFLAGS = '-DTABLE_H="openat2-resolvetab.h"'
+$(gen_openat2_resolvetabs_h_OBJECTS): CC=$(CC_FOR_BUILD)
+$(gen_openat2_resolvetabs_h_OBJECTS): CFLAGS=$(CFLAGS_FOR_BUILD)
+$(gen_openat2_resolvetabs_h_OBJECTS): CPPFLAGS=$(CPPFLAGS_FOR_BUILD)
+$(gen_openat2_resolvetabs_h_OBJECTS): LDFLAGS=$(LDFLAGS_FOR_BUILD)
+gen_openat2-resolvetabs_h$(BUILD_EXEEXT): CC=$(CC_FOR_BUILD)
+gen_openat2-resolvetabs_h$(BUILD_EXEEXT): CFLAGS=$(CFLAGS_FOR_BUILD)
+gen_openat2-resolvetabs_h$(BUILD_EXEEXT): CPPFLAGS=$(CPPFLAGS_FOR_BUILD)
+gen_openat2-resolvetabs_h$(BUILD_EXEEXT): LDFLAGS=$(LDFLAGS_FOR_BUILD)
+openat2-resolvetabs.h: gen_openat2-resolvetabs_h Makefile
+	./gen_openat2-resolvetabs_h --i2s-transtab openat2_resolve > $@
 

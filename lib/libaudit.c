@@ -38,7 +38,6 @@
 #include <sys/stat.h>
 #include <fcntl.h>	/* O_NOFOLLOW needs gnu defined */
 #include <limits.h>	/* for PATH_MAX */
-#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h> /* AF_MAX */
 #ifdef HAVE_LIBCAP_NG
@@ -560,8 +559,7 @@ int audit_reset_backlog_wait_time_actual(int fd)
 
 int audit_set_feature(int fd, unsigned feature, unsigned value, unsigned lock)
 {
-#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
-    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+#if HAVE_DECL_AUDIT_FEATURE_VERSION == 1
 	int rc;
 	struct audit_features f;
 
@@ -585,8 +583,7 @@ int audit_set_feature(int fd, unsigned feature, unsigned value, unsigned lock)
 
 int audit_request_features(int fd)
 {
-#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
-    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+#if HAVE_DECL_AUDIT_FEATURE_VERSION == 1
 	int rc;
 	struct audit_features f;
 
@@ -605,8 +602,7 @@ int audit_request_features(int fd)
 
 extern int  audit_set_loginuid_immutable(int fd)
 {
-#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
-    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+#if HAVE_DECL_AUDIT_FEATURE_VERSION == 1
 	return audit_set_feature(fd, AUDIT_FEATURE_LOGINUID_IMMUTABLE, 1, 1);
 #else
 	errno = EINVAL;
@@ -627,8 +623,7 @@ static void load_feature_bitmap(void)
 		return;
 	}
 
-#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
-    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+#if defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
 	if ((rc = audit_request_status(fd)) > 0) {
 		struct audit_reply rep;
 		int i;
@@ -698,12 +693,40 @@ int audit_request_signal_info(int fd)
 char *audit_format_signal_info(char *buf, int len, char *op,
 			       struct audit_reply *rep, char *res)
 {
+	struct stat sb;
+	char path[32], ses[16];
+	int rlen;
+	snprintf(path, sizeof(path), "/proc/%u", rep->signal_info->pid);
+	int fd = open(path, O_RDONLY);
+	if (fd >= 0) {
+		if (fstat(fd, &sb) < 0)
+			sb.st_uid = -1;
+		close(fd);
+	} else
+		sb.st_uid = -1;
+	snprintf(path, sizeof(path), "/proc/%u/sessionid",
+		 rep->signal_info->pid);
+	fd = open(path, O_RDONLY, rep->signal_info->pid);
+	if (fd < 0)
+		strcpy(ses, "4294967295");
+	else {
+		do {
+			rlen = read(fd, ses, sizeof(ses));
+		} while (rlen < 0 && errno == EINTR);
+		close(fd);
+		if (rlen < 0 || rlen >= sizeof(ses))
+			strcpy(ses, "4294967295");
+		else
+			ses[rlen] = 0;
+	}
 	if (rep->len == 24)
-		snprintf(buf, len, "op=%s auid=%u pid=%d res=%s", op,
-			rep->signal_info->uid, rep->signal_info->pid, res);
+		snprintf(buf, len, "op=%s auid=%u uid=%u ses=%s pid=%d res=%s",
+			op, rep->signal_info->uid, sb.st_uid, ses,
+			rep->signal_info->pid, res);
 	else
-		snprintf(buf, len, "op=%s auid=%u pid=%d subj=%s res=%s",
-			op, rep->signal_info->uid, rep->signal_info->pid,
+		snprintf(buf, len, "op=%s auid=%u uid=%u ses=%s pid=%d subj=%s res=%s",
+			op,rep->signal_info->uid, sb.st_uid, ses,
+			rep->signal_info->pid,
 			rep->signal_info->ctx, res);
 	return buf;
 }
@@ -745,11 +768,6 @@ int audit_update_watch_perms(struct audit_rule_data *rule, int perms)
 int audit_add_watch(struct audit_rule_data **rulep, const char *path)
 {
 	return audit_add_watch_dir(AUDIT_WATCH, rulep, path);
-}
-
-int audit_add_dir(struct audit_rule_data **rulep, const char *path)
-{
-	return audit_add_watch_dir(AUDIT_DIR, rulep, path);
 }
 
 int audit_add_watch_dir(int type, struct audit_rule_data **rulep,
@@ -1840,9 +1858,17 @@ static int audit_name_to_uid(const char *name, uid_t *uid)
 {
 	struct passwd *pw;
 
+	errno = 0;
 	pw = getpwnam(name);
-	if (pw == NULL)
+	if (pw == NULL) {
+		/* getpwnam() might return ECONNREFUSED in some very
+		 * specific cases when using LDAP.
+		 * Manually set it to ENOENT so callers don't get confused
+		 * with netlink's ECONNREFUSED */
+		if (errno == ECONNREFUSED)
+			errno = ENOENT;
 		return 1;
+	}
 
 	memset(pw->pw_passwd, ' ', strlen(pw->pw_passwd));
 	*uid = pw->pw_uid;
@@ -1853,9 +1879,14 @@ static int audit_name_to_gid(const char *name, gid_t *gid)
 {
 	struct group *gr;
 
+	errno = 0;
 	gr = getgrnam(name);
-	if (gr == NULL)
+	if (gr == NULL) {
+		/* See above for explanation. */
+		if (errno == ECONNREFUSED)
+			errno = ENOENT;
 		return 1;
+	}
 
 	*gid = gr->gr_gid;
 	return 0;

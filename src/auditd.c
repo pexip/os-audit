@@ -1,5 +1,5 @@
 /* auditd.c -- 
- * Copyright 2004-09,2011,2013,2016-18 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-09,2011,2013,2016-18,2021 Red Hat Inc.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -79,7 +79,6 @@ static uint32_t session;
 
 /* Local function prototypes */
 int send_audit_event(int type, const char *str);
-static void close_down(void);
 static void clean_exit(void);
 static int get_reply(int fd, struct audit_reply *rep, int seq);
 static char *getsubj(char *subj);
@@ -113,16 +112,9 @@ static void term_handler(struct ev_loop *loop, struct ev_signal *sig,
 	EV_STOP ();
 }
 
-/*
- * Used with sigalrm to force exit
- */
-static void thread_killer( int sig )
-{
-	exit(0);
-}
 
 /*
- * Used with sigalrm to force exit
+ * Used to reconfigure the daemon
  */
 static void hup_handler( struct ev_loop *loop, struct ev_signal *sig, int revents )
 {
@@ -200,6 +192,7 @@ static void cont_handler(struct ev_loop *loop, struct ev_signal *sig,
 	if (f == NULL)
 		return;
 
+	fprintf(f, "audit version = %s\n", VERSION);
 	time_t now = time(0);
 	strftime(buf, sizeof(buf), "%x %X", localtime(&now));
 	fprintf(f, "current time = %s\n", buf);
@@ -311,8 +304,9 @@ int send_audit_event(int type, const char *str)
 
 	e->reply.type = type;
 	if (seq_num == 0) {
-		srand(time(NULL));
-		seq_num = rand()%10000;
+		// seq_num does not have to cryptographically secure
+		srandom(time(NULL));
+		seq_num = random()%10000;
 	} else
 		seq_num++;
 	// Write event into netlink area like normal events
@@ -456,8 +450,10 @@ static int become_daemon(void)
 				return -1;
 
 			/* Success - die a happy death */
-			if (status == SUCCESS)
+			if (status == SUCCESS) {
+				free_config(&config);
 				_exit(0);
+			}
 			return -1;
 	}
 
@@ -478,88 +474,97 @@ static void tell_parent(int status)
 static void netlink_handler(struct ev_loop *loop, struct ev_io *io,
 			int revents)
 {
-	if (cur_event == NULL) {
-		if ((cur_event = malloc(sizeof(*cur_event))) == NULL) {
-			char emsg[DEFAULT_BUF_SZ];
-			if (*subj)
-				snprintf(emsg, sizeof(emsg),
+	int rc = 1, cnt = 0;
+
+	// Try to get all the events that are waiting but yield after 5 to
+	// let other handlers run. Five should cover PATH events.
+	// FIXME: backing down to 3 until IPC is faster
+	while (rc > 0 && cnt < 3) {
+		if (cur_event == NULL) {
+			if ((cur_event = malloc(sizeof(*cur_event))) == NULL) {
+				char emsg[DEFAULT_BUF_SZ];
+				if (*subj)
+					snprintf(emsg, sizeof(emsg),
 			"op=error-halt auid=%u pid=%d subj=%s res=failed",
-					audit_getloginuid(), getpid(), subj);
-			else
-				snprintf(emsg, sizeof(emsg),
+						audit_getloginuid(),
+						getpid(), subj);
+				else
+					snprintf(emsg, sizeof(emsg),
 				 "op=error-halt auid=%u pid=%d res=failed",
-					 audit_getloginuid(), getpid());
-			EV_STOP ();
-			send_audit_event(AUDIT_DAEMON_ABORT, emsg);
-			audit_msg(LOG_ERR,
+						 audit_getloginuid(),
+						 getpid());
+				EV_STOP ();
+				send_audit_event(AUDIT_DAEMON_ABORT, emsg);
+				audit_msg(LOG_ERR,
 				  "Cannot allocate audit reply, exiting");
-			close_down();
-			if (pidfile)
-				unlink(pidfile);
-			shutdown_dispatcher();
-			return;
+				shutdown_events();
+				if (pidfile)
+					unlink(pidfile);
+				shutdown_dispatcher();
+				return;
+			}
+			cur_event->ack_func = NULL;
 		}
-		cur_event->ack_func = NULL;
-	}
-	if (audit_get_reply(fd, &cur_event->reply,
-			    GET_REPLY_NONBLOCKING, 0) > 0) {
-		switch (cur_event->reply.type)
-		{	/* Don't process these */
-		case NLMSG_NOOP:
-		case NLMSG_DONE:
-		case NLMSG_ERROR:
-		case AUDIT_GET: /* Or these */
-		case AUDIT_WATCH_INS...AUDIT_WATCH_LIST:
-		case AUDIT_ADD_RULE...AUDIT_GET_FEATURE:
-		case AUDIT_FIRST_DAEMON...AUDIT_LAST_DAEMON:
-		case AUDIT_REPLACE:
-			break;
-		case AUDIT_SIGNAL_INFO:
-			if (hup_info_requested) {
-				char hup[MAX_AUDIT_MESSAGE_LENGTH];
-				audit_msg(LOG_DEBUG,
+
+		rc = audit_get_reply(fd, &cur_event->reply,
+			    GET_REPLY_NONBLOCKING, 0);
+		if (rc > 0) {
+			switch (cur_event->reply.type)
+			{	/* Don't process these */
+			case NLMSG_NOOP:
+			case NLMSG_DONE:
+			case NLMSG_ERROR:
+			case AUDIT_GET: /* Or these */
+			case AUDIT_WATCH_INS...AUDIT_WATCH_LIST:
+			case AUDIT_ADD_RULE...AUDIT_GET_FEATURE:
+			case AUDIT_FIRST_DAEMON...AUDIT_LAST_DAEMON:
+			case AUDIT_REPLACE:
+				break;
+			case AUDIT_SIGNAL_INFO:
+				if (hup_info_requested) {
+					char hup[MAX_AUDIT_MESSAGE_LENGTH];
+					audit_msg(LOG_DEBUG,
 				    "HUP detected, starting config manager");
-				reconfig_ev = cur_event;
-				if (start_config_manager(cur_event)) {
-					audit_format_signal_info(hup,
+					reconfig_ev = cur_event;
+					if (start_config_manager(cur_event)) {
+						audit_format_signal_info(hup,
 								 sizeof(hup),
 						 "reconfigure state=no-change",
 							 &cur_event->reply,
 								 "failed");
 					send_audit_event(AUDIT_DAEMON_CONFIG,
 							 hup);
-				}
-				cur_event = NULL;
-				hup_info_requested = 0;
-			} else if (usr1_info_requested) {
-				char usr1[MAX_AUDIT_MESSAGE_LENGTH];
+					}
+					cur_event = NULL;
+					hup_info_requested = 0;
+				} else if (usr1_info_requested) {
+					char usr1[MAX_AUDIT_MESSAGE_LENGTH];
 				audit_format_signal_info(usr1, sizeof(usr1),
 							 "rotate-logs",
 							 &cur_event->reply,
 							 "success");
 				send_audit_event(AUDIT_DAEMON_ROTATE, usr1);
-				usr1_info_requested = 0;
-			} else if (usr2_info_requested) {
-				char usr2[MAX_AUDIT_MESSAGE_LENGTH];
+					usr1_info_requested = 0;
+				} else if (usr2_info_requested) {
+					char usr2[MAX_AUDIT_MESSAGE_LENGTH];
 				audit_format_signal_info(usr2, sizeof(usr2),
 							 "resume-logging",
 							 &cur_event->reply,
 							 "success");
-				resume_logging();
-				libdisp_resume();
-				send_audit_event(AUDIT_DAEMON_RESUME, usr2);
-				usr2_info_requested = 0;
+					resume_logging();
+					libdisp_resume();
+					send_audit_event(AUDIT_DAEMON_RESUME,
+							 usr2);
+					usr2_info_requested = 0;
+				}
+				break;
+			default:
+				distribute_event(cur_event);
+				cur_event = NULL;
+				break;
 			}
-			break;
-		default:
-			distribute_event(cur_event);
-			cur_event = NULL;
-			break;
 		}
-	} else {
-		if (errno == EFBIG) {
-			// FIXME do err action
-		}
+		cnt++;
 	}
 }
 
@@ -756,8 +761,17 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	/* Startup libev and dispatcher */
-	loop = ev_default_loop(EVFLAG_NOENV);
+	/* Startup libev. If we are not aggregating events, use the select
+	 * backend which is faster for small numbers of descriptors. This
+	 * will fallback to the epoll backend otherwise. */
+	{
+	int flags = EVFLAG_NOENV;
+	if (config.tcp_listen_port == 0)
+		flags |= EVBACKEND_SELECT;
+	loop = ev_default_loop(flags);
+	}
+
+	/* Startup dispatcher */
 	if (init_dispatcher(&config)) {
 		if (pidfile)
 			unlink(pidfile);
@@ -866,7 +880,7 @@ int main(int argc, char *argv[])
 		audit_msg(LOG_ERR,
 		"Unable to set initial audit startup state to '%s', exiting",
 			startup_states[opt_startup]);
-		close_down();
+		shutdown_events();
 		if (pidfile)
 			unlink(pidfile);
 		shutdown_dispatcher();
@@ -895,7 +909,7 @@ int main(int argc, char *argv[])
 		stop = 1;
 		send_audit_event(AUDIT_DAEMON_ABORT, emsg);
 		audit_msg(LOG_ERR, "Unable to set audit pid, exiting");
-		close_down();
+		shutdown_events();
 		if (pidfile)
 			unlink(pidfile);
 		shutdown_dispatcher();
@@ -991,7 +1005,7 @@ int main(int argc, char *argv[])
 	} 
 	if (rc <= 0)
 		send_audit_event(AUDIT_DAEMON_END, 
-			"op=terminate auid=-1 pid=-1 subj=? res=success");
+		"op=terminate auid=-1 uid=-1 ses=-1 pid=-1 subj=? res=success");
 	free(cur_event);
 
 	// Tear down IO watchers Part 2
@@ -1009,24 +1023,11 @@ int main(int argc, char *argv[])
 	// Tear down IO watchers Part 3
 	ev_signal_stop(loop, &sigchld_watcher);
 
-	close_down();
+	shutdown_events();
 	free_config(&config);
 	ev_default_destroy();
 
 	return 0;
-}
-
-static void close_down(void)
-{
-	struct sigaction sa;
-
-	/* We are going down. Give the event thread a chance to shutdown.
-	   Just in case it hangs, set a timer to get us out of trouble. */
-	sa.sa_flags = 0 ;
-	sigemptyset( &sa.sa_mask ) ;
-	sa.sa_handler = thread_killer;
-	sigaction( SIGALRM, &sa, NULL );
-	shutdown_events();
 }
 
 

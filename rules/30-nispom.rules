@@ -1,4 +1,4 @@
-## This file contains the a sample audit configuration intended to
+## This file contains a sample audit configuration intended to
 ## meet the NISPOM Chapter 8 rules. This rule depends on having
 ## 10-base-config.rules & 99-finalize.rules installed.
 
@@ -47,10 +47,10 @@
 -a always,exit -F arch=b64 -S mkdir,link,symlink,mkdirat -F exit=-EPERM -F key=creation
 
 ## unsuccessful open
--a always,exit -F arch=b32 -S open,openat,open_by_handle_at -F exit=-EACCES -F key=open
--a always,exit -F arch=b64 -S open,openat,open_by_handle_at -F exit=-EACCES -F key=open
--a always,exit -F arch=b32 -S open,openat,open_by_handle_at -F exit=-EPERM -F key=open
--a always,exit -F arch=b64 -S open,openat,open_by_handle_at -F exit=-EPERM -F key=open
+-a always,exit -F arch=b32 -S open,openat,openat2,open_by_handle_at -F exit=-EACCES -F key=open
+-a always,exit -F arch=b64 -S open,openat,openat2,open_by_handle_at -F exit=-EACCES -F key=open
+-a always,exit -F arch=b32 -S open,openat,openat2,open_by_handle_at -F exit=-EPERM -F key=open
+-a always,exit -F arch=b64 -S open,openat,openat2,open_by_handle_at -F exit=-EPERM -F key=open
 
 ## unsuccessful close
 -a always,exit -F arch=b32 -S close -F exit=-EIO -F key=close

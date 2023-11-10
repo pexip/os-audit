@@ -14,8 +14,9 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# along with this program; see the file COPYING. If not, write to the
+# Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+# Boston, MA 02110-1335, USA.
 #
 # Authors:
 #   Klaus Heinrich Kiwi <klausk@br.ibm.com>
@@ -24,7 +25,7 @@
 AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/lib -I${top_srcdir}/auparse
 CONFIG_CLEAN_FILES = *.rej *.orig
 EXTRA_DIST = zos-remote.conf audispd-zos-remote.conf
-LIBS = -L${top_builddir}/auparse -lauparse
+LIBS = ${top_builddir}/auparse/libauparse.la
 LDADD = -lpthread -lldap -llber $(CAPNG_LDADD) 
 plugin_confdir=$(sysconfdir)/audit
 plugin_conf = zos-remote.conf
@@ -36,7 +37,7 @@ noinst_HEADERS = zos-remote-log.h zos-remote-ldap.h zos-remote-config.h \
 	zos-remote-queue.h
 audispd_zos_remote_SOURCES = zos-remote-plugin.c zos-remote-log.c \
 	zos-remote-ldap.c zos-remote-config.c zos-remote-queue.c
-audispd_zos_remote_CFLAGS = -W -Wall -Wundef -D_GNU_SOURCE -fPIE -DPIE
+audispd_zos_remote_CFLAGS = -W -Wall -Wundef -D_GNU_SOURCE -fPIE -DPIE ${WFLAGS}
 audispd_zos_remote_LDFLAGS = -pie -Wl,-z,relro -Wl,-z,now
 
 install-data-hook:

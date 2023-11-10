@@ -35,7 +35,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <string.h> // for memmove()
 #include <assert.h>
 #include <stdarg.h>
 #include <errno.h>
@@ -85,7 +85,6 @@
 /*****************************************************************************/
 
 static int databuf_shift_data_to_beginning(DataBuf *db);
-static int databuf_strcat(DataBuf *db, const char *str);
 
 /*****************************************************************************/
 /*************************  External Global Variables  ***********************/
@@ -143,7 +142,6 @@ void databuf_print(DataBuf *db, int print_data, char *fmt, ...)
            fmt?" ":"", db->alloc_size, db->alloc_ptr, db->offset, databuf_beg(db), db->len, db->max_len);
 
     if (db->flags & DATABUF_FLAG_PRESERVE_HEAD) printf("PRESERVE_HEAD ");
-    if (db->flags & DATABUF_FLAG_STRING)        printf("STRING ");
     printf("]");
     
     if (print_data) {
@@ -172,9 +170,6 @@ int databuf_init(DataBuf *db, size_t size, unsigned flags)
             return -1;
         }
     }
-
-    // For strings intialize with initial NULL terminator
-    if (flags & DATABUF_FLAG_STRING) databuf_strcat(db, "");
 
     return 1;
 }
@@ -210,10 +205,11 @@ int databuf_append(DataBuf *db, const char *src, size_t src_size)
     if (debug) databuf_print(db, 1, "databuf_append() size=%zd", src_size);
 #endif
     if ((new_size > db->alloc_size) ||
-        ((db->flags & DATABUF_FLAG_PRESERVE_HEAD) && !databuf_tail_available(db, src_size))) {
+        ((db->flags & DATABUF_FLAG_PRESERVE_HEAD) &&
+			!databuf_tail_available(db, src_size))) {
         /* not enough room, we must realloc */
         void *new_alloc;
-        
+
         databuf_shift_data_to_beginning(db);
         if ((new_alloc = realloc(db->alloc_ptr, new_size))) {
             db->alloc_ptr  = new_alloc;
@@ -243,31 +239,14 @@ int databuf_append(DataBuf *db, const char *src, size_t src_size)
     return 1;
 }
 
-static int databuf_strcat(DataBuf *db, const char *str)
+int databuf_replace(DataBuf *db, const char *src, size_t src_size)
 {
-    size_t str_len;
-
     DATABUF_VALIDATE(db);
 
-    if (str == NULL) return 0;
+    if (src == NULL || src_size == 0) return 0;
 
-    // +1 so the data append also copies the NULL terminator
-    str_len = strlen(str) + 1;
-
-    // If there is a NULL terminator exclude it so the subsequent
-    // data append produces a proper string concatenation
-    if (db->len > 0) {
-        char *last_char = databuf_end(db) - 1;
-        if (last_char && *last_char == 0) {
-            db->len--;          // backup over NULL terminator
-        }
-    }
-
-    // Copy string and NULL terminator
-    databuf_append(db, str, str_len);
-
-    DATABUF_VALIDATE(db);
-    return 1;
+    db->len = 0;
+    return databuf_append(db, src, src_size);
 }
 
 int databuf_advance(DataBuf *db, size_t advance)
@@ -336,24 +315,9 @@ int main(int argc, char **argv)
     char *data;
     int rc;
 
-    rc = databuf_init(&buf, size, DATABUF_FLAG_STRING);
+    rc = databuf_init(&buf, size, 0);
     assert(rc);
     databuf_print(&buf, 1, "after init size=%d", size);
-
-#if 1
-    data = "a";
-    assert(databuf_strcat(&buf, data));
-    databuf_print(&buf, 1, "after strcat(%s)", data);
-
-    data = "bb";
-    assert(databuf_strcat(&buf, data));
-    databuf_print(&buf, 1, "after strcat(%s)", data);
-
-    data = "ccc";
-    assert(databuf_strcat(&buf, data));
-    databuf_print(&buf, 1, "after strcat(%s)", data);
-
-#endif
 
     databuf_free(&buf);
 

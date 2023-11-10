@@ -1,7 +1,7 @@
 /*
 * ausearch-report.c - Format and output events
-* Copyright (c) 2005-09,2011-13,2016-17 Red Hat Inc., Durham, North Carolina.
-* All Rights Reserved. 
+* Copyright (c) 2005-09,2011-13,2016-17,2021 Red Hat
+* All Rights Reserved.
 *
 * This software may be freely redistributed and/or modified under the
 * terms of the GNU General Public License as published by the Free
@@ -15,7 +15,7 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
 * Boston, MA 02110-1335, USA.
 *
 * Authors:
@@ -41,11 +41,13 @@ static void output_default(llist *l);
 static void output_interpreted(llist *l);
 static void output_interpreted_record(const lnode *n, const event *e);
 static void feed_auparse(llist *l, auparse_callback_ptr callback);
-static void interpret(char *name, char *val, int comma, int rtype);
+static void report_interpret(char *name, char *val, int comma, int rtype);
 static void csv_event(auparse_state_t *au,
 		auparse_cb_event_t cb_event_type, void *user_data);
 static void text_event(auparse_state_t *au,
 		auparse_cb_event_t cb_event_type, void *user_data);
+
+extern time_t lol_get_eoe_timeout(void);
 
 /* The machine based on elf type */
 static unsigned long machine = -1;
@@ -74,7 +76,7 @@ void ausearch_free_interpretations(void)
 }
 
 /* This function branches to the correct output format */
-void output_record(llist *l)
+void output_event(llist *l)
 {
 	switch (report_format) {
 		case RPT_RAW:
@@ -311,7 +313,7 @@ no_print:
 		val = ptr;
 		
 		// print interpreted string
-		interpret(name, val, comma, n->type);
+		report_interpret(name, val, comma, n->type);
 	}
 	ausearch_free_interpretations();
 
@@ -325,7 +327,7 @@ no_print:
 	printf("\n");
 }
 
-static void interpret(char *name, char *val, int comma, int rtype)
+static void report_interpret(char *name, char *val, int comma, int rtype)
 {
 	int type;
 	idata id;
@@ -448,7 +450,7 @@ static void csv_event(auparse_state_t *au,
 	rc = auparse_normalize(au,
 			extra_labels ? NORM_OPT_ALL : NORM_OPT_NO_ATTRS);
 
-	//DATE
+	// DATE
 	if (tv) {
 		strftime(tmp, sizeof(tmp), "%x", tv);
 		printf("%s", tmp);
@@ -600,7 +602,13 @@ static void csv_event(auparse_state_t *au,
 
 		if (auparse_get_field_type(au) == AUPARSE_TYPE_ESCAPED_FILE)
 			val = auparse_interpret_realpath(au);
-		else
+		else if (auparse_get_type(au) == AUDIT_CONFIG_CHANGE) {
+			if (action && ((strcmp(action, "set") == 0) ||
+			    (strcmp(action, "seccomp-logging") == 0)))
+				val = auparse_get_field_name(au);
+			else
+				val = auparse_interpret_field(au);
+		} else
 			val = auparse_interpret_field(au);
 		printf("%s", val);
 	}
@@ -704,7 +712,8 @@ static void text_event(auparse_state_t *au,
 	rc = auparse_normalize_subject_secondary(au);
 	if (rc == 1) {
 		int uid = auparse_get_field_int(au);
-		if (uid != id && id != -2)
+		// if they are different, id exists, and uid is not unset
+		if (uid != id && id != -2 && uid != -1)
 			printf(", acting as %s,", auparse_interpret_field(au));
 	}
 
@@ -748,6 +757,13 @@ static void text_event(auparse_state_t *au,
 			val = auparse_interpret_sock_address(au);
 			if (val == NULL)
 				val = auparse_interpret_sock_family(au);
+		} else if (type == AUDIT_CONFIG_CHANGE) {
+			if (action &&
+			    ((strcmp(action, "set") == 0) ||
+			      strcmp(action, "seccomp-logging") == 0))
+				val = auparse_get_field_name(au);
+			else
+				val = auparse_interpret_field(au);
 		}
 
 		if (val == NULL)
@@ -776,7 +792,7 @@ static void text_event(auparse_state_t *au,
 
 /* This function will push an event into auparse. The callback arg will
  * perform all formatting for the intended report option. */
-static auparse_state_t *au; 
+static auparse_state_t *au = NULL;
 static void feed_auparse(llist *l, auparse_callback_ptr callback)
 {
 	const lnode *n;
@@ -787,9 +803,12 @@ static void feed_auparse(llist *l, auparse_callback_ptr callback)
 		fprintf(stderr, "Error - no elements in record.");
 		return;
 	}
-	au = auparse_init(AUSOURCE_FEED, 0);
-	auparse_set_escape_mode(au, escape_mode);
-	auparse_add_callback(au, callback, NULL, NULL);
+	if (au == NULL) {
+		au = auparse_init(AUSOURCE_FEED, 0);
+		auparse_set_escape_mode(au, escape_mode);
+		auparse_set_eoe_timeout(lol_get_eoe_timeout());
+		auparse_add_callback(au, callback, NULL, NULL);
+	}
 	do {
 		// Records need to be terminated by a newline
 		// Temporarily replace it.
@@ -803,6 +822,11 @@ static void feed_auparse(llist *l, auparse_callback_ptr callback)
 	} while ((n=list_next(l)));
 
 	auparse_flush_feed(au);
-	auparse_destroy(au);
 }
 
+void output_auparse_finish(void)
+{
+	if (au)
+		auparse_destroy(au);
+	au = NULL;
+}

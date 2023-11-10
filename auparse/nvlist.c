@@ -1,7 +1,7 @@
 /*
 * nvlist.c - Minimal linked list library for name-value pairs
-* Copyright (c) 2006-07,2016 Red Hat Inc., Durham, North Carolina.
-* All Rights Reserved. 
+* Copyright (c) 2006-07,2016,2021 Red Hat Inc.
+* All Rights Reserved.
 *
 * This library is free software; you can redistribute it and/or
 * modify it under the terms of the GNU Lesser General Public
@@ -28,60 +28,58 @@
 #include "interpret.h"
 #include "auparse-idata.h"
 
+static inline void alloc_array(nvlist *l)
+{
+		l->array = calloc(NFIELDS, sizeof(nvnode));
+		l->size = NFIELDS;
+}
 
 void nvlist_create(nvlist *l)
 {
-	l->head = NULL;
-	l->cur = NULL;
-	l->cnt = 0;
-}
-
-static void nvlist_last(nvlist *l)
-{
-        register nvnode* node;
-
-	if (l->head == NULL)
-		return;
-
-	node = l->head;
-	while (node->next)
-		node = node->next;
-	l->cur = node;
+	if (l) {
+		alloc_array(l);
+		l->cur = 0;
+		l->cnt = 0;
+		l->record = NULL;
+		l->end = NULL;
+	}
 }
 
 nvnode *nvlist_next(nvlist *l)
 {
-	if (l->cur)
-		l->cur = l->cur->next;
-	return l->cur;
+	// Since cur will be incremented, check for 1 less that total
+	if (l->cnt && l->cur < (l->cnt - 1)) {
+		l->cur++;
+		return &l->array[l->cur];
+	}
+	return NULL;
 }
 
-void nvlist_append(nvlist *l, nvnode *node)
+// 0 on success and 1 on error
+int nvlist_append(nvlist *l, nvnode *node)
 {
-	nvnode* newnode = malloc(sizeof(nvnode));
+	if (node->name == NULL)
+		return 1;
 
+	if (l->array == NULL)
+		alloc_array(l);
+
+	if (l->cnt == l->size) {
+		l->array = realloc(l->array, l->size * sizeof(nvnode) * 2);
+		memset(l->array + l->size, 0, sizeof(nvnode) * l->size);
+		l->size = l->size * 2;
+	}
+
+	nvnode *newnode = &l->array[l->cnt];
 	newnode->name = node->name;
 	newnode->val = node->val;
 	newnode->interp_val = NULL;
-	newnode->item = l->cnt; 
-	newnode->next = NULL;
-
-	// if we are at top, fix this up
-	if (l->head == NULL)
-		l->head = newnode;
-	else {	// Otherwise add pointer to newnode
-		if (l->cnt == (l->cur->item+1)) {
-			l->cur->next = newnode;
-		}
-		else {
-			nvlist_last(l);
-			l->cur->next = newnode;
-		}
-	}
+	newnode->item = l->cnt;
 
 	// make newnode current
-	l->cur = newnode;
+	l->cur = l->cnt;
 	l->cnt++;
+	return 0;
 }
 
 /*
@@ -89,23 +87,16 @@ void nvlist_append(nvlist *l, nvnode *node)
  */
 void nvlist_interp_fixup(nvlist *l)
 {
-	if (l->cur) {
-		l->cur->interp_val = l->cur->val;
-		l->cur->val = NULL;
-	}
+	nvnode* node = &l->array[l->cur];
+	node->interp_val = node->val;
+	node->val = NULL;
 }
 
 nvnode *nvlist_goto_rec(nvlist *l, unsigned int i)
 {
-	register nvnode* node;
-
-	node = l->head;       /* start at the beginning */
-	while (node) {
-		if (node->item == i) {
-			l->cur = node;
-			return node;
-		} else
-			node = node->next;
+	if (i < l->cnt) {
+		l->cur = i;
+		return &l->array[l->cur];
 	}
 	return NULL;
 }
@@ -115,52 +106,85 @@ nvnode *nvlist_goto_rec(nvlist *l, unsigned int i)
  */
 int nvlist_find_name(nvlist *l, const char *name)
 {
-        register nvnode* node = l->cur;
+	unsigned int i = l->cur;
+	register nvnode *node;
 
-	while (node) {
-		if (strcmp(node->name, name) == 0) {
-			l->cur = node;
+	if (l->cnt == 0)
+		return 0;
+
+	do {
+		node = &l->array[i];
+		if (node->name && strcmp(node->name, name) == 0) {
+			l->cur = i;
 			return 1;
 		}
-		else
-			node = node->next;
-	}
+		i++;
+	} while (i < l->cnt);
 	return 0;
 }
 
 extern int interp_adjust_type(int rtype, const char *name, const char *val);
-int nvlist_get_cur_type(const rnode *r)
+int nvlist_get_cur_type(rnode *r)
 {
-	const nvlist *l = &r->nv;
-	return auparse_interp_adjust_type(r->type, l->cur->name, l->cur->val);
+	nvlist *l = &r->nv;
+	nvnode *node = &l->array[l->cur];
+	return auparse_interp_adjust_type(r->type, node->name, node->val);
 }
 
-const char *nvlist_interp_cur_val(const rnode *r, auparse_esc_t escape_mode)
+const char *nvlist_interp_cur_val(rnode *r, auparse_esc_t escape_mode)
 {
-	const nvlist *l = &r->nv;
-	if (l->cur->interp_val)
-		return l->cur->interp_val;
-	return interpret(r, escape_mode);
+	nvlist *l = &r->nv;
+	if (l->cnt == 0)
+		return NULL;
+	nvnode *node = &l->array[l->cur];
+	if (node->interp_val)
+		return node->interp_val;
+	return do_interpret(r, escape_mode);
 }
 
-void nvlist_clear(nvlist* l)
+// This function determines if a chunk of memory is part of the parsed up
+// record. If it is, do not free it since it gets free'd at the very end.
+// NOTE: This function causes invalid-pointer-pair errors with ASAN
+static inline int not_in_rec_buf(nvlist *l, const char *ptr)
 {
-	nvnode* nextnode;
-	register nvnode* current;
+	if (ptr >= l->record && ptr < l->end)
+		return 0;
+	return 1;
+}
 
-	if (l->head == NULL)
+// free_interp does not apply to thing coming from interpretation_list
+void nvlist_clear(nvlist *l, int free_interp)
+{
+	unsigned int i = 0;
+	register nvnode *current;
+
+	if (l->cnt == 0)
 		return;
 
-	current = l->head;
-	while (current) {
-		nextnode=current->next;
-		free(current->name);
-		free(current->val);
-		free(current->interp_val);
-		free(current);
-		current=nextnode;
+	while (i < l->cnt) {
+		current = &l->array[i];
+		if (free_interp) {
+			free(current->interp_val);
+			// A couple items are not in parsed up list.
+			// These all come from the aup_list_append path.
+			if (not_in_rec_buf(l, current->name)) {
+				// seperms & key values are strdup'ed
+				if (not_in_rec_buf(l, current->val))
+					free(current->val);
+				free(current->name);
+			}
+		}
+		i++;
 	}
-	l->head = NULL;
-	l->cur = NULL;
+
+	free((void *)l->record);
+
+	free(l->array);
+	l->array = NULL;
+	l->size = 0;
+
+	l->record = NULL;
+	l->end = NULL;
+	l->cur = 0;
 	l->cnt = 0;
 }

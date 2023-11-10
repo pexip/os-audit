@@ -13,8 +13,9 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# along with this program; see the file COPYING. If not, write to the
+# Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+# Boston, MA 02110-1335, USA.
 #
 # Authors:
 #   Steve Grubb <sgrubb@redhat.com>
@@ -24,7 +25,7 @@ CONFIG_CLEAN_FILES = *.rej *.orig
 AM_CPPFLAGS = -D_GNU_SOURCE -fPIC -DPIC -I${top_srcdir} -I${top_srcdir}/lib
 
 noinst_HEADERS = common.h
-libaucommon_a_DEPENDENCIES = ../config.h
-libaucommon_a_SOURCES = audit-fgets.c strsplit.c
-noinst_LIBRARIES = libaucommon.a
+libaucommon_la_DEPENDENCIES = ../config.h
+libaucommon_la_SOURCES = audit-fgets.c strsplit.c
+noinst_LTLIBRARIES = libaucommon.la
 

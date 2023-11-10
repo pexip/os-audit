@@ -64,10 +64,10 @@ int audit_open(void)
 	}
 	if (fcntl(fd, F_SETFD, FD_CLOEXEC) == -1) {
 		saved_errno = errno;
-		close(fd);
 		audit_msg(LOG_ERR, 
 			"Error setting audit netlink socket CLOEXEC flag (%s)", 
 			strerror(errno));
+		close(fd);
 		errno = saved_errno;
 		return -1;
 	}
@@ -147,8 +147,7 @@ static int adjust_reply(struct audit_reply *rep, int len)
 	rep->error    = NULL;
 	rep->signal_info = NULL;
 	rep->conf     = NULL;
-#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
-    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+#if HAVE_DECL_AUDIT_FEATURE_VERSION == 1
 	rep->features = NULL;
 #endif
 	if (!NLMSG_OK(rep->nlh, (unsigned int)len)) {
@@ -173,8 +172,7 @@ static int adjust_reply(struct audit_reply *rep, int len)
 		case AUDIT_GET:   
 			rep->status  = NLMSG_DATA(rep->nlh); 
 			break;
-#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
-    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+#if HAVE_DECL_AUDIT_FEATURE_VERSION == 1
 		case AUDIT_GET_FEATURE:
 			rep->features =  NLMSG_DATA(rep->nlh);
 			break;

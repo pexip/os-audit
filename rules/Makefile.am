@@ -13,8 +13,9 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# along with this program; see the file COPYING. If not, write to the
+# Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+# Boston, MA 02110-1335, USA.
 #
 # Authors:
 #   Steve Grubb <sgrubb@redhat.com>
@@ -37,6 +38,7 @@ EXTRA_DIST = 10-base-config.rules 10-no-audit.rules 11-loginuid.rules \
 30-ospp-v42-6-owner-change-success.rules \
 31-privileged.rules 32-power-abuse.rules \
 40-local.rules 41-containers.rules 42-injection.rules 43-module-load.rules \
+44-installers.rules \
 70-einval.rules 71-networking.rules \
 99-finalize.rules README-rules
 

@@ -12,9 +12,10 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 # Lesser General Public License for more details.
 #
-# You should have received a copy of the GNU Lesser General Public
-# License along with this library; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING. If not, write to the
+# Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+# Boston, MA 02110-1335, USA.
 #
 # Authors:
 #   Steve Grubb <sgrubb@redhat.com>
@@ -29,11 +30,11 @@ plugin_conf = syslog.conf
 sbin_PROGRAMS = audisp-syslog
 man_MANS = audisp-syslog.8
 
-audisp_syslog_DEPENDENCIES = ${top_builddir}/common/libaucommon.a
+audisp_syslog_DEPENDENCIES = ${top_builddir}/common/libaucommon.la
 audisp_syslog_SOURCES = audisp-syslog.c
-audisp_syslog_CFLAGS = -fPIE -DPIE -g -D_GNU_SOURCE -Wundef
+audisp_syslog_CFLAGS = -fPIE -DPIE -g -D_GNU_SOURCE -Wundef ${WFLAGS}
 audisp_syslog_LDFLAGS = -pie -Wl,-z,relro -Wl,-z,now
-audisp_syslog_LDADD = $(CAPNG_LDADD) -L${top_builddir}/common -laucommon -L${top_builddir}/auparse -lauparse
+audisp_syslog_LDADD = $(CAPNG_LDADD) ${top_builddir}/common/libaucommon.la ${top_builddir}/auparse/libauparse.la
 
 install-data-hook:
 	mkdir -p -m 0750 ${DESTDIR}${plugin_confdir}

@@ -1,4 +1,4 @@
-.TH AUDITCTL: "8" "Aug 2018" "Red Hat" "System Administration Utilities"
+.TH AUDITCTL "8" "July 2021" "Red Hat" "System Administration Utilities"
 .SH NAME
 auditctl \- a utility to assist controlling the kernel's audit system
 .SH SYNOPSIS
@@ -11,7 +11,7 @@ The \fBauditctl\fP program is used to configure kernel options related to auditi
 Set max number (limit) of outstanding audit buffers allowed (Kernel Default=64) If all buffers are full, the failure flag is consulted by the kernel for action.
 .TP
 .BI \-\-backlog_wait_time \ \fIwait_time\fP
-Set the time for the kernel to wait (Kernel Default 60*HZ) when the backlog limit is reached before queuing more audit events to be transferred to auditd. The number must be greater than or equal to zero and less that 10 times the default value.
+Set the time for the kernel to wait (Kernel Default 60*HZ) when the backlog limit is reached before queuing more audit events to be transferred to auditd. The number must be greater than or equal to zero and less than 10 times the default value.
 .TP
 .BI \-\-reset_backlog_wait_time_actual
 Reset the actual backlog wait time counter shown by the status command.
@@ -52,7 +52,7 @@ Reset the lost record counter shown by the status command.
 .BI \-R\  file
 Read rules from a \fIfile\fP. The rules must be 1 per line and in the order that they are to be executed in. The rule file must be owned by root and not readable by other users or it will be rejected. The rule file may have comments embedded by starting the line with a '#' character. Rules that are read from a file are identical to what you would type on a command line except they are not preceded by auditctl (since auditctl is the one executing the file) and you would not use shell escaping since auditctl is reading the file instead of bash.
 .TP
-.BI \-\-signal signal
+.BI \-\-signal\  signal
 Send a signal to the audit daemon. You must have privileges to do this. Supported signals are
 .I TERM, HUP, USR1, USR2, CONT.
 .TP
@@ -261,7 +261,7 @@ Describe the permission access type that a file system watch will trigger on. \f
 Any \fIsyscall name\fP or \fInumber\fP may be used. The word '\fBall\fP' may also be used.  If the given syscall is made by a program, then start an audit record. If a field rule is given and no syscall is specified, it will default to all syscalls. You may also specify multiple syscalls in the same rule by using multiple \-S options in the same rule. Doing so improves performance since fewer rules need to be evaluated. Alternatively, you may pass a comma separated list of syscall names. If you are on a bi-arch system, like x86_64, you should be aware that auditctl simply takes the text, looks it up for the native arch (in this case b64) and sends that rule to the kernel. If there are no additional arch directives, IT WILL APPLY TO BOTH 32 & 64 BIT SYSCALLS. This can have undesirable effects since there is no guarantee that any syscall has the same number on both 32 and 64 bit interfaces. You will likely want to control this and write 2 rules, one with arch equal to b32 and one with b64 to make sure the kernel finds the events that you intend. See the arch field discussion for more info.
 .TP
 .BI \-w\  path
-Insert a watch for the file system object at \fIpath\fP. You cannot insert a watch to the top level directory. This is prohibited by the kernel. Wildcards are not supported either and will generate a warning. The way that watches work is by tracking the inode internally. If you place a watch on a file, its the same as using the \-F path option on a syscall rule. If you place a watch on a directory, its the same as using the \-F dir option on a syscall rule. The \-w form of writing watches is for backwards compatibility and the syscall based form is more expressive. Unlike most syscall auditing rules, watches do not impact performance based on the number of rules sent to the kernel. The only valid options when using a watch are the \-p and \-k. If you need to anything fancy like audit a specific user accessing a file, then use the syscall auditing form with the path or dir fields. See the EXAMPLES section for an example of converting one form to another.
+Insert a watch for the file system object at \fIpath\fP. You cannot insert a watch to the top level directory. This is prohibited by the kernel. Wildcards are not supported either and will generate a warning. The way that watches work is by tracking the inode internally. If you place a watch on a file, its the same as using the \-F path option on a syscall rule. If you place a watch on a directory, its the same as using the \-F dir option on a syscall rule. The \-w form of writing watches is for backwards compatibility and the syscall based form is more expressive. Unlike most syscall auditing rules, watches do not impact performance based on the number of rules sent to the kernel. The only valid options when using a watch are the \-p and \-k. If you need to do anything fancy like audit a specific user accessing a file, then use the syscall auditing form with the path or dir fields. See the EXAMPLES section for an example of converting one form to another.
 .TP
 .BI \-W\  path
 Remove a watch for the file system object at \fIpath\fP. The rule must match exactly. See \fB-d\fP discussion for more info.
@@ -292,7 +292,10 @@ This will be higher performance since the kernel will not evaluate it each and e
 To see all syscalls made by a specific program:
 
 .nf
+# By pid:
 .B auditctl \-a always,exit \-S all \-F pid=1005
+# By executable path
+.B auditctl \-a always,exit \-S all \-F exe=/usr/bin/ls
 .fi
 
 To see files opened by a specific user:
@@ -327,12 +330,22 @@ To see if an admin is accessing other user's files:
 .B auditctl \-a always,exit \-F dir=/home/ \-F uid=0 \-C auid!=obj_uid
 .fi
 
+.SH DISABLED BY DEFAULT
+
+On many systems auditd is configured to install an 
+.B -a never,task
+rule by default. This rule causes every new process to skip all audit rule processing. This is usually done to avoid a small performance overhead imposed by syscall auditing. If you want to use auditd, you need to remove that rule by deleting 10-no-audit.rules and adding 10-base-config.rules to the audit rules directory.
+
+If you have defined audit rules that are not matching when they should, check auditctl -l to make sure there is no never,task rule there.
+
 .SH FILES
 .TP
 .I /etc/audit/audit.rules /etc/audit/audit-stop.rules
 
 .SH "SEE ALSO"
 .BR audit.rules (7),
+.BR ausearch(8),
+.BR aureport(8),
 .BR auditd (8).
 
 .SH AUTHOR

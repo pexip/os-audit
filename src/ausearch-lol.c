@@ -1,7 +1,7 @@
 /*
 * ausearch-lol.c - linked list of linked lists library
-* Copyright (c) 2008,2010,2014,2016,2019 Red Hat Inc., Durham, North Carolina.
-* All Rights Reserved. 
+* Copyright (c) 2008,2010,2014,2016,2019,2021 Red Hat Inc.
+* All Rights Reserved.
 *
 * This software may be freely redistributed and/or modified under the
 * terms of the GNU General Public License as published by the Free
@@ -15,7 +15,7 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
 * Boston, MA 02110-1335, USA.
 *
 * Authors:
@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 #include "ausearch-common.h"
 #include "auditd-config.h"
 #include "common.h"
@@ -34,6 +35,10 @@
 #define ARRAY_LIMIT 80
 static int ready = 0;
 event very_first_event;
+
+// End of Event timeout value (in seconds). This can be over-riden via configuration or command line argument.
+static time_t eoe_timeout = EOE_TIMEOUT;
+
 
 void lol_create(lol *lo)
 {
@@ -95,13 +100,13 @@ static int str2event(char *s, event *e)
 
 	errno = 0;
 	e->sec = strtoul(s, NULL, 10);
-	if (errno)
+	if (errno || e->sec > (LONG_MAX - eoe_timeout -1))
 		return -1;
 	ptr = strchr(s, '.');
 	if (ptr) {
 		ptr++;
 		e->milli = strtoul(ptr, NULL, 10);
-		if (errno)
+		if (errno || e->milli > 999)
 			return -1;
 		s = ptr;
 	} else
@@ -188,7 +193,8 @@ static int extract_timestamp(const char *b, event *e)
 
 		// Now should be pointing to msg=
 		ptr = audit_strsplit(NULL);
-		if (ptr) {
+		// strlen is for fuzzers that make invalid lines
+		if (ptr && strnlen(ptr, 20) > 18) {
 			if (*(ptr+9) == '(')
 				ptr+=9;
 			else
@@ -242,8 +248,8 @@ static void check_events(lol *lo, time_t sec)
 	for(i=0;i<=lo->maxi; i++) {
 		lolnode *cur = &lo->array[i];
 		if (cur->status == L_BUILDING) {
-			// If 2 seconds have elapsed, we are done
-			if (cur->l->e.sec + 2 <= sec) { 
+			// If eoe_timeout seconds have elapsed, we are done
+			if (cur->l->e.sec + eoe_timeout <= sec) {
 				cur->status = L_COMPLETE;
 				ready++;
 			} else if (cur->l->e.type == AUDIT_PROCTITLE ||
@@ -396,5 +402,23 @@ llist* get_ready_event(lol *lo)
 	}
 
 	return NULL;
+}
+
+/*
+ * lol_set_eoe_timeout - set the end of event timeout to given value
+ *
+ * Args
+ * 	new_eoe_tmo - value
+ * Rtn
+ * 	void
+ */
+void lol_set_eoe_timeout(time_t new_eoe_tmo)
+{
+	eoe_timeout = new_eoe_tmo;
+}
+
+time_t lol_get_eoe_timeout(void)
+{
+	return eoe_timeout;
 }
 

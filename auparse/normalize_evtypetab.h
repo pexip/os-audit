@@ -1,5 +1,5 @@
 /* normalize_evtypetab.h --
- * Copyright 2017 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2017,2021 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -41,4 +41,4 @@ _S(NORM_EVTYPE_AUDIT_RULE,	"audit-rule"	)
 _S(NORM_EVTYPE_DAC_DECISION,	"dac-decision"	)
 _S(NORM_EVTYPE_GROUP_CHANGE,	"group-change"	)
 _S(NORM_EVTYPE_AV_DECISION,	"av-decision"	)
-
+_S(NORM_EVTYPE_BPF,		"bpf-program"   )

@@ -12,9 +12,10 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 # Lesser General Public License for more details.
 #
-# You should have received a copy of the GNU Lesser General Public
-# License along with this library; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING. If not, write to the
+# Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+# Boston, MA 02110-1335, USA.
 #
 # Authors:
 #   Steve Grubb <sgrubb@redhat.com>
@@ -33,11 +34,11 @@ man_MANS = audisp-remote.8 audisp-remote.conf.5
 check_PROGRAMS = test-queue
 TESTS = $(check_PROGRAMS)
 
-audisp_remote_DEPENDENCIES = ${top_builddir}/common/libaucommon.a
+audisp_remote_DEPENDENCIES = ${top_builddir}/common/libaucommon.la
 audisp_remote_SOURCES = audisp-remote.c remote-config.c queue.c
-audisp_remote_CFLAGS = -fPIE -DPIE -g -D_REENTRANT -D_GNU_SOURCE -Wundef
+audisp_remote_CFLAGS = -fPIE -DPIE -g -D_REENTRANT -D_GNU_SOURCE -Wundef ${WFLAGS}
 audisp_remote_LDFLAGS = -pie -Wl,-z,relro -Wl,-z,now
-audisp_remote_LDADD = $(CAPNG_LDADD) $(gss_libs) -L${top_builddir}/common -laucommon
+audisp_remote_LDADD = $(CAPNG_LDADD) $(gss_libs) ${top_builddir}/common/libaucommon.la
 
 test_queue_SOURCES = queue.c test-queue.c
 
