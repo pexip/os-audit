@@ -1,5 +1,5 @@
 /* auparse.c --
- * Copyright 2006-08,2012-19 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2006-08,2012-19,21 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -32,6 +32,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdio_ext.h>
+#include <limits.h>
 #include "common.h"
 
 //#define LOL_EVENTS_DEBUG01	1	// add debug for list of list event
@@ -40,6 +41,8 @@
 #ifdef LOL_EVENTS_DEBUG01
 static int debug = 0;
 #endif
+
+static time_t	eoe_timeout = EOE_TIMEOUT;
 
 static void init_lib(void) __attribute__ ((constructor));
 static void init_lib(void)
@@ -64,8 +67,9 @@ static int setup_log_file_array(auparse_state_t *au)
         char *filename, **tmp;
         int len, num = 0, i = 0;
 
-        /* Load config so we know where logs are */
-	set_aumessage_mode(au, MSG_STDERR, DBG_NO);
+	/* Load config so we know where logs are */
+	if (secure_getenv("AUPARSE_DEBUG"))
+		set_aumessage_mode(au, MSG_STDERR, DBG_NO);
 	aup_load_config(au, &config, TEST_SEARCH);
 
 	/* for each file */
@@ -73,7 +77,7 @@ static int setup_log_file_array(auparse_state_t *au)
 	filename = malloc(len);
 	if (!filename) {
 		fprintf(stderr, "No memory\n");
-		free_config(&config);
+		aup_free_config(&config);
 		return 1;
 	}
 	/* Find oldest log file */
@@ -87,7 +91,7 @@ static int setup_log_file_array(auparse_state_t *au)
 
 	if (num == 0) {
 		fprintf(stderr, "No log file\n");
-		free_config(&config);
+		aup_free_config(&config);
 		free(filename);
 		return 1;
 	}
@@ -111,11 +115,11 @@ static int setup_log_file_array(auparse_state_t *au)
 		else
 			break;
 	} while (1);
-	free_config(&config);
+	aup_free_config(&config);
 	free(filename);
 
 	// Terminate the list
-	tmp[i] = NULL; 
+	tmp[i] = NULL;
 	au->source_list = tmp;
 	return 0;
 }
@@ -134,11 +138,10 @@ static au_lolnode *au_lol_create(au_lol *lol)
 	int sz = ARRAY_LIMIT * sizeof(au_lolnode);
 
 	lol->maxi = -1;
-	lol->limit = ARRAY_LIMIT;
-	if ((lol->array = (au_lolnode *)malloc(sz)) == NULL) {
-		lol->maxi = -1;
+	if ((lol->array = (au_lolnode *)malloc(sz)) == NULL)
 		return NULL;
-	}
+
+	lol->limit = ARRAY_LIMIT;
 	memset(lol->array, 0x00, sz);
 
 	return lol->array;
@@ -236,7 +239,7 @@ static event_list_t *au_get_ready_event(auparse_state_t *au, int is_test)
         int i;
 	au_lol *lol = au->au_lo;
 	au_lolnode *lowest = NULL;
-	
+
 	if (au->au_ready == 0) {
 		//if (debug) printf("No events ready\n");
 		return NULL;
@@ -287,13 +290,13 @@ static void au_check_events(auparse_state_t *au, time_t sec)
                 if (cur->status == EBS_BUILDING) {
                         if ((r = aup_list_get_cur(cur->l)) == NULL)
 				continue;
-                        // If 2 seconds have elapsed, we are done
-                        if (cur->l->e.sec + 2 <= sec) {
+                        // If eoe_timeout seconds have elapsed, we are done
+                        if (cur->l->e.sec + eoe_timeout <= sec) {
                                 cur->status = EBS_COMPLETE;
 				au->au_ready++;
                         } else if ( // FIXME: Check this v remains true
 				r->type == AUDIT_PROCTITLE ||
-				r->type == AUDIT_EOE || 
+				r->type == AUDIT_EOE ||
 				r->type < AUDIT_FIRST_EVENT ||
 				r->type >= AUDIT_FIRST_ANOM_MSG ||
 				r->type == AUDIT_KERNEL ||
@@ -398,6 +401,30 @@ void print_lol(char *label, au_lol *lol)
 
 
 /* General functions that affect operation of the library */
+
+/*
+ * au_setup_userspace_configitems - load userspace configuration items from auditd.conf
+ *
+ * Args:
+ *  au - pointer to auparseing state structure
+ *
+ * Rtns:
+ *      void
+ */
+static void au_setup_userspace_configitems(auparse_state_t *au)
+{
+	struct daemon_conf config;
+
+	/* Load config so we know where logs are */
+	if (secure_getenv("AUPARSE_DEBUG"))
+		set_aumessage_mode(au, MSG_STDERR, DBG_NO);
+	aup_load_config(au, &config, TEST_SEARCH);
+
+	eoe_timeout = (time_t)config.end_of_event_timeout;
+
+	aup_free_config(&config);
+}
+
 auparse_state_t *auparse_init(ausource_t source, const void *b)
 {
 	char **tmp, **bb = (char **)b, *buf = (char *)b;
@@ -430,6 +457,9 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 		return NULL;
 	}
 	au->au_ready = 0;
+	au->escape_mode = AUPARSE_ESC_TTY;
+	au->message_mode = MSG_QUIET;
+	au->debug_message = DBG_NO;
 
 	au->in = NULL;
 	au->source_list = NULL;
@@ -437,6 +467,7 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 	au->callback = NULL;
 	au->callback_user_data = NULL;
 	au->callback_user_data_destroy = NULL;
+	au_setup_userspace_configitems(au);
 	switch (source)
 	{
 		case AUSOURCE_LOGS:
@@ -525,9 +556,6 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 	au->expr = NULL;
 	au->find_field = NULL;
 	au->search_where = AUSEARCH_STOP_EVENT;
-	au->escape_mode = AUPARSE_ESC_TTY;
-	au->message_mode = MSG_QUIET;
-	au->debug_message = DBG_NO;
 	au->tmp_translation = NULL;
 	init_normalizer(&au->norm_data);
 
@@ -600,6 +628,19 @@ static void consume_feed(auparse_state_t *au, int flush)
 	}
 }
 
+int auparse_new_buffer(auparse_state_t *au, const char *data, size_t data_len)
+{
+	if (au->source != AUSOURCE_BUFFER)
+		return 1;
+
+	auparse_reset(au);
+
+	if (databuf_replace(&au->databuf, data, data_len) < 0)
+		return 1;
+
+	return 0;
+}
+
 int auparse_feed(auparse_state_t *au, const char *data, size_t data_len)
 {
 	if (databuf_append(&au->databuf, data, data_len) < 0)
@@ -614,9 +655,30 @@ int auparse_flush_feed(auparse_state_t *au)
 	return 0;
 }
 
-// If there is data in the state machine, return 1
+// If there is any data in the state machine, return 1.
 // Otherwise return 0 to indicate its empty
 int auparse_feed_has_data(auparse_state_t *au)
+{
+	if (!au)
+		return 0;
+
+	int i;
+	au_lol *lol = au->au_lo;
+
+	// An improvement would be to track how many events we have stored
+	// to avoid a costly loop
+        for (i=0; i <= lol->maxi; i++) {
+                au_lolnode *cur = &(lol->array[i]);
+		if (cur->status > EBS_EMPTY)
+			return 1;
+	}
+
+	return 0;
+}
+
+// If there is a ready event in the state machine, return 1.
+// Otherwise return 0 to indicate its empty
+int auparse_feed_has_ready_event(auparse_state_t *au)
 {
 	if (au_get_ready_event(au, 1) != NULL)
 		return 1;
@@ -690,7 +752,7 @@ int auparse_reset(auparse_state_t *au)
 		/* Fall through */
 		case AUSOURCE_DESCRIPTOR:
 		case AUSOURCE_FILE_POINTER:
-			if (au->in) 
+			if (au->in)
 				rewind(au->in);
 		/* Fall through */
 		case AUSOURCE_BUFFER:
@@ -917,7 +979,7 @@ static void auparse_destroy_common(auparse_state_t *au)
 
 	if (au->source_list) {
 		int n = 0;
-		while (au->source_list[n]) 
+		while (au->source_list[n])
 			free(au->source_list[n++]);
 		free(au->source_list);
 		au->source_list = NULL;
@@ -950,7 +1012,7 @@ static void auparse_destroy_common(auparse_state_t *au)
 
 void auparse_destroy(auparse_state_t *au)
 {
-	aulookup_destroy_uid_list();
+	lookup_destroy_uid_list();
 	aulookup_destroy_gid_list();
 
 	auparse_destroy_common(au);
@@ -969,7 +1031,7 @@ void auparse_destroy_ext(auparse_state_t *au, auparse_destroy_what_t what)
  * without a newline (note, this implies the line may be empty (strlen == 0)) if
  * successfully read a blank line (e.g. containing only a single newline).
  * cur_buf will have been newly allocated with malloc.
- * 
+ *
  * Note: cur_buf will be freed the next time this routine is called if
  * cur_buf is not NULL, callers who retain a reference to the cur_buf
  * pointer will need to set cur_buf to NULL to cause the previous cur_buf
@@ -1027,7 +1089,7 @@ static int readline_file(auparse_state_t *au)
  * newline (note, this implies the line may be empty (strlen == 0)) if
  * successfully read a blank line (e.g. containing only a single
  * newline).
- * 
+ *
  * Note: cur_buf will be freed the next time this routine is called if
  * cur_buf is not NULL, callers who retain a reference to the cur_buf
  * pointer will need to set cur_buf to NULL to cause the previous cur_buf
@@ -1060,7 +1122,7 @@ static int readline_buf(auparse_state_t *au)
 	if ((p_newline = strnchr(databuf_beg(&au->databuf), '\n',
 						au->databuf.len)) != NULL) {
 		line_len = p_newline - databuf_beg(&au->databuf);
-		
+
 		/* dup the line */
 		au->cur_buf = malloc(line_len+1);   // +1 for null terminator
 		if (au->cur_buf == NULL)
@@ -1073,7 +1135,6 @@ static int readline_buf(auparse_state_t *au)
 		// return success
 		errno = 0;
 		return 1;
-	
 	} else {
 		// return no data available
 		errno = 0;
@@ -1087,18 +1148,18 @@ static int str2event(char *s, au_event_t *e)
 
 	errno = 0;
 	e->sec = strtoul(s, NULL, 10);
-	if (errno)
+	if (errno || e->sec > (LONG_MAX - eoe_timeout -1))
 		return -1;
 	ptr = strchr(s, '.');
 	if (ptr) {
 		ptr++;
 		e->milli = strtoul(ptr, NULL, 10);
-		if (errno)
+		if (errno || e->milli > 999)
 			return -1;
 		s = ptr;
 	} else
 		e->milli = 0;
-	
+
 	ptr = strchr(s, ':');
 	if (ptr) {
 		ptr++;
@@ -1134,13 +1195,14 @@ static int extract_timestamp(const char *b, au_event_t *e)
 	ptr = audit_strsplit(tmp);
 	if (ptr) {
 		// Optionally grab the node - may or may not be included
-		if (*ptr == 'n') {
+		if (*ptr == 'n' && strnlen(ptr, 8) > 5) {
 			e->host = strdup(ptr+5);
 			(void)audit_strsplit(NULL);// Bump along to next one
 		}
 		// at this point we have type=
 		ptr = audit_strsplit(NULL);
-		if (ptr) {
+		// strlen is for fuzzers that make invalid lines
+		if (ptr && strnlen(ptr, 20) > 18) {
 			if (*(ptr+9) == '(')
 				ptr+=9;
 			else
@@ -1188,7 +1250,7 @@ static int events_are_equal(au_event_t *e1, au_event_t *e2)
 
 /* This function will figure out how to get the next line of input.
  * storing it cur_buf. cur_buf will be NULL terminated but will not
- * contain a trailing newline. This implies a successful read 
+ * contain a trailing newline. This implies a successful read
  * (result == 1) may result in a zero length cur_buf if a blank line
  * was read.
  *
@@ -1520,8 +1582,11 @@ static int au_auparse_next_event(auparse_state_t *au)
 					if (debug)
 						printf("Adding event to building event\n");
 #endif	/* LOL_EVENTS_DEBUG01 */
-					aup_list_append(cur->l, au->cur_buf,
-						au->list_idx, au->line_number);
+					if (aup_list_append(cur->l, au->cur_buf,
+					    au->list_idx, au->line_number) < 0) {
+						au->cur_buf = NULL;
+						continue;
+					}
 					au->cur_buf = NULL;
 					free((char *)e.host);
 					au_check_events(au,  e.sec);
@@ -1549,7 +1614,13 @@ static int au_auparse_next_event(auparse_state_t *au)
 		}
 		aup_list_create(l);
 		aup_list_set_event(l, &e);
-		aup_list_append(l, au->cur_buf, au->list_idx, au->line_number);
+		if (aup_list_append(l, au->cur_buf, au->list_idx,
+				    au->line_number) < 0) {
+			au->cur_buf = NULL;
+			aup_list_clear(l);
+			free(l);
+			continue;
+		}
 		// Eat standalone EOE - main event was already marked complete
 		if (l->head->type == AUDIT_EOE) {
 			au->cur_buf = NULL;
@@ -1706,6 +1777,14 @@ int auparse_first_record(auparse_state_t *au)
 		if (rc <= 0)
 			return rc;
 	}
+	r = aup_list_get_cur(au->le);
+	if (r && r->item == 0 && interpretation_list_cnt()) {
+		// If we are on the first record and the list has previously
+		// been loaded, just pull cursor back and avoid loading the
+		// interpretation list.
+		aup_list_first_field(au->le);
+		return 1;
+	}
 	aup_list_first(au->le);
 	r = aup_list_get_cur(au->le);
 	free_interpretation_list();
@@ -1743,6 +1822,15 @@ int auparse_next_record(auparse_state_t *au)
 int auparse_goto_record_num(auparse_state_t *au, unsigned int num)
 {
 	rnode *r;
+
+	r = aup_list_get_cur(au->le);
+	if (r && r->item == num && interpretation_list_cnt()) {
+		// If we are on the first record and the list has previously
+		// been loaded, just pull cursor back and avoid loading the
+		// interpretation list.
+		aup_list_first_field(au->le);
+		return 1;
+	}
 
 	/* Check if a request is out of range */
 	free_interpretation_list();
@@ -1928,7 +2016,8 @@ const char *auparse_find_field_next(auparse_state_t *au)
 		rnode *r = aup_list_get_cur(au->le);
 		while (r) {	// For each record in the event...
 			if (!moved) {
-				nvlist_next(&r->nv);
+				if (nvlist_next(&r->nv) == NULL)
+					return NULL;
 				moved=1;
 			}
 			if (nvlist_find_name(&r->nv, au->find_field))
@@ -1936,6 +2025,7 @@ const char *auparse_find_field_next(auparse_state_t *au)
 			r = aup_list_next(au->le);
 			if (r) {
 				aup_list_first_field(au->le);
+				free_interpretation_list();
 				load_interpretation_list(r->interp);
 			}
 		}
@@ -2123,3 +2213,18 @@ const char *auparse_interpret_sock_address(auparse_state_t *au)
 	return auparse_interpret_sock_parts(au, "laddr=");
 }
 
+/*
+ * auparse_set_eoe_timeout - set the end of event timeout value
+ *
+ * Args
+ *	new_tmo	- new timeout value
+ * Rtns
+ *	0	- correctly set
+ *	1	- failed to set
+ */
+int auparse_set_eoe_timeout (time_t new_tmo) {
+	if (new_tmo == 0)
+		return 1;
+	eoe_timeout = new_tmo;
+	return 0;
+}

@@ -1,5 +1,5 @@
-/* libaudit.h -- 
- * Copyright 2004-2018 Red Hat Inc., Durham, North Carolina.
+/* libaudit.h --
+ * Copyright 2004-2018,2021-22 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -15,18 +15,13 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- * 
+ *
  * Authors:
  *	Steve Grubb <sgrubb@redhat.com>
  *	Rickard E. (Rik) Faith <faith@redhat.com>
  */
 #ifndef _LIBAUDIT_H_
 #define _LIBAUDIT_H_
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 
 #include <asm/types.h>
 #include <stdint.h>
@@ -35,6 +30,17 @@ extern "C" {
 #include <linux/audit.h>
 #include <stdarg.h>
 #include <syslog.h>
+#ifndef __attr_access
+#  define __attr_access(x)
+#endif
+#ifndef __attr_dealloc
+# define __attr_dealloc(dealloc, argno)
+# define __attr_dealloc_free
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 
 /* Audit message types as of 2.6.29 kernel:
@@ -124,6 +130,7 @@ extern "C" {
 #define AUDIT_APPARMOR_HINT		1504
 #define AUDIT_APPARMOR_STATUS		1505
 #define AUDIT_APPARMOR_ERROR		1506
+#define AUDIT_APPARMOR_KILL		1507
 #endif
 
 #define AUDIT_FIRST_KERN_CRYPTO_MSG	1600
@@ -136,7 +143,7 @@ extern "C" {
 #define AUDIT_INTEGRITY_LAST_MSG	1899
 #ifndef AUDIT_INTEGRITY_DATA
 #define AUDIT_INTEGRITY_DATA		1800 /* Data integrity verification */
-#define AUDIT_INTEGRITY_METADATA 	1801 // Metadata integrity verification
+#define AUDIT_INTEGRITY_METADATA	1801 // Metadata integrity verification
 #define AUDIT_INTEGRITY_STATUS		1802 /* Integrity enable status */
 #define AUDIT_INTEGRITY_HASH		1803 /* Integrity HASH type */
 #define AUDIT_INTEGRITY_PCR		1804 /* PCR invalidation msgs */
@@ -144,6 +151,9 @@ extern "C" {
 #endif
 #ifndef AUDIT_INTEGRITY_EVM_XATTR
 #define AUDIT_INTEGRITY_EVM_XATTR	1806 /* New EVM-covered xattr */
+#endif
+#ifndef AUDIT_INTEGRITY_POLICY_RULE
+#define AUDIT_INTEGRITY_POLICY_RULE	1807 /* Integrity Policy rule */
 #endif
 
 #define AUDIT_FIRST_ANOM_MSG		2100
@@ -167,6 +177,9 @@ extern "C" {
 #define AUDIT_ANOM_MOD_ACCT		2116 // Changing an acct
 #define AUDIT_ANOM_ROOT_TRANS		2117 // User became root
 #define AUDIT_ANOM_LOGIN_SERVICE	2118 // Service acct attempted login
+#define AUDIT_ANOM_LOGIN_ROOT		2119 // Root login attempted
+#define AUDIT_ANOM_ORIGIN_FAILURES	2120 // Origin has too many failed login
+#define AUDIT_ANOM_SESSION		2121 // The user session is bad
 
 #define AUDIT_FIRST_ANOM_RESP		2200
 #define AUDIT_LAST_ANOM_RESP		2299
@@ -185,6 +198,7 @@ extern "C" {
 #define AUDIT_RESP_HALT			2212 /* take the system down */
 #define AUDIT_RESP_ORIGIN_BLOCK		2213 /* Address blocked by iptables */
 #define AUDIT_RESP_ORIGIN_BLOCK_TIMED	2214 /* Address blocked for time */
+#define AUDIT_RESP_ORIGIN_UNBLOCK_TIMED	2215 /* Address unblocked from timed */
 
 #define AUDIT_FIRST_USER_LSPP_MSG	2300
 #define AUDIT_LAST_USER_LSPP_MSG	2399
@@ -296,7 +310,15 @@ extern "C" {
 #endif
 
 #ifndef AUDIT_EVENT_LISTENER
-#define AUDIT_EVENT_LISTENER		1335 /* audit mcast sock join/part */
+#define AUDIT_EVENT_LISTENER	1335 /* audit mcast sock join/part */
+#endif
+
+#ifndef AUDIT_URINGOP
+#define AUDIT_URINGOP		1336 /* io_uring operations */
+#endif
+
+#ifndef AUDIT_OPENAT2
+#define AUDIT_OPENAT2		1337 /* openat2 open_how flags */
 #endif
 
 #ifndef AUDIT_MAC_CALIPSO_ADD
@@ -514,7 +536,7 @@ struct audit_reply {
 	struct nlmsgerr         *error;
 	struct audit_sig_info   *signal_info;
 	struct daemon_conf      *conf;
-#ifdef AUDIT_FEATURE_BITMAP_ALL
+#ifdef AUDIT_FEATURE_VERSION
 	struct audit_features	*features;
 #endif
 	};
@@ -582,14 +604,16 @@ void set_aumessage_mode(message_t mode, debug_message_t debug);
 typedef enum { GET_REPLY_BLOCKING=0, GET_REPLY_NONBLOCKING } reply_t;
 extern int  audit_open(void);
 extern void audit_close(int fd);
-extern int  audit_get_reply(int fd, struct audit_reply *rep, reply_t block, 
+extern int  audit_get_reply(int fd, struct audit_reply *rep, reply_t block,
 		int peek);
 extern uid_t audit_getloginuid(void);
 extern int  audit_setloginuid(uid_t uid);
 extern uint32_t audit_get_session(void);
 extern int  audit_detect_machine(void);
 extern int audit_determine_machine(const char *arch);
-extern char *audit_format_signal_info(char *buf, int len, char *op, struct audit_reply *rep, char *res);
+extern char *audit_format_signal_info(char *buf, int len, char *op,
+			struct audit_reply *rep, char *res)
+			__attr_access ((__write_only__, 1, 2));
 
 /* Translation functions */
 extern int        audit_name_to_field(const char *field);
@@ -610,9 +634,9 @@ extern const char *audit_operator_to_symbol(int op);
 extern int        audit_name_to_errno(const char *error);
 extern const char *audit_errno_to_name(int error);
 extern int        audit_name_to_ftype(const char *name);
-extern const char *audit_ftype_to_name(int ftype); 
+extern const char *audit_ftype_to_name(int ftype);
 extern int        audit_name_to_fstype(const char *name);
-extern const char *audit_fstype_to_name(int fstype); 
+extern const char *audit_fstype_to_name(int fstype);
 extern void audit_number_to_errmsg(int errnumber, const char *opt);
 
 /* AUDIT_GET */
@@ -632,7 +656,8 @@ extern int  audit_set_backlog_limit(int fd, uint32_t limit);
 int audit_set_backlog_wait_time(int fd, uint32_t bwt);
 int audit_reset_lost(int fd);
 int audit_reset_backlog_wait_time_actual(int fd);
-extern int  audit_set_feature(int fd, unsigned feature, unsigned value, unsigned lock);
+extern int  audit_set_feature(int fd, unsigned feature, unsigned value,
+			      unsigned lock);
 extern int  audit_set_loginuid_immutable(int fd);
 
 /* AUDIT_LIST_RULES */
@@ -644,7 +669,6 @@ extern int audit_request_signal_info(int fd);
 /* AUDIT_WATCH */
 extern int audit_update_watch_perms(struct audit_rule_data *rule, int perms);
 extern int audit_add_watch(struct audit_rule_data **rulep, const char *path);
-extern int audit_add_dir(struct audit_rule_data **rulep, const char *path);
 extern int audit_add_watch_dir(int type, struct audit_rule_data **rulep,
 				const char *path);
 extern int audit_trim_subtrees(int fd);
@@ -660,10 +684,15 @@ extern int audit_delete_rule_data(int fd, struct audit_rule_data *rule,
                                   int flags, int action);
 
 /* The following are for standard formatting of messages */
-extern int audit_value_needs_encoding(const char *str, unsigned int len);
-extern char *audit_encode_value(char *final,const char *buf,unsigned int size);
+extern int audit_value_needs_encoding(const char *str, unsigned int size)
+	__attr_access ((__read_only__, 1, 2));
+extern char *audit_encode_value(char *final,const char *buf,unsigned int size)
+	__attr_access ((__write_only__, 1))
+	__attr_access ((__read_only__, 2, 3));
 extern char *audit_encode_nv_string(const char *name, const char *value,
-	unsigned int vlen);
+	unsigned int vlen)
+	__attr_access ((__read_only__, 2, 3))
+	__attr_dealloc_free;
 extern int audit_log_user_message(int audit_fd, int type, const char *message,
         const char *hostname, const char *addr, const char *tty, int result);
 extern int audit_log_user_comm_message(int audit_fd, int type,
@@ -672,8 +701,8 @@ extern int audit_log_user_comm_message(int audit_fd, int type,
 extern int audit_log_acct_message(int audit_fd, int type, const char *pgname,
         const char *op, const char *name, unsigned int id,
         const char *host, const char *addr, const char *tty, int result);
-extern int audit_log_user_avc_message(int audit_fd, int type, 
-	const char *message, const char *hostname, const char *addr, 
+extern int audit_log_user_avc_message(int audit_fd, int type,
+	const char *message, const char *hostname, const char *addr,
 	const char *tty, uid_t uid);
 extern int audit_log_semanage_message(int audit_fd, int type,
 	const char *pgname, const char *op, const char *name, unsigned int id,
@@ -689,7 +718,6 @@ extern int audit_log_user_command(int audit_fd, int type, const char *command,
 extern struct audit_rule_data *audit_rule_create_data(void);
 /* Initializes an existing audit_rule_data struct */
 extern void audit_rule_init_data(struct audit_rule_data *rule);
-extern int audit_rule_syscall_data(struct audit_rule_data *rule, int scall);
 extern int audit_rule_syscallbyname_data(struct audit_rule_data *rule,
                                           const char *scall);
 /* Note that the following function takes a **, where audit_rule_fieldpair()

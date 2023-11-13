@@ -1,5 +1,6 @@
 libauparse.so.0 libauparse0 #MINVER#
 * Build-Depends-Package: libauparse-dev
+ _auparse_flush_caches@Base 1:3.0.5
  _auparse_free_interpretations@Base 1:2.6
  _auparse_load_interpretations@Base 1:2.6
  _auparse_lookup_interpretation@Base 1:2.6.1
@@ -10,6 +11,7 @@ libauparse.so.0 libauparse0 #MINVER#
  auparse_feed@Base 1:2.2.1
  auparse_feed_age_events@Base 1:2.5.1
  auparse_feed_has_data@Base 1:2.2.2
+ auparse_feed_has_ready_event@Base 1:3.0.5
  auparse_find_field@Base 1:2.2.1
  auparse_find_field_next@Base 1:2.2.1
  auparse_first_field@Base 1:2.2.1
@@ -43,6 +45,7 @@ libauparse.so.0 libauparse0 #MINVER#
  auparse_interpret_sock_address@Base 1:2.8
  auparse_interpret_sock_family@Base 1:2.8
  auparse_interpret_sock_port@Base 1:2.8
+ auparse_new_buffer@Base 1:3.0.5
  auparse_next_event@Base 1:2.2.1
  auparse_next_field@Base 1:2.2.1
  auparse_next_record@Base 1:2.2.1
@@ -66,6 +69,7 @@ libauparse.so.0 libauparse0 #MINVER#
  auparse_normalize_subject_primary@Base 1:2.7.7
  auparse_normalize_subject_secondary@Base 1:2.7.7
  auparse_reset@Base 1:2.2.1
+ auparse_set_eoe_timeout@Base 1:3.0.5
  auparse_set_escape_mode@Base 1:2.4.4
  auparse_timestamp_compare@Base 1:2.2.1
  ausearch_add_expression@Base 1:2.2.1
@@ -77,3 +81,4 @@ libauparse.so.0 libauparse0 #MINVER#
  ausearch_clear@Base 1:2.2.1
  ausearch_next_event@Base 1:2.2.1
  ausearch_set_stop@Base 1:2.2.1
+ find_config_change_object@Base 1:3.0.5

@@ -1,4 +1,4 @@
-.TH AUSEARCH: "8" "March 2017" "Red Hat" "System Administration Utilities"
+.TH AUSEARCH "8" "April 2021" "Red Hat" "System Administration Utilities"
 .SH NAME
 ausearch \- a tool to query audit daemon logs
 .SH SYNOPSIS
@@ -49,6 +49,9 @@ outputting complete events.
 Should the file or the last checkpointed event not be found, one of a number of errors will result and ausearch will terminate. See \fBEXIT STATUS\fP for detail.
 
 .TP
+.BR \-\-eoe\-timeout \ \fIseconds\fP
+Set the end of event parsing timeout. See \fBend_of_event_timeout\fP in \fIauditd.conf(5)\fP for details. Note that setting this value will override any configured value found in /etc/auditd/auditd.conf.
+.TP
 .BR \-e,\  \-\-exit \ \fIexit-code-or-errno\fP
 Search for an event based on the given syscall \fIexit code or errno\fP.
 .TP
@@ -92,7 +95,7 @@ Search for an event with the given \fIhost name\fP. The hostname can be either a
 Interpret numeric entities into text. For example, uid is converted to account name. If the audit logs are unenriched, the conversion is done using the current resources of the machine where the search is being run. If you have renamed the accounts, or don't have the same accounts on your machine, you could get misleading results. If the logs are enriched, it uses the supplemental data to do the conversion. This allows accurate log reporting even when run on a different machine than the original logs came from.
 .TP
 .BR \-if ,\  \-\-input \ \fIfile-name\fP\ |\ \fIdirectory\fP
-Use the given \fIfile\fP or \fIdirectory\fP instead of the logs. This is to aid analysis where the logs have been moved to another machine or only part of a log was saved.
+Use the given \fIfile\fP or \fIdirectory\fP instead of the logs. This is to aid analysis where the logs have been moved to another machine or only part of a log was saved. The path length is limited to 4064 bytes.
 .TP
 .BR \-\-input\-logs
 Use the log file location from auditd.conf as input for searching. This is needed if you are using ausearch from a cron job.
@@ -192,7 +195,7 @@ Search for an event with the given \fIeffective user ID\fP.
 Search for an event with the given \fIuser ID\fP.
 .TP
 .BR \-ul ,\  \-\-loginuid \ \fIlogin-id\fP
-Search for an event with the given \fIlogin user ID\fP. All entry point programs that are pamified need to be configured with pam_loginuid required for the session for searching on loginuid (auid) to be accurate.
+Search for an event with the given \fIlogin user ID\fP. All entry point programs that are PAMified need to be configured with pam_loginuid required for the session for searching on loginuid (auid) to be accurate.
 .TP
 .BR \-uu ,\  \-\-uuid \ \fIguest-uuid\fP
 Search for an event with the given \fIguest UUID\fP.
@@ -215,7 +218,7 @@ Search for an event matching the given \fIexecutable\fP name.
 if OK,
 .TP
 1
-if nothing found, or argument errors or minor file acces/read errors,
+if nothing found, or argument errors or minor file access/read errors,
 .TP
 10
 invalid checkpoint data found in checkpoint file,
@@ -232,4 +235,6 @@ date -d "`cut \-f1 \-d. /proc/uptime` seconds ago"
 
 .SH "SEE ALSO"
 .BR auditd (8),
+.BR auditd.conf (5),
+.BR aureport (8),
 .BR pam_loginuid (8).

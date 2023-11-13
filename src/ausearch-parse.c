@@ -1,6 +1,6 @@
 /*
 * ausearch-parse.c - Extract interesting fields and check for match
-* Copyright (c) 2005-08,2011,2013-14,2018-20 Red Hat
+* Copyright (c) 2005-08,2011,2013-14,2018-21 Red Hat
 * Copyright (c) 2011 IBM Corp. 
 * All Rights Reserved. 
 *
@@ -62,6 +62,7 @@ static int parse_kernel_anom(const lnode *n, search_items *s);
 static int parse_simple_message(const lnode *n, search_items *s);
 static int parse_tty(const lnode *n, search_items *s);
 static int parse_pkt(const lnode *n, search_items *s);
+static int parse_kernel(lnode *n, search_items *s);
 
 
 static int audit_avc_init(search_items *s)
@@ -172,10 +173,14 @@ int extract_search_items(llist *l)
 			case AUDIT_BPRM_FCAPS:
 			case AUDIT_CAPSET:
 			case AUDIT_MMAP:
-			case AUDIT_NETFILTER_CFG:
 			case AUDIT_PROCTITLE:
 			case AUDIT_REPLACE...AUDIT_BPF:
+			case AUDIT_OPENAT2:
 				// Nothing to parse
+				break;
+			case AUDIT_NETFILTER_CFG:
+			case AUDIT_EVENT_LISTENER:
+				ret = parse_kernel(n, s);
 				break;
 			case AUDIT_TTY:
 				ret = parse_tty(n, s);
@@ -213,12 +218,12 @@ static const char *lookup_uid(const char *field, uid_t uid)
 		return strdup("unset");
 
 	if (uid_list_created == 0) {
-		nvlist_create(&uid_nvl);
-		nvlist_clear(&uid_nvl);
+		search_list_create(&uid_nvl);
+        search_list_clear(&uid_nvl);
 		uid_list_created = 1;
 	}
 
-	if (nvlist_find_val(&uid_nvl, uid)) {
+	if (search_list_find_val(&uid_nvl, uid)) {
 		return strdup(uid_nvl.cur->name);
 	} else {
 		struct passwd *pw;
@@ -227,7 +232,7 @@ static const char *lookup_uid(const char *field, uid_t uid)
 			nvnode nv;
 			nv.name = strdup(pw->pw_name);
 			nv.val = uid;
-			nvlist_append(&uid_nvl, &nv);
+            search_list_append(&uid_nvl, &nv);
 			return strdup(pw->pw_name);
 		}
 	}
@@ -239,7 +244,7 @@ void lookup_uid_destroy_list(void)
 	if (uid_list_created == 0)
 		return;
 
-	nvlist_clear(&uid_nvl);
+    search_list_clear(&uid_nvl);
 	uid_list_created = 0;
 }
 
@@ -416,8 +421,10 @@ try_again:
 		str = strstr(term, "comm=");
 		if (str) {
 			/* Make the syscall one override */
-			if (s->comm)
+			if (s->comm) {
 				free(s->comm);
+				s->comm = NULL;
+			}
 			str += 5;
 			if (*str == '"') {
 				str++;
@@ -427,7 +434,7 @@ try_again:
 				*term = 0;
 				s->comm = strdup(str);
 				*term = '"';
-			} else 
+			} else
 				s->comm = unescape(str);
 		} else
 			return 38;
@@ -1025,7 +1032,7 @@ static int parse_user(const lnode *n, search_items *s, anode *avc)
 		if (str) {
 			str += 5;
 			term = str;
-			while (*term != ' ' && *term != ':')
+			while (*term != ' ' && *term != ':' && *term)
 				term++;
 			if (term == str)
 				return 24;
@@ -1126,7 +1133,7 @@ try_again:
 		}
 	}
 skip:
-	mptr = term + 1;
+	mptr = term;
 
 	if (event_comm) {
 		// dont do this search unless needed
@@ -1180,7 +1187,7 @@ skip:
 			}
 		}
 	}
-	mptr = term + 1;
+	mptr = term;
 
 	// get hostname
 	if (event_hostname) {
@@ -1238,7 +1245,7 @@ skip:
 				char *end = str;
 				int legacy = 0;
 
-				while (*end != ' ') {
+				while (*end != ' ' && *end) {
 					if (!isxdigit(*end)) {
 						legacy = 1;
 					}
@@ -1289,7 +1296,7 @@ skip:
 				char *end = str;
 				int legacy = 0;
 
-				while (*end != ' ') {
+				while (*end != ' ' && *end) {
 					if (!isxdigit(*end)) {
 						legacy = 1;
 					}
@@ -1652,12 +1659,21 @@ static int parse_sockaddr(const lnode *n, search_items *s)
 	if (event_hostname || event_filename) {
 		str = strstr(n->message, "saddr=");
 		if (str) {
-			int len;
+			unsigned int len = 0;
 			struct sockaddr *saddr;
 			char name[NI_MAXHOST];
 
 			str += 6;
-			len = strlen(str)/2;
+			const char *ptr = str;
+			if (*ptr == '(') {
+				const char *ptr2 = strchr(ptr, ')');
+				if (ptr2)
+					len = (ptr2 - ptr) + 1;
+			} else {
+				while (isxdigit(ptr[len]))
+					len++;
+				len /= 2;
+			}
 			s->hostname = unescape(str);
 			if (s->hostname == NULL)
 				return 4;
@@ -1677,17 +1693,13 @@ static int parse_sockaddr(const lnode *n, search_items *s)
 				}
 				len = sizeof(struct sockaddr_in6);
 			} else if (saddr->sa_family == AF_UNIX) {
-				struct sockaddr_un *un =
-					(struct sockaddr_un *)saddr;
-				if (un->sun_path[0])
-					len = strlen(un->sun_path);
-				else // abstract name
-					len = strlen(&un->sun_path[1]);
-				if (len == 0) {
+				if (len < 4) {
 					fprintf(stderr,
 						"sun_path len too short\n");
 					return 3;
 				}
+				struct sockaddr_un *un =
+					(struct sockaddr_un *)saddr;
 				if (event_filename) {
 					if (!s->filename) {
 						//create
@@ -1730,7 +1742,7 @@ static int parse_sockaddr(const lnode *n, search_items *s)
 				s->hostname = NULL;
 				return 0;
 			}
-			if (getnameinfo(saddr, len, name, NI_MAXHOST, 
+			if (getnameinfo(saddr, len, name, NI_MAXHOST,
 					NULL, 0, NI_NUMERICHOST) ) {
 				free(s->hostname);
 				s->hostname = NULL;
@@ -1989,6 +2001,10 @@ other_avc:
 			*term = '"';
 		} else { 
 			s->comm = unescape(str);
+			if (s->comm == NULL) {
+				rc = 11;
+				goto err;
+			}
 			term = str + 6;
 		}
 	}
@@ -2255,6 +2271,23 @@ static int parse_kernel_anom(const lnode *n, search_items *s)
 		if (errno)
 			return 19;
 		*term = ' ';
+	}
+
+	// optionally get res
+	if (event_success != S_UNSET) {
+		str = strstr(term, "res=");
+		if (str != NULL) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term)
+				*term = 0;
+			errno = 0;
+			s->success = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 68;
+			if (term)
+				*term = ' ';
+		}
 	}
 
 	return 0;
@@ -2562,6 +2595,187 @@ static int parse_pkt(const lnode *n, search_items *s)
 					*term = ' ';
 			} else
 				return 2;
+		}
+	}
+
+	return 0;
+}
+
+// parse Yet Another Audit Subject Attributes Order
+// /pid.*uid.*auid.*tty.*ses.*subj.*comm.*exe
+static int parse_kernel(lnode *n, search_items *s)
+{
+	char *ptr, *str, *term;
+	term = n->message;
+
+	// get pid if not already filled
+	if (event_pid != -1 && s->pid == -1) {
+		str = strstr(term, " pid=");
+		if (str) {
+			ptr = str + 5;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 52;
+			*term = 0;
+			errno = 0;
+			s->pid = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 53;
+			*term = ' ';
+		} else
+			return 54;
+	}
+	// optionally get uid if not already filled
+	if ((s->uid == -1 && !s->tuid) && (event_uid != -1 || event_tuid)) {
+		str = strstr(term, "uid=");
+		if (str) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 55;
+			*term = 0;
+			errno = 0;
+			s->uid = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 56;
+			*term = ' ';
+		} else
+			s->uid = 0;
+		if (s->tuid) free((void *)s->tuid);
+		s->tuid = lookup_uid("uid", s->uid);
+	}
+	// optionally get loginuid if not already filled
+	if ((s->loginuid == -2 && !s->tauid) && (event_loginuid != -2 || event_tauid)) {
+		str = strstr(term, "auid=");
+		if (str) {
+			ptr = str + 5;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 57;
+			*term = 0;
+			errno = 0;
+			s->loginuid = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 58;
+			*term = ' ';
+		} else
+			s->loginuid = (uid_t)-1;
+		if (s->tauid) free((void *)s->tauid);
+		s->tauid = lookup_uid("auid", s->loginuid);
+	}
+	// optionally get tty if not already filled
+	if (!s->terminal && event_terminal) {
+		// dont do this search unless needed
+		str = strstr(term, "tty=");
+		if (str) {
+			str += 4;
+			term = strchr(str, ' ');
+			if (term == NULL)
+				return 59;
+			*term = 0;
+			if (s->terminal) // ANOM_NETLINK has one
+				free(s->terminal);
+			s->terminal = strdup(str);
+			*term = ' ';
+		} else
+			s->terminal = strdup("(none)");
+	}
+	// optionally get ses if not already filled
+	if (s->session_id == -2 && event_session_id != -2 ) {
+		str = strstr(term, "ses=");
+		if (str) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term == NULL)
+				return 60;
+			*term = 0;
+			errno = 0;
+			s->session_id = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 61;
+			*term = ' ';
+		} else
+			s->session_id = (uint32_t)-1;
+	}
+	// get subject if not already filled
+	if (!s->avc && event_subject) {
+		// scontext
+		str = strstr(term, "subj=");
+		if (str) {
+			str += 5;
+			term = strchr(str, ' ');
+			if (term == NULL)
+				return 62;
+			*term = 0;
+			if (audit_avc_init(s) == 0) {
+				anode an;
+
+				anode_init(&an);
+				an.scontext = strdup(str);
+				alist_append(s->avc, &an);
+				*term = ' ';
+			} else
+				return 63;
+		} else
+			return 64;
+	}
+	// get command line if not already filled
+	if (!s->comm && event_comm) {
+		// dont do this search unless needed
+		str = strstr(term, "comm=");
+		if (str) {
+			/* Make the syscall one override */
+			if (s->comm) {
+				free(s->comm);
+				s->comm = NULL;
+			}
+			str += 5;
+			if (*str == '"') {
+				str++;
+				term = strchr(str, '"');
+				if (term == NULL)
+					return 65;
+				*term = 0;
+				s->comm = strdup(str);
+				*term = '"';
+			} else 
+				s->comm = unescape(str);
+		} else
+			return 66;
+	}
+	// optionally get exe if not already filled
+	if (!s->exe && event_exe) {
+		// dont do this search unless needed
+		str = strstr(n->message, "exe=");
+		if (str) {
+			str += 4;
+			if (*str == '"') {
+				str++;
+				term = strchr(str, '"');
+				if (term == NULL)
+					return 67;
+				*term = 0;
+				s->exe = strdup(str);
+				*term = '"';
+			} else 
+				s->exe = unescape(str);
+		} else
+			s->exe = strdup("(null)");
+	}
+	// optionally get res
+	if (event_success != S_UNSET) {
+		str = strstr(term, "res=");
+		if (str != NULL) {
+			ptr = str + 4;
+			term = strchr(ptr, ' ');
+			if (term)
+				*term = 0;
+			errno = 0;
+			s->success = strtoul(ptr, NULL, 10);
+			if (errno)
+				return 69;
+			if (term)
+				*term = ' ';
 		}
 	}
 

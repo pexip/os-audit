@@ -110,7 +110,7 @@ static void usage(void)
      "    -C f=f                            Compare collected fields if available:\n"
      "                                      Field name, operator(=,!=), field name\n"
      "    -d <l,a>                          Delete rule from <l>ist with <a>ction\n"
-     "                                      l=task,exit,user,exclude\n"
+     "                                      l=task,exit,user,exclude,filesystem\n"
      "                                      a=never,always\n"
      "    -D                                Delete all rules and watches\n"
      "    -e [0..2]                         Set enabled flag\n"
@@ -130,13 +130,12 @@ static void usage(void)
      "    -R <file>                         read rules from file\n"
      "    -s                                Report status\n"
      "    -S syscall                        Build rule: syscall name or number\n"
-     "    --signal <signal>                 Send the specified signal to the daemon"
+     "    --signal <signal>                 Send the specified signal to the daemon\n"
      "    -t                                Trim directory watches\n"
      "    -v                                Version\n"
      "    -w <path>                         Insert watch at <path>\n"
      "    -W <path>                         Remove watch at <path>\n"
-#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
-    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+#if HAVE_DECL_AUDIT_FEATURE_VERSION == 1
      "    --loginuid-immutable              Make loginuids unchangeable once set\n"
 #endif
 #if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME == 1 || \
@@ -154,30 +153,30 @@ static void usage(void)
 
 static int lookup_filter(const char *str, int *filter)
 {
-	if (strcmp(str, "task") == 0) 
-		*filter = AUDIT_FILTER_TASK;
-	else if (strcmp(str, "exit") == 0)
+	if (strcmp(str, "exit") == 0)
 		*filter = AUDIT_FILTER_EXIT;
+	else if (strcmp(str, "task") == 0)
+		*filter = AUDIT_FILTER_TASK;
 	else if (strcmp(str, "user") == 0)
 		*filter = AUDIT_FILTER_USER;
-	else if (strcmp(str, "filesystem") == 0)
-		*filter = AUDIT_FILTER_FS;
 	else if (strcmp(str, "exclude") == 0) {
 		*filter = AUDIT_FILTER_EXCLUDE;
 		exclude = 1;
-	} else
+	} else if (strcmp(str, "filesystem") == 0)
+		*filter = AUDIT_FILTER_FS;
+	else
 		return 2;
 	return 0;
 }
 
 static int lookup_action(const char *str, int *act)
 {
-	if (strcmp(str, "never") == 0)
+	if (strcmp(str, "always") == 0)
+		*act = AUDIT_ALWAYS;
+	else if (strcmp(str, "never") == 0)
 		*act = AUDIT_NEVER;
 	else if (strcmp(str, "possible") == 0)
 		return 1;
-	else if (strcmp(str, "always") == 0)
-		*act = AUDIT_ALWAYS;
 	else
 		return 2;
 	return 0;
@@ -201,8 +200,8 @@ static int audit_rule_setup(char *opt, int *filter, int *act)
 	*p = 0;
 
 	/* Try opt both ways */
-	if (lookup_filter(opt, filter) == 2) {
-		rc = lookup_action(opt, act);
+	if (lookup_action(opt, act) == 2) {
+		rc = lookup_filter(opt, filter);
 		if (rc != 0) {
 			*p = ',';
 			return rc;
@@ -369,7 +368,7 @@ static int audit_request_rule_list(void)
 	return 0;
 }
 
-static void check_rule_mismatch(int lineno, const char *option)
+static int check_rule_mismatch(int lineno, const char *option)
 {
 	struct audit_rule_data tmprule;
 	unsigned int old_audit_elf = _audit_elf;
@@ -387,17 +386,28 @@ static void check_rule_mismatch(int lineno, const char *option)
 			_audit_elf = AUDIT_ARCH_S390;
 			break;
 	}
+
+	char *ptr, *saved, *tmp = strdup(option);
+	if (tmp == NULL)
+		return -1;
+	ptr = strtok_r(tmp, ",", &saved);
 	memset(&tmprule, 0, sizeof(struct audit_rule_data));
-	audit_rule_syscallbyname_data(&tmprule, option);
+	while (ptr) {
+		audit_rule_syscallbyname_data(&tmprule, ptr);
+		ptr = strtok_r(NULL, ",", &saved);
+	}
 	if (memcmp(tmprule.mask, rule_new->mask, AUDIT_BITMASK_SIZE))
 		rc = 1;
+	free(tmp);
+
 	_audit_elf = old_audit_elf;
-	if (rc) { 
+	if (rc) {
 		if (lineno)
 			audit_msg(LOG_WARNING, "WARNING - 32/64 bit syscall mismatch in line %d, you should specify an arch", lineno);
 		else
 			audit_msg(LOG_WARNING, "WARNING - 32/64 bit syscall mismatch, you should specify an arch");
 	}
+	return 0;
 }
 
 
@@ -533,8 +543,7 @@ static int parse_syscall(const char *optarg)
 
 static struct option long_opts[] =
 {
-#if defined(HAVE_DECL_AUDIT_FEATURE_VERSION) && \
-    defined(HAVE_STRUCT_AUDIT_STATUS_FEATURE_BITMAP)
+#if HAVE_DECL_AUDIT_FEATURE_VERSION == 1
   {"loginuid-immutable", 0, NULL, 1},
 #endif
 #if HAVE_DECL_AUDIT_VERSION_BACKLOG_WAIT_TIME == 1 || \
@@ -826,7 +835,8 @@ static int setopt(int count, int lineno, char *vars[])
 			case 0:
 				_audit_syscalladded = 1;
 				if (unknown_arch && add != AUDIT_FILTER_UNSET)
-					check_rule_mismatch(lineno, optarg);
+					if (check_rule_mismatch(lineno, optarg) == -1)
+						retval = -1;
 				break;
 			case -1:
 				audit_msg(LOG_ERR, "Syscall name unknown: %s", 
@@ -1010,7 +1020,7 @@ process_keys:
 		}
 		break;
 	case 'p':
-		if (!add && !del) {
+		if (add == AUDIT_FILTER_UNSET && del == AUDIT_FILTER_UNSET) {
 			audit_msg(LOG_ERR,
 			"permission option needs a watch given prior to it");
 			retval = -1;

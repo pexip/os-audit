@@ -1,6 +1,6 @@
 /*
  * normalize_syscall_map.h
- * Copyright (c) 2016-17 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2016-17,2021 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -24,6 +24,7 @@
 
 _S(NORM_FILE_STAT, "access")
 _S(NORM_FILE_STAT, "faccessat")
+_S(NORM_FILE_STAT, "faccessat2")
 _S(NORM_FILE_CHPERM, "chmod")
 _S(NORM_FILE_CHPERM, "fchmod")
 _S(NORM_FILE_CHPERM, "fchmodat")
@@ -40,19 +41,25 @@ _S(NORM_FILE_CHATTR, "lsetxattr")
 _S(NORM_FILE_DIR, "mkdir")
 _S(NORM_FILE_DIR, "mkdirat")
 _S(NORM_FILE_MOUNT, "mount")
+_S(NORM_FILE_MOUNT, "move_mount")
+_S(NORM_FILE_MOUNT, "fsmount")
+_S(NORM_FILE_MOUNT, "fspick")
 _S(NORM_FILE_STAT, "newfstatat")
 _S(NORM_FILE_STAT, "stat")
 _S(NORM_FILE_STAT, "fstat")
 _S(NORM_FILE_STAT, "lstat")
 _S(NORM_FILE_STAT, "stat64")
+_S(NORM_FILE_STAT, "statx")
 _S(NORM_FILE_SYS_STAT, "statfs")
 _S(NORM_FILE_SYS_STAT, "fstatfs")
 _S(NORM_FILE, "creat")
 _S(NORM_FILE, "fallocate")
 _S(NORM_FILE, "truncate")
 _S(NORM_FILE, "ftruncate")
+_S(NORM_FILE, "memfd_create")
 _S(NORM_FILE, "open")
 _S(NORM_FILE, "openat")
+_S(NORM_FILE, "openat2")
 _S(NORM_FILE, "readlink")
 _S(NORM_FILE, "readlinkat")
 _S(NORM_FILE_CHATTR, "removexattr")

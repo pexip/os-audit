@@ -1,6 +1,6 @@
 /*
  * ausearch.c - main file for ausearch utility
- * Copyright 2005-08,2010,2013,2014,2020 Red Hat
+ * Copyright 2005-08,2010,2013,2014,2020-21 Red Hat
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -14,8 +14,9 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; see the file COPYING. If not, write to the
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
+ * Boston, MA 02110-1335, USA.
  *
  * Authors:
  *     Steve Grubb <sgrubb@redhat.com>
@@ -52,11 +53,12 @@ static int found = 0;
 static int input_is_pipe = 0;
 static int timeout_interval = 3;	/* timeout in seconds */
 static int files_to_process = 0;	/* number of log files yet to process when reading multiple */
+static struct daemon_conf config;
 static int process_logs(void);
 static int process_log_fd(void);
 static int process_stdin(void);
 static int process_file(char *filename);
-static int get_record(llist **);
+static int get_next_event(llist **);
 
 extern const char *checkpt_filename;	/* checkpoint file name */
 extern int checkpt_timeonly;	/* use timestamp from within checkpoint file */
@@ -65,8 +67,14 @@ extern char *user_file;
 extern int force_logs;
 static int userfile_is_dir = 0;
 extern int match(llist *l);
-extern void output_record(llist *l);
+extern void output_event(llist *l);
 extern void ausearch_free_interpretations(void);
+extern void output_auparse_finish(void);
+
+/*
+ * User space configuration items
+ */
+extern time_t arg_eoe_timeout;
 
 static int is_pipe(int fd)
 {
@@ -100,6 +108,20 @@ int main(int argc, char *argv[])
 	set_aumessage_mode(MSG_STDERR, DBG_NO);
 	(void) umask( umask( 077 ) | 027 );
 
+	/* Load config so we know where logs are and eoe_timeout */
+	if (load_config(&config, TEST_SEARCH))
+	        fprintf(stderr, "NOTE - using built-in logs: %s\n",
+				config.log_file);
+
+	/* Set timeout from the config file */
+	lol_set_eoe_timeout((time_t)config.end_of_event_timeout);
+
+	/*
+	 * If an override was specified on the command line, override the config
+	 */
+	if (arg_eoe_timeout != 0)
+		lol_set_eoe_timeout((time_t)arg_eoe_timeout);
+
 	/* Load the checkpoint file if requested */
 	if (checkpt_filename) {
 		rc = load_ChkPt(checkpt_filename);
@@ -124,7 +146,7 @@ int main(int argc, char *argv[])
 			have_chkpt_data++;
 		}
 	}
-	
+
 	lol_create(&lo);
 	if (user_file) {
 		if (stat(user_file, &sb) == -1) {
@@ -143,6 +165,7 @@ int main(int argc, char *argv[])
 					/* we deal with failures via
 					 * checkpt_failure later */
 					(void)set_ChkPtFileDetails(user_file);
+				free_config(&config);
 				break;
 		}
 	} else if (force_logs)
@@ -187,6 +210,7 @@ skip_checkpt:
 	free((char *)event_teuid);
 	free((char *)event_tauid);
 	auparse_destroy(NULL);
+	output_auparse_finish();
 	if (rc)
 		return rc;
 	if (!found) {
@@ -199,31 +223,22 @@ skip_checkpt:
 
 static int process_logs(void)
 {
-	struct daemon_conf config;
 	char *filename;
 	int len, num = 0;
 	int found_chkpt_file = -1;
 	int ret;
 
 	if (user_file && userfile_is_dir) {
-		char dirname[MAXPATHLEN];
+		char dirname[MAXPATHLEN+1];
 		clear_config (&config);
 
-		strcpy(dirname, user_file);
+		strncpy(dirname, user_file, MAXPATHLEN-32);
 		if (dirname[strlen(dirname)-1] != '/')
 				strcat(dirname, "/");
 		strcat (dirname, "audit.log");
 		free((void *)config.log_file);
 		config.log_file=strdup(dirname);
 		fprintf(stderr, "NOTE - using logs in %s\n", config.log_file);
-	}
-	else {
-		/* Load config so we know where logs are */
-        	if (load_config(&config, TEST_SEARCH)) {
-        	        fprintf(stderr,
-				"NOTE - using built-in logs: %s\n",
-				config.log_file);
-		}
 	}
 
 	/* for each file */
@@ -428,17 +443,17 @@ static int chkpt_output_decision(event * e)
 
 static int process_log_fd(void)
 {
-	llist *entries; // entries in a record
+	llist *entries; // list of records in a complete event
 	int ret;
 	int do_output = 1;
 
 	/* For each record in file */
 	do {
-		ret = get_record(&entries);
-		if ((ret != 0)||(entries->cnt == 0)) {
+		ret = get_next_event(&entries);
+		if ((ret != 0)||(entries->cnt == 0))
 			break;
-		}
-		/* 
+
+		/*
  		 * We flush all events on the last log file being processed.
  		 * Thus incomplete events are 'carried forward' to be
  		 * completed from the rest of it's records we expect to find
@@ -454,7 +469,7 @@ static int process_log_fd(void)
 
 			if (do_output == 1) {
 				found = 1;
-				output_record(entries);
+				output_event(entries);
 			} else if (do_output == 3) {
 				fprintf(stderr,
 			"Corrupted checkpoint file. Inode match, but newer complete event (%lu.%03u:%lu) found before loaded checkpoint %lu.%03u:%lu\n",
@@ -502,11 +517,15 @@ static void alarm_handler(int signal)
 
 static int process_stdin(void)
 {
+	struct sigaction sa;
 	log_fd = stdin;
-	input_is_pipe=1;
+	input_is_pipe = 1;
 
-	if (signal(SIGALRM, alarm_handler) == SIG_ERR ||
-	    siginterrupt(SIGALRM, 1) == -1)
+	sa.sa_flags = 0;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_handler = alarm_handler;
+
+	if (sigaction(SIGALRM, &sa, NULL) < 0)
 		return -1;
 
 	return process_log_fd();
@@ -526,10 +545,10 @@ static int process_file(char *filename)
 }
 
 /*
- * This function returns a malloc'd buffer of the next record in the audit
- * logs. It returns 0 on success, 1 on eof, -1 on error. 
+ * This function returns a linked list of all the records in the next audit
+ * event. It returns 0 on success, 1 on eof, -1 on error.
  */
-static int get_record(llist **l)
+static int get_next_event(llist **l)
 {
 	char *rc;
 	char *buff = NULL;

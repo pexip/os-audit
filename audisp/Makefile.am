@@ -13,8 +13,9 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# along with this program; see the file COPYING. If not, write to the
+# Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+# Boston, MA 02110-1335, USA.
 #
 # Authors:
 #   Steve Grubb <sgrubb@redhat.com>
@@ -23,13 +24,13 @@
 SUBDIRS = plugins 
 CONFIG_CLEAN_FILES = *.rej *.orig
 AM_CPPFLAGS = -D_GNU_SOURCE -fPIC -DPIC -I${top_srcdir} -I${top_srcdir}/lib -I${top_srcdir}/src -I${top_srcdir}/src/libev
-LIBS = -L${top_builddir}/lib -laudit 
+LIBS = ${top_builddir}/lib/libaudit.la
 LDADD = -lpthread
 
 noinst_HEADERS = audispd-pconfig.h audispd-llist.h audispd-config.h \
 	queue.h audispd-builtins.h libdisp.h
-libdisp_a_SOURCES = audispd.c audispd-pconfig.c queue.c \
+libdisp_la_SOURCES = audispd.c audispd-pconfig.c queue.c \
 	audispd-llist.c audispd-builtins.c
-libdisp_a_CFLAGS = -fno-strict-aliasing
-noinst_LIBRARIES = libdisp.a
-
+libdisp_la_CFLAGS = -fno-strict-aliasing ${WFLAGS}
+libdisp_la_LDFLAGS = -no-undefined -static
+noinst_LTLIBRARIES = libdisp.la

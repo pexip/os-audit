@@ -1,5 +1,5 @@
 # Makefile.am -- 
-# Copyright 2006-08,2014-17 Red Hat Inc., Durham, North Carolina.
+# Copyright 2006-08,2014-17 Red Hat Inc.
 # All Rights Reserved.
 #
 # This library is free software; you can redistribute it and/or
@@ -23,23 +23,23 @@
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig *.cur
 check_PROGRAMS = auparse_test auparselol_test lookup_test
 dist_check_SCRIPTS = auparse_test.py
-EXTRA_DIST = auparse_test.ref auparse_test.ref.py test.log test2.log test3.log auditd_raw.sed
+EXTRA_DIST = auparse_test.ref auparse_test.ref.py test.log test2.log test3.log test4.log auditd_raw.sed
 
 AM_CPPFLAGS = -I${top_srcdir}/auparse -I${top_srcdir}/lib
 
 lookup_test_SOURCES = lookup_test.c
 lookup_test_LDADD = ${top_builddir}/auparse/libauparse.la \
-	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.a
+	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.la
 
 auparse_test_SOURCES = auparse_test.c
 auparse_test_LDFLAGS = -static
 auparse_test_LDADD = ${top_builddir}/auparse/libauparse.la \
-	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.a
+	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.la
 
 auparselol_test_SOURCES = auparselol_test.c
 auparselol_test_LDFLAGS = -static
 auparselol_test_LDADD = ${top_builddir}/auparse/libauparse.la \
-	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.a
+	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.la
 
 drop_srcdir = sed 's,$(srcdir)/test,test,'
 

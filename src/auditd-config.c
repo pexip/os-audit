@@ -1,5 +1,5 @@
 /* auditd-config.c -- 
- * Copyright 2004-2011,2013-14,2016,2018 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2004-2011,2013-14,2016,2018,2020-21 Red Hat Inc.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -18,7 +18,7 @@
  *
  * Authors:
  *   Steve Grubb <sgrubb@redhat.com>
- * 
+ *
  */
 
 #include "config.h"
@@ -144,6 +144,8 @@ static int max_restarts_parser(struct nv_pair *nv, int line,
 		struct daemon_conf *config);
 static int plugin_dir_parser(struct nv_pair *nv, int line,
 		struct daemon_conf *config);
+static int eoe_timeout_parser(struct nv_pair *nv, int line,
+		struct daemon_conf *config);
 static int sanity_check(struct daemon_conf *config);
 
 static const struct kw_pair keywords[] = 
@@ -186,6 +188,7 @@ static const struct kw_pair keywords[] =
   {"overflow_action",          overflow_action_parser,          0 },
   {"max_restarts",             max_restarts_parser,             0 },
   {"plugin_dir",               plugin_dir_parser,               0 },
+  {"end_of_event_timeout",     eoe_timeout_parser,              0 },
   { NULL,                      NULL,                            0 }
 };
 
@@ -344,11 +347,12 @@ void clear_config(struct daemon_conf *config)
 	config->krb5_principal = NULL;
 	config->krb5_key_file = NULL;
 	config->distribute_network_events = 0;
-	config->q_depth = 400;
+	config->q_depth = 2000;
 	config->overflow_action = O_SYSLOG;
 	config->max_restarts = 10;
 	config->plugin_dir = strdup("/etc/audit/plugins.d");
 	config->config_dir = NULL;
+	config->end_of_event_timeout = EOE_TIMEOUT;
 }
 
 static log_test_t log_test = TEST_AUDITD;
@@ -1764,7 +1768,9 @@ static int q_depth_parser(struct nv_pair *nv, int line,
 	if (i > 99999) {
 		audit_msg(LOG_ERR, "q_depth must be 99999 or less");
 		return 1;
-	}
+	} else if (i < 512)
+		audit_msg(LOG_WARNING,
+			 "q_depth should be larger than 512 for safety margin");
 	config->q_depth = i;
 	return 0;
 }
@@ -1846,6 +1852,37 @@ static int plugin_dir_parser(struct nv_pair *nv, int line,
 	return 0;
 }
 
+static int eoe_timeout_parser(struct nv_pair *nv, int line,
+		struct daemon_conf *config)
+{
+	const char *ptr = nv->value;
+	unsigned long i;
+
+	audit_msg(LOG_DEBUG, "eoe_timeout_parser called with: %s", nv->value);
+
+	/* check that all chars are numbers */
+	for (i=0; ptr[i]; i++) {
+		if (!isdigit(ptr[i])) {
+			audit_msg(LOG_ERR,
+				"Value %s should only be numbers - line %d",
+				nv->value, line);
+			return 1;
+		}
+	}
+
+	/* convert to unsigned long */
+	errno = 0;
+	i = strtoul(nv->value, NULL, 10);
+	if (errno) {
+		audit_msg(LOG_ERR,
+			"Error converting string to a number (%s) - line %d",
+			strerror(errno), line);
+		return 1;
+	}
+	config->end_of_event_timeout = i;
+	return 0;
+}
+
 /*
  * Query file system and calculate in MB the given percentage is.
  * Returns 0 on error and a number otherwise.
@@ -1913,6 +1950,21 @@ static int sanity_check(struct daemon_conf *config)
 		"Error - incremental flushing chosen, but 0 selected for freq");
 		return 1;
 	}
+	if (config->log_group != 0) {
+		int rc = 0;
+		char *path = strdup(config->log_file);
+		const char *dir = dirname(path);
+		if (dir && strcmp(dir, "/var/log") == 0) {
+			audit_msg(LOG_ERR,
+				  "Error - log_file is directly in %s and chgrp"
+				  " will alter a system directory's permissions. Use"
+				  " another directory.", dir);
+			rc = 1;
+		}
+		free(path);
+		if (rc)
+			return rc;
+	}
 	/* Warnings */
 	if (config->flush > FT_INCREMENTAL_ASYNC && config->freq != 0) {
 		audit_msg(LOG_WARNING, 
@@ -1961,7 +2013,8 @@ void free_config(struct daemon_conf *config)
         free((void *)config->krb5_key_file);
 	free((void *)config->plugin_dir);
         free((void *)config_dir);
-        free(config_file);
+	free(config_file);
+        config_file = NULL;
 	config->config_dir = NULL;
 }
 
@@ -1980,8 +2033,13 @@ int resolve_node(struct daemon_conf *config)
 				audit_msg(LOG_ERR,
 					"Unable to get machine name");
 				rc = -1;
-			} else
+			} else {
+				// Remove any spaces
+				char *p;
+				while ((p = strchr(tmp_name, ' ')))
+				       *p = '_';
 				config->node_name = strdup(tmp_name);
+			}
 			break;
 		case N_USER:
 			if (config->node_name == NULL) {

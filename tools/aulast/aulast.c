@@ -45,7 +45,8 @@ static char *cterm = NULL, *user = NULL;
 void usage(void)
 {
 	fprintf(stderr,
- "usage: aulast [--stdin] [--proof] [--extract] [-f file] [--user name] [--tty tty]\n");
+ "usage: aulast [--bad] [--debug] [--stdin] [--proof] [--extract] [-f file] "
+ "[--user name] [--tty tty]\n");
 }
 
 /* This outputs a line of text reporting the login/out times */
@@ -95,8 +96,11 @@ static void report_session(lnode* cur)
 			int mins, hours, days;
 			if (notime)
 				printf("- %-7.5s", " ");
-			else
-				printf("- %-7.5s", ctime(&cur->end) + 11);
+			else {
+				char *ttime = ctime(&cur->end);
+				printf("- %-7.5s", ttime ? ttime + 11 :
+				       "bad value");
+			}
 			secs = cur->end - cur->start;
 			mins  = (secs / 60) % 60;
 			hours = (secs / 3600) % 24;
@@ -127,10 +131,13 @@ static void report_session(lnode* cur)
 		strftime(start, sizeof(start), "%x %T", btm);
 		if (cur->end != 0) {
 			btm = localtime(&cur->end);
-			strftime(end, sizeof(end), "%x %T", btm);
-		      printf("    ausearch --start %s --end %s",
-				start, end);
+			if (btm) {
+				strftime(end, sizeof(end), "%x %T", btm);
+				printf("    ausearch --start %s --end %s",
+					start, end);
+			} else goto no_end;
 		} else {
+no_end:
 		    printf("    ausearch --start %s", start);
 		}
 		if (cur->name == NULL)
@@ -401,7 +408,7 @@ static void update_session_logout(auparse_state_t *au)
 static void process_bootup(auparse_state_t *au)
 {
 	lnode *cur;
-	int start;
+	time_t start;
 
 	// See if we have unclosed boot up and make into CRASH record
 	list_first(&l);

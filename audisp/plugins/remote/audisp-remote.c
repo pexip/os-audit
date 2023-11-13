@@ -566,7 +566,7 @@ int main(int argc, char *argv[])
 		// See if input fd is also set
 		if (FD_ISSET(ifd, &rfd)) {
 			do {
-				if (audit_fgets(event, sizeof(event), ifd)) {
+				if (audit_fgets(event,sizeof(event),ifd) > 0) {
 					if (!transport_ok && remote_ended &&
 						(config.remote_ending_action ==
 								FA_RECONNECT ||
@@ -619,7 +619,7 @@ int main(int argc, char *argv[])
 
 	// If stdin is a pipe, then flush the queue
 	if (is_pipe(0)) {
-		while (q_queue_length(queue) && transport_ok)
+		while (q_queue_length(queue) && !suspend && transport_ok)
 			send_one(queue);
 	}
 
@@ -757,9 +757,16 @@ static void gss_failure (const char *msg, int major_status, int minor_status)
 		gss_failure_2 (msg, minor_status, GSS_C_MECH_CODE);
 }
 
-#define KCHECK(x,f) if (x) { \
-		syslog (LOG_ERR, "krb5 error: %s in %s\n", krb5_get_error_message (kcontext, x), f); \
-		return -1; }
+#define KLOG(x,f) { \
+	const char *kstr = krb5_get_error_message(kcontext, x); \
+	syslog (LOG_ERR, "krb5 error: %s in %s\n", kstr, f); \
+	krb5_free_error_message(kcontext, kstr); }
+static krb5_context kcontext = NULL;
+static char *realm_name = NULL;
+static krb5_principal audit_princ;
+static krb5_ccache ccache = NULL;
+static krb5_get_init_creds_opt options;
+static krb5_keytab keytab = NULL;
 
 /* Each time we connect to the server, we negotiate a set of credentials and
    a security context. To do this, we need our own credentials first. For
@@ -782,13 +789,7 @@ static int negotiate_credentials (void)
 	   we use Kerberos calls here.  */
 
 	int krberr;
-	krb5_context kcontext = NULL;
-	char *realm_name;
-	krb5_principal audit_princ;
-	krb5_ccache ccache = NULL;
 	krb5_creds my_creds;
-        krb5_get_init_creds_opt options;
-	krb5_keytab keytab = NULL;
 	const char *krb5_client_name;
 	char *slashptr;
 	char host_name[255];
@@ -800,7 +801,10 @@ static int negotiate_credentials (void)
 	recv_tok.value = NULL;
 
 	krberr = krb5_init_context (&kcontext);
-	KCHECK (krberr, "krb5_init_context");
+	if (krberr) {
+		KLOG (krberr, "krb5_init_context");
+		return -1;
+	}
 
 	if (config.krb5_key_file)
 		key_file = config.krb5_key_file;
@@ -815,30 +819,33 @@ static int negotiate_credentials (void)
 				syslog (LOG_ERR,
 			"%s is not mode 0400 (it's %#o) - compromised key?",
 					key_file, st.st_mode & 07777);
-			return -1;
+			goto error1;
 		}
 		if (st.st_uid != 0) {
 			if (!quiet)
 				syslog (LOG_ERR,
 			"%s is not owned by root (it's %d) - compromised key?",
 					key_file, st.st_uid);
-			return -1;
+			goto error1;
 		}
 	}
 
 	/* This looks up the default real (*our* realm) from
 	   /etc/krb5.conf (or wherever)  */
 	krberr = krb5_get_default_realm (kcontext, &realm_name);
-	KCHECK (krberr, "krb5_get_default_realm");
+	if (krberr) {
+		KLOG (krberr, "krb5_get_default_realm");
+		goto error1;
+	}
 
 	krb5_client_name = config.krb5_client_name ?
 				config.krb5_client_name : "auditd";
 	if (gethostname(host_name, sizeof(host_name)) != 0) {
 		if (!quiet)
 			syslog (LOG_ERR,
-			"gethostname: host name longer than %ld characters?",
+			"gethostname: host name longer than %lu characters?",
 				sizeof (host_name));
-		return -1;
+		goto error2;
 	}
 
 	syslog (LOG_ERR, "kerberos principal: %s/%s@%s\n",
@@ -847,17 +854,26 @@ static int negotiate_credentials (void)
 	krberr = krb5_build_principal (kcontext, &audit_princ,
 				       strlen(realm_name), realm_name,
 				       krb5_client_name, host_name, NULL);
-	KCHECK (krberr, "krb5_build_principal");
+	if (krberr) {
+		KLOG (krberr, "krb5_build_principal");
+		goto error2;
+	}
 
 	/* Locate our machine's key table, where our private key is
 	 * held.  */
 	krberr = krb5_kt_resolve (kcontext, key_file, &keytab);
-	KCHECK (krberr, "krb5_kt_resolve");
+	if (krberr) {
+		KLOG (krberr, "krb5_kt_resolve");
+		goto error3;
+	}
 
 	/* Identify a cache to hold the key in.  The GSS wrappers look
 	   up our credentials here.  */
 	krberr = krb5_cc_resolve (kcontext, CCACHE_NAME, &ccache);
-	KCHECK (krberr, "krb5_cc_resolve");
+	if (krberr) {
+		KLOG (krberr, "krb5_cc_resolve");
+		goto error4;
+	}
 
 	setenv("KRB5CCNAME", CCACHE_NAME, 1);
 
@@ -872,15 +888,24 @@ static int negotiate_credentials (void)
 	krberr = krb5_get_init_creds_keytab(kcontext, &my_creds, audit_princ,
 					    keytab, 0, NULL,
 					    &options);
-	KCHECK (krberr, "krb5_get_init_creds_keytab");
+	if (krberr) {
+		KLOG (krberr, "krb5_get_init_creds_keytab");
+		goto error5;
+	}
 
 	/* Create the cache... */
 	krberr = krb5_cc_initialize(kcontext, ccache, audit_princ);
-	KCHECK (krberr, "krb5_cc_initialize");
+	if (krberr) {
+		KLOG (krberr, "krb5_cc_initialize");
+		goto error5;
+	}
 
 	/* ...and store our credentials in it.  */
 	krberr = krb5_cc_store_cred(kcontext, ccache, &my_creds);
-	KCHECK (krberr, "krb5_cc_store_cred");
+	if (krberr) {
+		KLOG (krberr, "krb5_cc_store_cred");
+		goto error5;
+	}
 
 	/* The GSS code now has a set of credentials for this program.
 	   I.e.  we know who "we" are.  Now we talk to the server to
@@ -903,13 +928,13 @@ static int negotiate_credentials (void)
 			       (gss_OID) gss_nt_service_name, &service_name_e);
 	if (major_status != GSS_S_COMPLETE) {
 		gss_failure("importing name", major_status, minor_status);
-		return -1;
+		goto error5;
 	}
 
 	/* Someone has to go first.  In this case, it's us.  */
 	if (send_token(sock, empty_token) < 0) {
 		(void) gss_release_name(&minor_status, &service_name_e);
-		return -1;
+		goto error5;
 	}
 
 	/* The server starts this loop with the token we just sent
@@ -936,7 +961,7 @@ static int negotiate_credentials (void)
 						&send_tok);
 				(void) gss_release_name(&minor_status,
 						&service_name_e);
-				return -1;
+				goto error5;
 			}
 		}
 		(void) gss_release_buffer(&minor_status, &send_tok);
@@ -949,7 +974,7 @@ static int negotiate_credentials (void)
 			if (*gss_context != GSS_C_NO_CONTEXT)
 				gss_delete_sec_context(&minor_status,
 						gss_context, GSS_C_NO_BUFFER);
-			return -1;
+			goto error5;
 		}
 
 		/* Now get any tokens the sever sends back.  We use
@@ -958,7 +983,7 @@ static int negotiate_credentials (void)
 			if (recv_token(sock, &recv_tok) < 0) {
 				(void) gss_release_name(&minor_status,
 							&service_name_e);
-				return -1;
+				goto error5;
 			}
 			token_ptr = &recv_tok;
 		}
@@ -985,6 +1010,22 @@ static int negotiate_credentials (void)
 		  (char *)recv_tok.value);
 #endif
 	return 0;
+
+error5:
+	krb5_cc_close(kcontext, ccache);
+	ccache = NULL;
+error4:
+	krb5_kt_close(kcontext, keytab);
+	keytab = NULL;
+error3:
+	krb5_free_principal(kcontext, audit_princ);
+error2:
+	krb5_free_default_realm(kcontext, realm_name);
+	realm_name = NULL;
+error1:
+	krb5_free_context(kcontext);
+	kcontext = NULL;
+	return -1;
 }
 #endif // USE_GSSAPI
 
@@ -997,6 +1038,15 @@ static int stop_sock(void)
 			gss_delete_sec_context(&minor_status, &my_context,
 						GSS_C_NO_BUFFER);
 			my_context = GSS_C_NO_CONTEXT;
+			krb5_cc_close(kcontext, ccache);
+			ccache = NULL;
+			krb5_kt_close(kcontext, keytab);
+			keytab = NULL;
+			krb5_free_principal(kcontext, audit_princ);
+			krb5_free_default_realm(kcontext, realm_name);
+			realm_name = NULL;
+			krb5_free_context(kcontext);
+			kcontext = NULL;
 		}
 #endif
 		shutdown(sock, SHUT_RDWR);

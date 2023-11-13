@@ -124,6 +124,10 @@ AUDIT_TIME_INJOFFSET = _audit.AUDIT_TIME_INJOFFSET
 AUDIT_TIME_ADJNTPVAL = _audit.AUDIT_TIME_ADJNTPVAL
 AUDIT_BPF = _audit.AUDIT_BPF
 AUDIT_EVENT_LISTENER = _audit.AUDIT_EVENT_LISTENER
+AUDIT_URINGOP = _audit.AUDIT_URINGOP
+AUDIT_OPENAT2 = _audit.AUDIT_OPENAT2
+AUDIT_DM_CTRL = _audit.AUDIT_DM_CTRL
+AUDIT_DM_EVENT = _audit.AUDIT_DM_EVENT
 AUDIT_AVC = _audit.AUDIT_AVC
 AUDIT_SELINUX_ERR = _audit.AUDIT_SELINUX_ERR
 AUDIT_AVC_PATH = _audit.AUDIT_AVC_PATH
@@ -167,6 +171,7 @@ AUDIT_FILTER_EXIT = _audit.AUDIT_FILTER_EXIT
 AUDIT_FILTER_EXCLUDE = _audit.AUDIT_FILTER_EXCLUDE
 AUDIT_FILTER_TYPE = _audit.AUDIT_FILTER_TYPE
 AUDIT_FILTER_FS = _audit.AUDIT_FILTER_FS
+AUDIT_FILTER_URING_EXIT = _audit.AUDIT_FILTER_URING_EXIT
 AUDIT_NR_FILTERS = _audit.AUDIT_NR_FILTERS
 AUDIT_FILTER_PREPEND = _audit.AUDIT_FILTER_PREPEND
 AUDIT_NEVER = _audit.AUDIT_NEVER
@@ -445,6 +450,7 @@ AUDIT_APPARMOR_DENIED = _audit.AUDIT_APPARMOR_DENIED
 AUDIT_APPARMOR_HINT = _audit.AUDIT_APPARMOR_HINT
 AUDIT_APPARMOR_STATUS = _audit.AUDIT_APPARMOR_STATUS
 AUDIT_APPARMOR_ERROR = _audit.AUDIT_APPARMOR_ERROR
+AUDIT_APPARMOR_KILL = _audit.AUDIT_APPARMOR_KILL
 AUDIT_FIRST_KERN_CRYPTO_MSG = _audit.AUDIT_FIRST_KERN_CRYPTO_MSG
 AUDIT_LAST_KERN_CRYPTO_MSG = _audit.AUDIT_LAST_KERN_CRYPTO_MSG
 AUDIT_INTEGRITY_FIRST_MSG = _audit.AUDIT_INTEGRITY_FIRST_MSG
@@ -470,6 +476,9 @@ AUDIT_ANOM_DEL_ACCT = _audit.AUDIT_ANOM_DEL_ACCT
 AUDIT_ANOM_MOD_ACCT = _audit.AUDIT_ANOM_MOD_ACCT
 AUDIT_ANOM_ROOT_TRANS = _audit.AUDIT_ANOM_ROOT_TRANS
 AUDIT_ANOM_LOGIN_SERVICE = _audit.AUDIT_ANOM_LOGIN_SERVICE
+AUDIT_ANOM_LOGIN_ROOT = _audit.AUDIT_ANOM_LOGIN_ROOT
+AUDIT_ANOM_ORIGIN_FAILURES = _audit.AUDIT_ANOM_ORIGIN_FAILURES
+AUDIT_ANOM_SESSION = _audit.AUDIT_ANOM_SESSION
 AUDIT_FIRST_ANOM_RESP = _audit.AUDIT_FIRST_ANOM_RESP
 AUDIT_LAST_ANOM_RESP = _audit.AUDIT_LAST_ANOM_RESP
 AUDIT_RESP_ANOMALY = _audit.AUDIT_RESP_ANOMALY
@@ -487,6 +496,7 @@ AUDIT_RESP_SINGLE = _audit.AUDIT_RESP_SINGLE
 AUDIT_RESP_HALT = _audit.AUDIT_RESP_HALT
 AUDIT_RESP_ORIGIN_BLOCK = _audit.AUDIT_RESP_ORIGIN_BLOCK
 AUDIT_RESP_ORIGIN_BLOCK_TIMED = _audit.AUDIT_RESP_ORIGIN_BLOCK_TIMED
+AUDIT_RESP_ORIGIN_UNBLOCK_TIMED = _audit.AUDIT_RESP_ORIGIN_UNBLOCK_TIMED
 AUDIT_FIRST_USER_LSPP_MSG = _audit.AUDIT_FIRST_USER_LSPP_MSG
 AUDIT_LAST_USER_LSPP_MSG = _audit.AUDIT_LAST_USER_LSPP_MSG
 AUDIT_USER_ROLE_CHANGE = _audit.AUDIT_USER_ROLE_CHANGE
@@ -776,9 +786,6 @@ def audit_update_watch_perms(rule, perms):
 def audit_add_watch(rulep, path):
     return _audit.audit_add_watch(rulep, path)
 
-def audit_add_dir(rulep, path):
-    return _audit.audit_add_dir(rulep, path)
-
 def audit_add_watch_dir(type, rulep, path):
     return _audit.audit_add_watch_dir(type, rulep, path)
 
@@ -794,8 +801,8 @@ def audit_add_rule_data(fd, rule, flags, action):
 def audit_delete_rule_data(fd, rule, flags, action):
     return _audit.audit_delete_rule_data(fd, rule, flags, action)
 
-def audit_value_needs_encoding(str, len):
-    return _audit.audit_value_needs_encoding(str, len)
+def audit_value_needs_encoding(str, size):
+    return _audit.audit_value_needs_encoding(str, size)
 
 def audit_encode_value(final, buf, size):
     return _audit.audit_encode_value(final, buf, size)
@@ -826,9 +833,6 @@ def audit_rule_create_data():
 
 def audit_rule_init_data(rule):
     return _audit.audit_rule_init_data(rule)
-
-def audit_rule_syscall_data(rule, scall):
-    return _audit.audit_rule_syscall_data(rule, scall)
 
 def audit_rule_syscallbyname_data(rule, scall):
     return _audit.audit_rule_syscallbyname_data(rule, scall)

@@ -61,17 +61,20 @@ static int nv_split(char *buf, struct _pair *nv);
 static const struct kw_pair *kw_lookup(const char *val);
 static int log_file_parser(auparse_state_t *au, const char *val, int line, 
 		struct daemon_conf *config);
+static int eoe_timeout_parser(auparse_state_t *au, const char *val, int line,
+		struct daemon_conf *config);
 
 static const struct kw_pair keywords[] = 
 {
   {"log_file",		log_file_parser },
+  {"end_of_event_timeout", eoe_timeout_parser },
   { NULL,		NULL }
 };
 
 /*
  * Set everything to its default value
 */
-void clear_config(struct daemon_conf *config)
+void aup_clear_config(struct daemon_conf *config)
 {
 	config->local_events = 1;
 	config->sender_uid = 0;
@@ -100,6 +103,7 @@ void clear_config(struct daemon_conf *config)
 	config->disk_full_exe = NULL;
 	config->disk_error_action = FA_SYSLOG;
 	config->disk_error_exe = NULL;
+        config->end_of_event_timeout = EOE_TIMEOUT;
 }
 
 int aup_load_config(auparse_state_t *au, struct daemon_conf *config,
@@ -109,14 +113,19 @@ int aup_load_config(auparse_state_t *au, struct daemon_conf *config,
 	FILE *f;
 	char buf[160];
 
-	clear_config(config);
+	aup_clear_config(config);
 	lt = lt;
 
 	/* open the file */
 	fd = open(CONFIG_FILE, O_RDONLY|O_NOFOLLOW);
 	if (fd < 0) {
 		if (errno != ENOENT) {
-			audit_msg(au, LOG_ERR, "Error opening config file (%s)", 
+			if (errno == EACCES) {
+				audit_msg(au, LOG_INFO,
+	"libauparse: Permission denied opening config file, using defaults");
+				return 0;
+			}
+			audit_msg(au, LOG_ERR, "Error opening config file (%s)",
 				strerror(errno));
 			return 1;
 		}
@@ -323,8 +332,39 @@ static int log_file_parser(auparse_state_t *au, const char *val, int line,
 	return 0;
 }
 
-void free_config(struct daemon_conf *config)
+
+static int eoe_timeout_parser(auparse_state_t *au, const char *val, int line,
+		struct daemon_conf *config)
+{
+	const char *ptr = val;
+	unsigned long i;
+
+	/* check that all chars are numbers */
+	for (i=0; ptr[i]; i++) {
+		if (!isdigit(ptr[i])) {
+			audit_msg(au, LOG_ERR,
+				"Value %s should only be numbers - line %d",
+				val, line);
+			return 1;
+		}
+	}
+
+	/* convert to unsigned long */
+	errno = 0;
+	i = strtoul(val, NULL, 10);
+	if (errno) {
+		audit_msg(au, LOG_ERR,
+			"Error converting string to a number (%s) - line %d",
+			strerror(errno), line);
+		return 1;
+	}
+	config->end_of_event_timeout = i;
+	return 0;
+}
+
+void aup_free_config(struct daemon_conf *config)
 {
 	free((void*)config->log_file);
+	config->log_file = NULL;
 }
 

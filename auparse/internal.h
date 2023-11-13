@@ -59,12 +59,15 @@ typedef enum { EVENT_EMPTY, EVENT_ACCUMULATING, EVENT_EMITTED } auparser_state_t
  *      record type = AUDIT_EOE (audit end of event type record), or
  *      record type = AUDIT_PROCTITLE   (we note the AUDIT_PROCTITLE is always
  *                                      the last record), or
+ *	record type = AUDIT_KERNEL (kernel events are one record events), or
  *      record type < AUDIT_FIRST_EVENT (only single record events appear
  *                                      before this type), or
  *      record type >= AUDIT_FIRST_ANOM_MSG (only single record events appear
  *                                      after this type), or
- *      for the stream being processed, the time of the event is over 2 seconds
- *      old
+ *	record type >= AUDIT_MAC_UNLBL_ALLOW && record type <= AUDIT_MAC_CALIPSO_DEL (these are also one record events), or
+ *      for the stream being processed, the time of the event is over eoe_timeout seconds
+ *      old. eoe_timeout is the configuration item, 'end_of_event_timeout', in the auditd.conf
+ *      configuration file. It's default is EOE_TIMEOUT
  *
  * So, under LOL_EVENT processing, a event node (au_lolnode) can be either
  *
@@ -95,7 +98,7 @@ typedef struct _au_lolnode {
 typedef struct {
 	au_lolnode *array;	/* array of events */
 	int         maxi;	/* largest index in array used */
-	int         limit;	/* number of events in array */
+	size_t      limit;	/* number of events in array */
 } au_lol;
 
 /*
@@ -189,9 +192,9 @@ struct opaque
 AUDIT_HIDDEN_START
 
 // auditd-config.c
-void clear_config(struct daemon_conf *config);
+void aup_clear_config(struct daemon_conf *config);
 int aup_load_config(auparse_state_t *au, struct daemon_conf *config, log_test_t lt);
-void free_config(struct daemon_conf *config);
+void aup_free_config(struct daemon_conf *config);
 
 // normalize.c
 void init_normalizer(normalize_data *d);
