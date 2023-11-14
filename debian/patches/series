@@ -2,4 +2,3 @@
 02-restorecon-path.patch
 03-Set-log_group-adm.patch
 04-auditswig-i-avoid-setter-generation-for-audit-rule-data.patch
-pexip_from_upstream_ipx.patch
