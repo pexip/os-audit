@@ -1,3 +1,9 @@
+audit (1:3.0.9-1pexip1) pexip-bookworm; urgency=medium
+
+  * Initial bookworm build
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Thu, 16 Nov 2023 09:55:00 +0000
+
 audit (1:3.0.9-1) unstable; urgency=medium
 
   * Add missing debian/changelog entry
