@@ -1,3 +1,9 @@
+audit (1:3.0.9-1+pexip24u4) pexip; urgency=medium
+
+  * Restore custom-config.diff patch
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Fri, 23 Feb 2024 13:13:49 +0000
+
 audit (1:3.0.9-1+pexip24u3) pexip-bookworm; urgency=medium
 
   * New versioning scheme
