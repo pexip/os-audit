@@ -48,7 +48,7 @@ struct nv_list
 
 
 static char *get_line(FILE *f, char *buf, unsigned size, int *lineno,
-                const char *file);
+                const char *file) __attr_access ((__write_only__, 2, 3));
 static int nv_split(char *buf, struct nv_pair *nv);
 static const struct kw_pair *kw_lookup(const char *val);
 static int option_origin_failed_logins_threshold_parser(struct nv_pair *nv,
@@ -345,7 +345,7 @@ static int unsigned_int_parser(struct nv_pair *nv, int line, unsigned int *val)
 
 	/* check that all chars are numbers */
 	for (i=0; ptr[i]; i++) {
-		if (!isdigit(ptr[i])) {
+		if (!isdigit((unsigned char)ptr[i])) {
 			syslog(LOG_ERR,
 				"Value %s should only be numbers - line %d",
 				nv->value, line);

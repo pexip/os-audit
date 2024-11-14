@@ -1,5 +1,5 @@
 /* audit_logging.c -- 
- * Copyright 2005-2008,2010,2011,2013,2017 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2005-2008,2010,2011,2013,2017 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -38,7 +38,7 @@
 #include "private.h"
 
 #define TTY_PATH	32
-#define MAX_USER	(UT_NAMESIZE * 2) + 8
+#define MAX_USER	((UT_NAMESIZE * 2) + 8)
 
 // NOTE: The kernel fills in pid, uid, and loginuid of sender. Therefore,
 // these routines do not need to send them.
@@ -176,16 +176,16 @@ static char *_get_commname(const char *comm, char *commname, unsigned int size)
 	char tmp_comm[20];
 	
 	if (comm == NULL) {
-		int len;
-		int fd = open("/proc/self/comm", O_RDONLY);
+		ssize_t ret;
+		int fd = open("/proc/self/comm", O_RDONLY|O_CLOEXEC);
 		if (fd < 0) {
 			strcpy(commname, "\"?\"");
 			return commname;
 		}
-		len = read(fd, tmp_comm, sizeof(tmp_comm));
+		ret = read(fd, tmp_comm, sizeof(tmp_comm));
 		close(fd);
-		if (len > 0)
-			tmp_comm[len-1] = 0;
+		if (ret > 0)
+			tmp_comm[ret-1] = 0;
 		else {
 			strcpy(commname, "\"?\"");
 			return commname;
@@ -477,9 +477,9 @@ int audit_log_acct_message(int audit_fd, int type, const char *pgname,
 	if (host == NULL && tty)
 		host = _get_hostname(tty);
 
-	if (name && id == -1) {
+	if (name && id == (unsigned int)-1) {
 		char user[MAX_USER];
-		const char *format;
+		int encoded = 0;
 		size_t len;
 
 		user[0] = 0;
@@ -488,13 +488,12 @@ int audit_log_acct_message(int audit_fd, int type, const char *pgname,
 		user[len] = 0;
 		if (audit_value_needs_encoding(name, len)) {
 			audit_encode_value(user, name, len);
-			format = 
-	     "op=%s acct=%s exe=%s hostname=%s addr=%s terminal=%s res=%s";
-		} else
-			format = 
-	 "op=%s acct=\"%s\" exe=%s hostname=%s addr=%s terminal=%s res=%s";
+			encoded = 1;
+		}
 
-		snprintf(buf, sizeof(buf), format,
+		snprintf(buf, sizeof(buf),
+			encoded ? "op=%s acct=%s exe=%s hostname=%s addr=%s terminal=%s res=%s"
+			        : "op=%s acct=\"%s\" exe=%s hostname=%s addr=%s terminal=%s res=%s",
 			op, user, exename,
 			host ? host : "?",
 			addrbuf,
@@ -529,12 +528,12 @@ int audit_log_acct_message(int audit_fd, int type, const char *pgname,
  * hostname - the hostname if known
  * addr - The network address of the user
  * tty - The tty of the user
- * uid - The auid of the person related to the avc message
+ * auid - The auid of the person related to the avc message
  *
  * It returns the sequence number which is > 0 on success or <= 0 on error.
  */
 int audit_log_user_avc_message(int audit_fd, int type, const char *message,
-	const char *hostname, const char *addr, const char *tty, uid_t uid)
+	const char *hostname, const char *addr, const char *tty, uid_t auid)
 {
 	char buf[MAX_AUDIT_MESSAGE_LENGTH];
 	char addrbuf[INET6_ADDRSTRLEN];
@@ -565,7 +564,7 @@ int audit_log_user_avc_message(int audit_fd, int type, const char *message,
 
 	snprintf(buf, sizeof(buf),
 	    "%s exe=%s sauid=%d hostname=%s addr=%s terminal=%s",
-		message, exename, uid,
+		message, exename, auid,
 		hostname ? hostname : "?",
 		addrbuf,
 		tty ? tty : "?"
@@ -653,7 +652,7 @@ int audit_log_semanage_message(int audit_fd, int type, const char *pgname,
 
 	if (name && strlen(name) > 0) {
 		size_t len;
-		const char *format;
+		int encoded = 0;
 		char user[MAX_USER];
 
 		user[0] = 0;
@@ -662,10 +661,13 @@ int audit_log_semanage_message(int audit_fd, int type, const char *pgname,
 		user[len] = 0;
 		if (audit_value_needs_encoding(name, len)) {
 			audit_encode_value(user, name, len);
-			format = "op=%s acct=%s old-seuser=%s old-role=%s old-range=%s new-seuser=%s new-role=%s new-range=%s exe=%s hostname=%s addr=%s terminal=%s res=%s";
-		} else
-			format = "op=%s acct=\"%s\" old-seuser=%s old-role=%s old-range=%s new-seuser=%s new-role=%s new-range=%s exe=%s hostname=%s addr=%s terminal=%s res=%s";
-		snprintf(buf, sizeof(buf), format, op, user, 
+			encoded = 1;
+		}
+
+		snprintf(buf, sizeof(buf),
+			encoded ?  "op=%s acct=%s old-seuser=%s old-role=%s old-range=%s new-seuser=%s new-role=%s new-range=%s exe=%s hostname=%s addr=%s terminal=%s res=%s"
+			        : "op=%s acct=\"%s\" old-seuser=%s old-role=%s old-range=%s new-seuser=%s new-role=%s new-range=%s exe=%s hostname=%s addr=%s terminal=%s res=%s",
+			op, user,
 			old_seuser && strlen(old_seuser) ? old_seuser : "?",
 			old_role && strlen(old_role) ? old_role : "?",
 			old_range && strlen(old_range) ? old_range : "?",

@@ -1,5 +1,5 @@
 /* audisp-syslog.c --
- * Copyright 2018 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2018 Red Hat Inc.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -156,10 +156,11 @@ static inline void write_syslog(char *s)
 
 		// Now iterate over the fields and print each one
 		mptr = record;
-		while (rc > 0) {
+		while (rc > 0 &&
+		       ((mptr-record) < (MAX_AUDIT_MESSAGE_LENGTH-128))) {
 			int ftype = auparse_get_field_type(au);
 			const char *fname = auparse_get_field_name(au);
-			const char *fval; 
+			const char *fval;
 			switch (ftype) {
 				case AUPARSE_TYPE_ESCAPED_FILE:
 					fval = auparse_interpret_realpath(au);
@@ -227,7 +228,8 @@ int main(int argc, const char *argv[])
 #ifdef HAVE_LIBCAP_NG
 	// Drop capabilities
 	capng_clear(CAPNG_SELECT_BOTH);
-        capng_apply(CAPNG_SELECT_BOTH);
+        if (capng_apply(CAPNG_SELECT_BOTH))
+		syslog(LOG_WARNING, "audisp-syslog plugin was unable to drop capabilities, continuing with elevated priviles");
 #endif
 
 	do {

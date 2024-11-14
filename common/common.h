@@ -1,5 +1,5 @@
-/* audit-fgets.h -- a replacement for glibc's fgets
- * Copyright 2018,2022 Red Hat Inc.
+/* common.h -- common utility functions used throughout
+ * Copyright 2018-24 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -25,11 +25,22 @@
 
 #include <sys/types.h>
 #include "dso.h"
+// These macros originate in sys/cdefs.h
 #ifndef __attr_access
 #  define __attr_access(x)
 #endif
+#ifndef __attribute_malloc__
+#  define __attribute_malloc__
+#endif
+#ifndef __attr_dealloc
+#  define __attr_dealloc(dealloc, argno)
+#endif
+#ifndef __wur
+# define __wur
+#endif
 AUDIT_HIDDEN_START
 
+void audit_fgets_clear(void);
 int audit_fgets_eof(void);
 int audit_fgets_more(size_t blen);
 int audit_fgets(char *buf, size_t blen, int fd)
@@ -37,6 +48,7 @@ int audit_fgets(char *buf, size_t blen, int fd)
 
 char *audit_strsplit_r(char *s, char **savedpp);
 char *audit_strsplit(char *s);
+int audit_is_last_record(int type);
 
 AUDIT_HIDDEN_END
 #endif

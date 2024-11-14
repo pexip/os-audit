@@ -15,7 +15,7 @@
 @SET_MAKE@
 
 # Makefile.am-- 
-# Copyright 2007,2011,2015-16,2018 Red Hat Inc., Durham, North Carolina.
+# Copyright 2007,2011,2015-23 Red Hat Inc.
 # All Rights Reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -131,7 +131,7 @@ LTLIBRARIES = $(noinst_LTLIBRARIES)
 libdisp_la_LIBADD =
 am_libdisp_la_OBJECTS = libdisp_la-audispd.lo \
 	libdisp_la-audispd-pconfig.lo libdisp_la-queue.lo \
-	libdisp_la-audispd-llist.lo libdisp_la-audispd-builtins.lo
+	libdisp_la-audispd-llist.lo
 libdisp_la_OBJECTS = $(am_libdisp_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
@@ -155,8 +155,7 @@ am__v_at_1 =
 DEFAULT_INCLUDES = -I.@am__isrc@ -I$(top_builddir)
 depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__maybe_remake_depfiles = depfiles
-am__depfiles_remade = ./$(DEPDIR)/libdisp_la-audispd-builtins.Plo \
-	./$(DEPDIR)/libdisp_la-audispd-llist.Plo \
+am__depfiles_remade = ./$(DEPDIR)/libdisp_la-audispd-llist.Plo \
 	./$(DEPDIR)/libdisp_la-audispd-pconfig.Plo \
 	./$(DEPDIR)/libdisp_la-audispd.Plo \
 	./$(DEPDIR)/libdisp_la-queue.Plo
@@ -259,6 +258,7 @@ AWK = @AWK@
 BUILD_EXEEXT = @BUILD_EXEEXT@
 BUILD_OBJEXT = @BUILD_OBJEXT@
 CAPNG_LDADD = @CAPNG_LDADD@
+CAPNG_PKG = @CAPNG_PKG@
 CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CC_FOR_BUILD = @CC_FOR_BUILD@
@@ -322,14 +322,10 @@ PACKAGE_TARNAME = @PACKAGE_TARNAME@
 PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
-PYINCLUDEDIR = @PYINCLUDEDIR@
 PYTHON = @PYTHON@
-PYTHON3 = @PYTHON3@
 PYTHON3_CFLAGS = @PYTHON3_CFLAGS@
-PYTHON3_EXEC_PREFIX = @PYTHON3_EXEC_PREFIX@
 PYTHON3_INCLUDES = @PYTHON3_INCLUDES@
 PYTHON3_LIBS = @PYTHON3_LIBS@
-PYTHON3_PREFIX = @PYTHON3_PREFIX@
 PYTHON_EXEC_PREFIX = @PYTHON_EXEC_PREFIX@
 PYTHON_PLATFORM = @PYTHON_PLATFORM@
 PYTHON_PREFIX = @PYTHON_PREFIX@
@@ -339,6 +335,7 @@ SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
+SWIG = @SWIG@
 VERSION = @VERSION@
 WFLAGS = @WFLAGS@
 abs_builddir = @abs_builddir@
@@ -389,10 +386,7 @@ pkgpythondir = @pkgpythondir@
 prefix = @prefix@
 program_transform_name = @program_transform_name@
 psdir = @psdir@
-py3execdir = @py3execdir@
-pybind_dir = @pybind_dir@
 pyexecdir = @pyexecdir@
-python3dir = @python3dir@
 pythondir = @pythondir@
 runstatedir = @runstatedir@
 sbindir = @sbindir@
@@ -413,10 +407,10 @@ CONFIG_CLEAN_FILES = *.rej *.orig
 AM_CPPFLAGS = -D_GNU_SOURCE -fPIC -DPIC -I${top_srcdir} -I${top_srcdir}/lib -I${top_srcdir}/src -I${top_srcdir}/src/libev
 LDADD = -lpthread
 noinst_HEADERS = audispd-pconfig.h audispd-llist.h audispd-config.h \
-	queue.h audispd-builtins.h libdisp.h
+	queue.h libdisp.h
 
 libdisp_la_SOURCES = audispd.c audispd-pconfig.c queue.c \
-	audispd-llist.c audispd-builtins.c
+	audispd-llist.c
 
 libdisp_la_CFLAGS = -fno-strict-aliasing ${WFLAGS}
 libdisp_la_LDFLAGS = -no-undefined -static
@@ -475,7 +469,6 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libdisp_la-audispd-builtins.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libdisp_la-audispd-llist.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libdisp_la-audispd-pconfig.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libdisp_la-audispd.Plo@am__quote@ # am--include-marker
@@ -488,22 +481,25 @@ $(am__depfiles_remade):
 am--depfiles: $(am__depfiles_remade)
 
 .c.o:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.o$$||'`;\
+@am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ $< &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Po
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(COMPILE) -c -o $@ $<
 
 .c.obj:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ `$(CYGPATH_W) '$<'`
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.obj$$||'`;\
+@am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ `$(CYGPATH_W) '$<'` &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Po
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(COMPILE) -c -o $@ `$(CYGPATH_W) '$<'`
 
 .c.lo:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(LTCOMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Plo
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.lo$$||'`;\
+@am__fastdepCC_TRUE@	$(LTCOMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ $< &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Plo
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LTCOMPILE) -c -o $@ $<
@@ -535,13 +531,6 @@ libdisp_la-audispd-llist.lo: audispd-llist.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='audispd-llist.c' object='libdisp_la-audispd-llist.lo' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libdisp_la_CFLAGS) $(CFLAGS) -c -o libdisp_la-audispd-llist.lo `test -f 'audispd-llist.c' || echo '$(srcdir)/'`audispd-llist.c
-
-libdisp_la-audispd-builtins.lo: audispd-builtins.c
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libdisp_la_CFLAGS) $(CFLAGS) -MT libdisp_la-audispd-builtins.lo -MD -MP -MF $(DEPDIR)/libdisp_la-audispd-builtins.Tpo -c -o libdisp_la-audispd-builtins.lo `test -f 'audispd-builtins.c' || echo '$(srcdir)/'`audispd-builtins.c
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/libdisp_la-audispd-builtins.Tpo $(DEPDIR)/libdisp_la-audispd-builtins.Plo
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='audispd-builtins.c' object='libdisp_la-audispd-builtins.lo' libtool=yes @AMDEPBACKSLASH@
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libdisp_la_CFLAGS) $(CFLAGS) -c -o libdisp_la-audispd-builtins.lo `test -f 'audispd-builtins.c' || echo '$(srcdir)/'`audispd-builtins.c
 
 mostlyclean-libtool:
 	-rm -f *.lo
@@ -746,8 +735,7 @@ clean-am: clean-generic clean-libtool clean-noinstLTLIBRARIES \
 	mostlyclean-am
 
 distclean: distclean-recursive
-		-rm -f ./$(DEPDIR)/libdisp_la-audispd-builtins.Plo
-	-rm -f ./$(DEPDIR)/libdisp_la-audispd-llist.Plo
+		-rm -f ./$(DEPDIR)/libdisp_la-audispd-llist.Plo
 	-rm -f ./$(DEPDIR)/libdisp_la-audispd-pconfig.Plo
 	-rm -f ./$(DEPDIR)/libdisp_la-audispd.Plo
 	-rm -f ./$(DEPDIR)/libdisp_la-queue.Plo
@@ -796,8 +784,7 @@ install-ps-am:
 installcheck-am:
 
 maintainer-clean: maintainer-clean-recursive
-		-rm -f ./$(DEPDIR)/libdisp_la-audispd-builtins.Plo
-	-rm -f ./$(DEPDIR)/libdisp_la-audispd-llist.Plo
+		-rm -f ./$(DEPDIR)/libdisp_la-audispd-llist.Plo
 	-rm -f ./$(DEPDIR)/libdisp_la-audispd-pconfig.Plo
 	-rm -f ./$(DEPDIR)/libdisp_la-audispd.Plo
 	-rm -f ./$(DEPDIR)/libdisp_la-queue.Plo

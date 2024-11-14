@@ -28,6 +28,7 @@ EXTRA_DIST = auparse_test.ref auparse_test.ref.py test.log test2.log test3.log t
 AM_CPPFLAGS = -I${top_srcdir}/auparse -I${top_srcdir}/lib
 
 lookup_test_SOURCES = lookup_test.c
+lookup_test_LDFLAGS = -static
 lookup_test_LDADD = ${top_builddir}/auparse/libauparse.la \
 	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.la
 
@@ -54,7 +55,7 @@ check-local: auparse_test auparselol_test lookup_test
 	diff -u auparse_test.raw auparse_test.cur
 if USE_PYTHON3
 	cp ${top_builddir}/bindings/swig/python3/.libs/_audit.so ${top_builddir}/bindings/swig/python3
-	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/:${top_builddir}/bindings/swig/python3:${top_builddir}/bindings/swig/python3/.libs \
+	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/ \
 	PYTHONDONTWRITEBYTECODE=1 \
 	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs \
 		srcdir=$(srcdir) $(srcdir)/auparse_test.py \
@@ -76,7 +77,7 @@ memcheck: auparse_test
 
 pycheck: auparse_test.py
 if USE_PYTHON3
-	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/:${top_builddir}/bindings/swig/python3:${top_builddir}/bindings/swig/python3/.libs \
+	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/ \
 	PYTHONDONTWRITEBYTECODE=1 \
 	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs \
 		srcdir=$(srcdir) $(srcdir)/auparse_test.py
@@ -84,7 +85,7 @@ endif
 
 pydiffcheck: auparse_test.py 
 if USE_PYTHON3
-	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/:${top_builddir}/bindings/swig/python3:${top_builddir}/bindings/swig/python3/.libs \
+	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/ \
 	PYTHONDONTWRITEBYTECODE=1 \
 	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs \
 		srcdir=$(srcdir) $(srcdir)/auparse_test.py \
@@ -94,7 +95,7 @@ endif
 
 pymemcheck: auparse_test.py
 if USE_PYTHON3
-	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/:${top_builddir}/bindings/swig/python3:${top_builddir}/bindings/swig/python3/.libs \
+	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/ \
 	PYTHONDONTWRITEBYTECODE=1 \
 	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs srcdir=$(srcdir) valgrind --leak-check=yes --show-reachable=yes python $(srcdir)/auparse_test.py
 

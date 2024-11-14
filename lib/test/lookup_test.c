@@ -28,7 +28,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#include "../libaudit.h"
+#include "libaudit.h"
 
 /* Number of lookups of random strings */
 #define RAND_ITERATIONS 1000
@@ -234,6 +234,24 @@ test_x86_64_table(void)
 #undef S2I
 }
 
+#ifdef WITH_IO_URING
+static void
+test_uringop_table(void)
+{
+	static const struct entry t[] = {
+#include "../uringop_table.h"
+	};
+
+	printf("Testing uringop_table...\n");
+#define I2S(I) audit_uringop_to_name((I))
+#define S2I(S) audit_name_to_uringop((S))
+	TEST_I2S(0);
+	TEST_S2I(-1);
+#undef I2S
+#undef S2I
+}
+#endif
+
 static void
 test_actiontab(void)
 {
@@ -395,6 +413,9 @@ main(void)
 	test_s390_table();
 	test_s390x_table();
 	test_x86_64_table();
+#ifdef WITH_IO_URING
+	test_uringop_table();
+#endif
 	test_actiontab();
 	test_errtab();
 	test_fieldtab();

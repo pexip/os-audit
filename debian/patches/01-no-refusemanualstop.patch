@@ -8,13 +8,13 @@ Description: Remove the RefuseManualStop=yes option
 Author: Laurent Bigonville <bigon@debian.org>
 Forwarded: not-needed
 
---- a/init.d/auditd.service
-+++ b/init.d/auditd.service
-@@ -11,7 +11,6 @@ After=local-fs.target systemd-tmpfiles-s
+--- a/init.d/auditd.service.in
++++ b/init.d/auditd.service.in
+@@ -21,7 +21,6 @@ After=local-fs.target systemd-tmpfiles-s
  Before=sysinit.target shutdown.target
- ##Before=shutdown.target
+ #Before=shutdown.target
  Conflicts=shutdown.target
 -RefuseManualStop=yes
- ConditionKernelCommandLine=!audit=0
- ConditionKernelCommandLine=!audit=off
+ 
+ Documentation=man:auditd(8) https://github.com/linux-audit/audit-documentation
  

@@ -152,6 +152,9 @@ lookup_test_OBJECTS = $(am_lookup_test_OBJECTS)
 lookup_test_DEPENDENCIES = ${top_builddir}/auparse/libauparse.la \
 	${top_builddir}/lib/libaudit.la \
 	${top_builddir}/common/libaucommon.la
+lookup_test_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
+	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
+	$(lookup_test_LDFLAGS) $(LDFLAGS) -o $@
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
 am__v_P_0 = false
@@ -227,6 +230,7 @@ AWK = @AWK@
 BUILD_EXEEXT = @BUILD_EXEEXT@
 BUILD_OBJEXT = @BUILD_OBJEXT@
 CAPNG_LDADD = @CAPNG_LDADD@
+CAPNG_PKG = @CAPNG_PKG@
 CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CC_FOR_BUILD = @CC_FOR_BUILD@
@@ -290,14 +294,10 @@ PACKAGE_TARNAME = @PACKAGE_TARNAME@
 PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
-PYINCLUDEDIR = @PYINCLUDEDIR@
 PYTHON = @PYTHON@
-PYTHON3 = @PYTHON3@
 PYTHON3_CFLAGS = @PYTHON3_CFLAGS@
-PYTHON3_EXEC_PREFIX = @PYTHON3_EXEC_PREFIX@
 PYTHON3_INCLUDES = @PYTHON3_INCLUDES@
 PYTHON3_LIBS = @PYTHON3_LIBS@
-PYTHON3_PREFIX = @PYTHON3_PREFIX@
 PYTHON_EXEC_PREFIX = @PYTHON_EXEC_PREFIX@
 PYTHON_PLATFORM = @PYTHON_PLATFORM@
 PYTHON_PREFIX = @PYTHON_PREFIX@
@@ -307,6 +307,7 @@ SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
+SWIG = @SWIG@
 VERSION = @VERSION@
 WFLAGS = @WFLAGS@
 abs_builddir = @abs_builddir@
@@ -357,10 +358,7 @@ pkgpythondir = @pkgpythondir@
 prefix = @prefix@
 program_transform_name = @program_transform_name@
 psdir = @psdir@
-py3execdir = @py3execdir@
-pybind_dir = @pybind_dir@
 pyexecdir = @pyexecdir@
-python3dir = @python3dir@
 pythondir = @pythondir@
 runstatedir = @runstatedir@
 sbindir = @sbindir@
@@ -381,6 +379,7 @@ dist_check_SCRIPTS = auparse_test.py
 EXTRA_DIST = auparse_test.ref auparse_test.ref.py test.log test2.log test3.log test4.log auditd_raw.sed
 AM_CPPFLAGS = -I${top_srcdir}/auparse -I${top_srcdir}/lib
 lookup_test_SOURCES = lookup_test.c
+lookup_test_LDFLAGS = -static
 lookup_test_LDADD = ${top_builddir}/auparse/libauparse.la \
 	${top_builddir}/lib/libaudit.la ${top_builddir}/common/libaucommon.la
 
@@ -448,7 +447,7 @@ auparselol_test$(EXEEXT): $(auparselol_test_OBJECTS) $(auparselol_test_DEPENDENC
 
 lookup_test$(EXEEXT): $(lookup_test_OBJECTS) $(lookup_test_DEPENDENCIES) $(EXTRA_lookup_test_DEPENDENCIES) 
 	@rm -f lookup_test$(EXEEXT)
-	$(AM_V_CCLD)$(LINK) $(lookup_test_OBJECTS) $(lookup_test_LDADD) $(LIBS)
+	$(AM_V_CCLD)$(lookup_test_LINK) $(lookup_test_OBJECTS) $(lookup_test_LDADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
@@ -467,22 +466,25 @@ $(am__depfiles_remade):
 am--depfiles: $(am__depfiles_remade)
 
 .c.o:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.o$$||'`;\
+@am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ $< &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Po
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(COMPILE) -c -o $@ $<
 
 .c.obj:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ `$(CYGPATH_W) '$<'`
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.obj$$||'`;\
+@am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ `$(CYGPATH_W) '$<'` &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Po
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(COMPILE) -c -o $@ `$(CYGPATH_W) '$<'`
 
 .c.lo:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(LTCOMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Plo
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.lo$$||'`;\
+@am__fastdepCC_TRUE@	$(LTCOMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ $< &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Plo
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LTCOMPILE) -c -o $@ $<
@@ -716,7 +718,7 @@ check-local: auparse_test auparselol_test lookup_test
 	sed -f $(top_srcdir)/auparse/test/auditd_raw.sed test3.log | sort > auparse_test.raw
 	diff -u auparse_test.raw auparse_test.cur
 @USE_PYTHON3_TRUE@	cp ${top_builddir}/bindings/swig/python3/.libs/_audit.so ${top_builddir}/bindings/swig/python3
-@USE_PYTHON3_TRUE@	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/:${top_builddir}/bindings/swig/python3:${top_builddir}/bindings/swig/python3/.libs \
+@USE_PYTHON3_TRUE@	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/ \
 @USE_PYTHON3_TRUE@	PYTHONDONTWRITEBYTECODE=1 \
 @USE_PYTHON3_TRUE@	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs \
 @USE_PYTHON3_TRUE@		srcdir=$(srcdir) $(srcdir)/auparse_test.py \
@@ -736,13 +738,13 @@ memcheck: auparse_test
 	valgrind --leak-check=yes --show-reachable=yes ./auparse_test 
 
 pycheck: auparse_test.py
-@USE_PYTHON3_TRUE@	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/:${top_builddir}/bindings/swig/python3:${top_builddir}/bindings/swig/python3/.libs \
+@USE_PYTHON3_TRUE@	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/ \
 @USE_PYTHON3_TRUE@	PYTHONDONTWRITEBYTECODE=1 \
 @USE_PYTHON3_TRUE@	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs \
 @USE_PYTHON3_TRUE@		srcdir=$(srcdir) $(srcdir)/auparse_test.py
 
 pydiffcheck: auparse_test.py 
-@USE_PYTHON3_TRUE@	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/:${top_builddir}/bindings/swig/python3:${top_builddir}/bindings/swig/python3/.libs \
+@USE_PYTHON3_TRUE@	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/ \
 @USE_PYTHON3_TRUE@	PYTHONDONTWRITEBYTECODE=1 \
 @USE_PYTHON3_TRUE@	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs \
 @USE_PYTHON3_TRUE@		srcdir=$(srcdir) $(srcdir)/auparse_test.py \
@@ -750,7 +752,7 @@ pydiffcheck: auparse_test.py
 @USE_PYTHON3_TRUE@	diff -u $(srcdir)/auparse_test.ref.py auparse_test.cur
 
 pymemcheck: auparse_test.py
-@USE_PYTHON3_TRUE@	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/:${top_builddir}/bindings/swig/python3:${top_builddir}/bindings/swig/python3/.libs \
+@USE_PYTHON3_TRUE@	PYTHONPATH=${top_builddir}/bindings/python/python3/.libs/ \
 @USE_PYTHON3_TRUE@	PYTHONDONTWRITEBYTECODE=1 \
 @USE_PYTHON3_TRUE@	LD_LIBRARY_PATH=${top_builddir}/auparse/.libs srcdir=$(srcdir) valgrind --leak-check=yes --show-reachable=yes python $(srcdir)/auparse_test.py
 

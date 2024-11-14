@@ -1,5 +1,5 @@
-/* lookup_table.c -- 
- * Copyright 2004-2008,2012-13,2016 Red Hat Inc., Durham, North Carolina.
+/* lookup_table.c --
+ * Copyright 2004-2008,2012-13,2016,2023 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -30,6 +30,12 @@
 #include <ctype.h>
 #include <errno.h>
 
+// This code is at the center of many performance issues. The following
+// ensure that it is optimized the most without making all of the audit
+// subsystem bigger.
+#pragma GCC optimize("O3")
+#pragma GCC optimize("-funroll-loops")
+
 #include "libaudit.h"
 #include "gen_tables.h"
 #include "private.h"
@@ -46,10 +52,14 @@
 #include "s390_tables.h"
 #include "s390x_tables.h"
 #include "x86_64_tables.h"
+#ifdef WITH_IO_URING
+#include "uringop_tables.h"
+#endif
 #include "errtabs.h"
 #include "fstypetabs.h"
 #include "ftypetabs.h"
 #include "fieldtabs.h"
+#include "permtabs.h"
 #endif
 #include "msg_typetabs.h"
 #include "actiontabs.h"
@@ -99,6 +109,20 @@ const char *audit_field_to_name(int field)
 #endif
 }
 
+int audit_name_to_uringop(const char *uringop)
+{
+#ifdef WITH_IO_URING
+	int res = -1, found = 0;
+
+#ifndef NO_TABLES
+	found = uringop_s2i(uringop, &res);
+#endif
+	if (found)
+		return res;
+#endif
+	return -1;
+}
+
 int audit_name_to_syscall(const char *sc, int machine)
 {
 	int res = -1, found = 0;
@@ -134,12 +158,25 @@ int audit_name_to_syscall(const char *sc, int machine)
 			break;
 #endif
 #endif
+		case MACH_IO_URING:
+			return audit_name_to_uringop(sc);
+			break;
 		default:
 			return -1;
 	}
 	if (found)
 		return res;
 	return -1;
+}
+
+const char *audit_uringop_to_name(int uringop)
+{
+#ifdef WITH_IO_URING
+#ifndef NO_TABLES
+	return uringop_i2s(uringop);
+#endif
+#endif
+	return NULL;
 }
 
 const char *audit_syscall_to_name(int sc, int machine)
@@ -167,6 +204,8 @@ const char *audit_syscall_to_name(int sc, int machine)
 	        case MACH_AARCH64:
 			return aarch64_syscall_i2s(sc);
 #endif
+		case MACH_IO_URING:
+			return audit_uringop_to_name(sc);
 	}
 #endif
 	return NULL;
@@ -223,7 +262,7 @@ int audit_name_to_msg_type(const char *msg_type)
 		strncpy(buf, msg_type + 8, len);
 		errno = 0;
 		return strtol(buf, NULL, 10);
-	} else if (isdigit(*msg_type)) {
+	} else if (isdigit((unsigned char)*msg_type)) {
 		errno = 0;
 		return strtol(msg_type, NULL, 10);
 	}
@@ -293,12 +332,17 @@ int audit_name_to_errno(const char *error)
 #endif
 }
 
-/* This function does not handle negative numbers yet */
+/* This function handles negative numbers */
 const char *audit_errno_to_name(int error)
 {
 #ifndef NO_TABLES
-	if (error < 0)
+	// No error
+	if (error == 0)
 		return NULL;
+
+	// If negative, turn positive to search on
+	if (error < 0)
+		error *= -1;
 
         return err_i2s(error);
 #else
@@ -308,9 +352,8 @@ const char *audit_errno_to_name(int error)
 
 int audit_name_to_ftype(const char *name)
 {
-	int res;
-
 #ifndef NO_TABLES
+	int res;
 	if (ftype_s2i(name, &res) != 0)
 		return res;
 #endif
@@ -328,9 +371,8 @@ const char *audit_ftype_to_name(int ftype)
 
 int audit_name_to_fstype(const char *name)
 {
-	int res;
-
 #ifndef NO_TABLES
+	int res;
 	if (fstype_s2i(name, &res) != 0)
 		return res;
 #endif
@@ -341,6 +383,25 @@ const char *audit_fstype_to_name(int fstype)
 {
 #ifndef NO_TABLES
 	return fstype_i2s(fstype);
+#else
+	return NULL;
+#endif
+}
+
+int audit_name_to_perm(const char *name)
+{
+#ifndef NO_TABLES
+	int res;
+	if (perm_s2i(name, &res) != 0)
+		return res;
+#endif
+	return -1;
+}
+
+const char *audit_perm_to_name(int perm)
+{
+#ifndef NO_TABLES
+	return perm_i2s(perm);
 #else
 	return NULL;
 #endif

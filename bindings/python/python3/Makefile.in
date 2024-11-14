@@ -15,7 +15,7 @@
 @SET_MAKE@
 
 # Makefile.am --
-# Copyright 2015 Red Hat Inc., Durham, North Carolina.
+# Copyright 2015,2024 Red Hat Inc.
 # All Rights Reserved.
 #
 # This library is free software; you can redistribute it and/or
@@ -152,11 +152,13 @@ am__uninstall_files_from_dir = { \
     || { echo " ( cd '$$dir' && rm -f" $$files ")"; \
          $(am__cd) "$$dir" && rm -f $$files; }; \
   }
-am__installdirs = "$(DESTDIR)$(py3execdir)"
-LTLIBRARIES = $(py3exec_LTLIBRARIES)
+am__installdirs = "$(DESTDIR)$(pyexecdir)"
+LTLIBRARIES = $(pyexec_LTLIBRARIES)
 auparse_la_DEPENDENCIES = ${top_builddir}/auparse/libauparse.la \
 	${top_builddir}/lib/libaudit.la
-am_auparse_la_OBJECTS = auparse_la-auparse_python.lo
+am__dirstamp = $(am__leading_dot)dirstamp
+am_auparse_la_OBJECTS =  \
+	$(top_builddir)/bindings/python/auparse_la-auparse_python.lo
 auparse_la_OBJECTS = $(am_auparse_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
@@ -180,7 +182,7 @@ am__v_at_1 =
 DEFAULT_INCLUDES = -I.@am__isrc@ -I$(top_builddir)
 depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__maybe_remake_depfiles = depfiles
-am__depfiles_remade = ./$(DEPDIR)/auparse_la-auparse_python.Plo
+am__depfiles_remade = $(top_builddir)/bindings/python/$(DEPDIR)/auparse_la-auparse_python.Plo
 am__mv = mv -f
 COMPILE = $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) \
 	$(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
@@ -237,6 +239,7 @@ AWK = @AWK@
 BUILD_EXEEXT = @BUILD_EXEEXT@
 BUILD_OBJEXT = @BUILD_OBJEXT@
 CAPNG_LDADD = @CAPNG_LDADD@
+CAPNG_PKG = @CAPNG_PKG@
 CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CC_FOR_BUILD = @CC_FOR_BUILD@
@@ -300,14 +303,10 @@ PACKAGE_TARNAME = @PACKAGE_TARNAME@
 PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
-PYINCLUDEDIR = @PYINCLUDEDIR@
 PYTHON = @PYTHON@
-PYTHON3 = @PYTHON3@
 PYTHON3_CFLAGS = @PYTHON3_CFLAGS@
-PYTHON3_EXEC_PREFIX = @PYTHON3_EXEC_PREFIX@
 PYTHON3_INCLUDES = @PYTHON3_INCLUDES@
 PYTHON3_LIBS = @PYTHON3_LIBS@
-PYTHON3_PREFIX = @PYTHON3_PREFIX@
 PYTHON_EXEC_PREFIX = @PYTHON_EXEC_PREFIX@
 PYTHON_PLATFORM = @PYTHON_PLATFORM@
 PYTHON_PREFIX = @PYTHON_PREFIX@
@@ -317,6 +316,7 @@ SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
+SWIG = @SWIG@
 VERSION = @VERSION@
 WFLAGS = @WFLAGS@
 abs_builddir = @abs_builddir@
@@ -367,10 +367,7 @@ pkgpythondir = @pkgpythondir@
 prefix = @prefix@
 program_transform_name = @program_transform_name@
 psdir = @psdir@
-py3execdir = @py3execdir@
-pybind_dir = @pybind_dir@
 pyexecdir = @pyexecdir@
-python3dir = @python3dir@
 pythondir = @pythondir@
 runstatedir = @runstatedir@
 sbindir = @sbindir@
@@ -389,7 +386,7 @@ use_python3 = @use_python3@
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
 AM_CFLAGS = -fPIC -DPIC -fno-strict-aliasing $(PYTHON3_CFLAGS)
 AM_CPPFLAGS = -I$(top_builddir) $(PYTHON3_INCLUDES)
-py3exec_LTLIBRARIES = auparse.la
+pyexec_LTLIBRARIES = auparse.la
 auparse_la_SOURCES = $(top_srcdir)/bindings/python/auparse_python.c
 auparse_la_CPPFLAGS = -I$(top_srcdir)/auparse $(AM_CPPFLAGS)
 auparse_la_CFLAGS = -shared
@@ -429,33 +426,33 @@ $(ACLOCAL_M4):  $(am__aclocal_m4_deps)
 	cd $(top_builddir) && $(MAKE) $(AM_MAKEFLAGS) am--refresh
 $(am__aclocal_m4_deps):
 
-install-py3execLTLIBRARIES: $(py3exec_LTLIBRARIES)
+install-pyexecLTLIBRARIES: $(pyexec_LTLIBRARIES)
 	@$(NORMAL_INSTALL)
-	@list='$(py3exec_LTLIBRARIES)'; test -n "$(py3execdir)" || list=; \
+	@list='$(pyexec_LTLIBRARIES)'; test -n "$(pyexecdir)" || list=; \
 	list2=; for p in $$list; do \
 	  if test -f $$p; then \
 	    list2="$$list2 $$p"; \
 	  else :; fi; \
 	done; \
 	test -z "$$list2" || { \
-	  echo " $(MKDIR_P) '$(DESTDIR)$(py3execdir)'"; \
-	  $(MKDIR_P) "$(DESTDIR)$(py3execdir)" || exit 1; \
-	  echo " $(LIBTOOL) $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=install $(INSTALL) $(INSTALL_STRIP_FLAG) $$list2 '$(DESTDIR)$(py3execdir)'"; \
-	  $(LIBTOOL) $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=install $(INSTALL) $(INSTALL_STRIP_FLAG) $$list2 "$(DESTDIR)$(py3execdir)"; \
+	  echo " $(MKDIR_P) '$(DESTDIR)$(pyexecdir)'"; \
+	  $(MKDIR_P) "$(DESTDIR)$(pyexecdir)" || exit 1; \
+	  echo " $(LIBTOOL) $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=install $(INSTALL) $(INSTALL_STRIP_FLAG) $$list2 '$(DESTDIR)$(pyexecdir)'"; \
+	  $(LIBTOOL) $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=install $(INSTALL) $(INSTALL_STRIP_FLAG) $$list2 "$(DESTDIR)$(pyexecdir)"; \
 	}
 
-uninstall-py3execLTLIBRARIES:
+uninstall-pyexecLTLIBRARIES:
 	@$(NORMAL_UNINSTALL)
-	@list='$(py3exec_LTLIBRARIES)'; test -n "$(py3execdir)" || list=; \
+	@list='$(pyexec_LTLIBRARIES)'; test -n "$(pyexecdir)" || list=; \
 	for p in $$list; do \
 	  $(am__strip_dir) \
-	  echo " $(LIBTOOL) $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=uninstall rm -f '$(DESTDIR)$(py3execdir)/$$f'"; \
-	  $(LIBTOOL) $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=uninstall rm -f "$(DESTDIR)$(py3execdir)/$$f"; \
+	  echo " $(LIBTOOL) $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=uninstall rm -f '$(DESTDIR)$(pyexecdir)/$$f'"; \
+	  $(LIBTOOL) $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=uninstall rm -f "$(DESTDIR)$(pyexecdir)/$$f"; \
 	done
 
-clean-py3execLTLIBRARIES:
-	-test -z "$(py3exec_LTLIBRARIES)" || rm -f $(py3exec_LTLIBRARIES)
-	@list='$(py3exec_LTLIBRARIES)'; \
+clean-pyexecLTLIBRARIES:
+	-test -z "$(pyexec_LTLIBRARIES)" || rm -f $(pyexec_LTLIBRARIES)
+	@list='$(pyexec_LTLIBRARIES)'; \
 	locs=`for p in $$list; do echo $$p; done | \
 	      sed 's|^[^/]*$$|.|; s|/[^/]*$$||; s|$$|/so_locations|' | \
 	      sort -u`; \
@@ -463,17 +460,28 @@ clean-py3execLTLIBRARIES:
 	  echo rm -f $${locs}; \
 	  rm -f $${locs}; \
 	}
+$(top_builddir)/bindings/python/$(am__dirstamp):
+	@$(MKDIR_P) $(top_builddir)/bindings/python
+	@: > $(top_builddir)/bindings/python/$(am__dirstamp)
+$(top_builddir)/bindings/python/$(DEPDIR)/$(am__dirstamp):
+	@$(MKDIR_P) $(top_builddir)/bindings/python/$(DEPDIR)
+	@: > $(top_builddir)/bindings/python/$(DEPDIR)/$(am__dirstamp)
+$(top_builddir)/bindings/python/auparse_la-auparse_python.lo:  \
+	$(top_builddir)/bindings/python/$(am__dirstamp) \
+	$(top_builddir)/bindings/python/$(DEPDIR)/$(am__dirstamp)
 
 auparse.la: $(auparse_la_OBJECTS) $(auparse_la_DEPENDENCIES) $(EXTRA_auparse_la_DEPENDENCIES) 
-	$(AM_V_CCLD)$(auparse_la_LINK) -rpath $(py3execdir) $(auparse_la_OBJECTS) $(auparse_la_LIBADD) $(LIBS)
+	$(AM_V_CCLD)$(auparse_la_LINK) -rpath $(pyexecdir) $(auparse_la_OBJECTS) $(auparse_la_LIBADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
+	-rm -f $(top_builddir)/bindings/python/*.$(OBJEXT)
+	-rm -f $(top_builddir)/bindings/python/*.lo
 
 distclean-compile:
 	-rm -f *.tab.c
 
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/auparse_la-auparse_python.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@$(top_builddir)/bindings/python/$(DEPDIR)/auparse_la-auparse_python.Plo@am__quote@ # am--include-marker
 
 $(am__depfiles_remade):
 	@$(MKDIR_P) $(@D)
@@ -482,37 +490,41 @@ $(am__depfiles_remade):
 am--depfiles: $(am__depfiles_remade)
 
 .c.o:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.o$$||'`;\
+@am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ $< &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Po
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(COMPILE) -c -o $@ $<
 
 .c.obj:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ `$(CYGPATH_W) '$<'`
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.obj$$||'`;\
+@am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ `$(CYGPATH_W) '$<'` &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Po
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(COMPILE) -c -o $@ `$(CYGPATH_W) '$<'`
 
 .c.lo:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(LTCOMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Plo
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.lo$$||'`;\
+@am__fastdepCC_TRUE@	$(LTCOMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ $< &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Plo
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LTCOMPILE) -c -o $@ $<
 
-auparse_la-auparse_python.lo: $(top_srcdir)/bindings/python/auparse_python.c
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(auparse_la_CPPFLAGS) $(CPPFLAGS) $(auparse_la_CFLAGS) $(CFLAGS) -MT auparse_la-auparse_python.lo -MD -MP -MF $(DEPDIR)/auparse_la-auparse_python.Tpo -c -o auparse_la-auparse_python.lo `test -f '$(top_srcdir)/bindings/python/auparse_python.c' || echo '$(srcdir)/'`$(top_srcdir)/bindings/python/auparse_python.c
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/auparse_la-auparse_python.Tpo $(DEPDIR)/auparse_la-auparse_python.Plo
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$(top_srcdir)/bindings/python/auparse_python.c' object='auparse_la-auparse_python.lo' libtool=yes @AMDEPBACKSLASH@
+$(top_builddir)/bindings/python/auparse_la-auparse_python.lo: $(top_builddir)/bindings/python/auparse_python.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(auparse_la_CPPFLAGS) $(CPPFLAGS) $(auparse_la_CFLAGS) $(CFLAGS) -MT $(top_builddir)/bindings/python/auparse_la-auparse_python.lo -MD -MP -MF $(top_builddir)/bindings/python/$(DEPDIR)/auparse_la-auparse_python.Tpo -c -o $(top_builddir)/bindings/python/auparse_la-auparse_python.lo `test -f '$(top_builddir)/bindings/python/auparse_python.c' || echo '$(srcdir)/'`$(top_builddir)/bindings/python/auparse_python.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(top_builddir)/bindings/python/$(DEPDIR)/auparse_la-auparse_python.Tpo $(top_builddir)/bindings/python/$(DEPDIR)/auparse_la-auparse_python.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$(top_builddir)/bindings/python/auparse_python.c' object='$(top_builddir)/bindings/python/auparse_la-auparse_python.lo' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(auparse_la_CPPFLAGS) $(CPPFLAGS) $(auparse_la_CFLAGS) $(CFLAGS) -c -o auparse_la-auparse_python.lo `test -f '$(top_srcdir)/bindings/python/auparse_python.c' || echo '$(srcdir)/'`$(top_srcdir)/bindings/python/auparse_python.c
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(auparse_la_CPPFLAGS) $(CPPFLAGS) $(auparse_la_CFLAGS) $(CFLAGS) -c -o $(top_builddir)/bindings/python/auparse_la-auparse_python.lo `test -f '$(top_builddir)/bindings/python/auparse_python.c' || echo '$(srcdir)/'`$(top_builddir)/bindings/python/auparse_python.c
 
 mostlyclean-libtool:
 	-rm -f *.lo
 
 clean-libtool:
+	-rm -rf $(top_builddir)/bindings/python/.libs $(top_builddir)/bindings/python/_libs
 	-rm -rf .libs _libs
 
 ID: $(am__tagged_files)
@@ -603,7 +615,7 @@ check-am: all-am
 check: check-am
 all-am: Makefile $(LTLIBRARIES)
 installdirs:
-	for dir in "$(DESTDIR)$(py3execdir)"; do \
+	for dir in "$(DESTDIR)$(pyexecdir)"; do \
 	  test -z "$$dir" || $(MKDIR_P) "$$dir"; \
 	done
 install: install-am
@@ -632,17 +644,19 @@ clean-generic:
 distclean-generic:
 	-test -z "$(CONFIG_CLEAN_FILES)" || rm -f $(CONFIG_CLEAN_FILES)
 	-test . = "$(srcdir)" || test -z "$(CONFIG_CLEAN_VPATH_FILES)" || rm -f $(CONFIG_CLEAN_VPATH_FILES)
+	-test -z "$(top_builddir)/bindings/python/$(DEPDIR)/$(am__dirstamp)" || rm -f $(top_builddir)/bindings/python/$(DEPDIR)/$(am__dirstamp)
+	-test -z "$(top_builddir)/bindings/python/$(am__dirstamp)" || rm -f $(top_builddir)/bindings/python/$(am__dirstamp)
 
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
 clean: clean-am
 
-clean-am: clean-generic clean-libtool clean-py3execLTLIBRARIES \
+clean-am: clean-generic clean-libtool clean-pyexecLTLIBRARIES \
 	mostlyclean-am
 
 distclean: distclean-am
-		-rm -f ./$(DEPDIR)/auparse_la-auparse_python.Plo
+		-rm -f $(top_builddir)/bindings/python/$(DEPDIR)/auparse_la-auparse_python.Plo
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
 	distclean-tags
@@ -665,7 +679,7 @@ install-dvi: install-dvi-am
 
 install-dvi-am:
 
-install-exec-am: install-py3execLTLIBRARIES
+install-exec-am: install-pyexecLTLIBRARIES
 
 install-html: install-html-am
 
@@ -688,7 +702,7 @@ install-ps-am:
 installcheck-am:
 
 maintainer-clean: maintainer-clean-am
-		-rm -f ./$(DEPDIR)/auparse_la-auparse_python.Plo
+		-rm -f $(top_builddir)/bindings/python/$(DEPDIR)/auparse_la-auparse_python.Plo
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic
 
@@ -705,12 +719,12 @@ ps: ps-am
 
 ps-am:
 
-uninstall-am: uninstall-py3execLTLIBRARIES
+uninstall-am: uninstall-pyexecLTLIBRARIES
 
 .MAKE: install-am install-strip
 
 .PHONY: CTAGS GTAGS TAGS all all-am am--depfiles check check-am clean \
-	clean-generic clean-libtool clean-py3execLTLIBRARIES \
+	clean-generic clean-libtool clean-pyexecLTLIBRARIES \
 	cscopelist-am ctags ctags-am distclean distclean-compile \
 	distclean-generic distclean-libtool distclean-tags distdir dvi \
 	dvi-am html html-am info info-am install install-am \
@@ -718,12 +732,12 @@ uninstall-am: uninstall-py3execLTLIBRARIES
 	install-exec install-exec-am install-html install-html-am \
 	install-info install-info-am install-man install-pdf \
 	install-pdf-am install-ps install-ps-am \
-	install-py3execLTLIBRARIES install-strip installcheck \
+	install-pyexecLTLIBRARIES install-strip installcheck \
 	installcheck-am installdirs maintainer-clean \
 	maintainer-clean-generic mostlyclean mostlyclean-compile \
 	mostlyclean-generic mostlyclean-libtool pdf pdf-am ps ps-am \
 	tags tags-am uninstall uninstall-am \
-	uninstall-py3execLTLIBRARIES
+	uninstall-pyexecLTLIBRARIES
 
 .PRECIOUS: Makefile
 

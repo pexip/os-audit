@@ -13,7 +13,7 @@ specified content and then call "systemctl daemon-reload":
   /etc/systemd/system/auditd.service.d/augenrules.conf:
     [Service]
     ExecStartPost=
-    ExecStartPost=-/sbin/auditctl -R /etc/audit/audit.rules
+    ExecStartPost=-/usr/sbin/auditctl -R /etc/audit/audit.rules
 
 Check that the needed rules are present in /etc/audit/audit.rules before
 restarting the daemon.

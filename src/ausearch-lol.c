@@ -47,6 +47,11 @@ void lol_create(lol *lo)
 	lo->maxi = -1;
 	lo->limit = ARRAY_LIMIT;
 	lo->array = (lolnode *)malloc(size);
+	if (lo->array == NULL) {
+		fprintf(stderr, "Out of memory. Check %s file, %d line", __FILE__, __LINE__);
+		lo->limit = 0;
+		return;
+	}
 	memset(lo->array, 0, size);
 }
 
@@ -158,13 +163,14 @@ static int compare_event_time(event *e1, event *e2)
 }
 
 #ifndef HAVE_STRNDUPA
-static inline char *strndupa(const char *old, size_t n)
-{
-	size_t len = strnlen(old, n);
-	char *tmp = alloca(len + 1);
-	tmp[len] = 0;
-	return memcpy(tmp, old, len);
-}
+#define strndupa(s, n)								\
+	({												\
+		const char *__old = (s);					\
+		size_t __len = strnlen (__old, (n));		\
+		char *__new = (char *) alloca(__len + 1);	\
+		__new[__len] = '\0';						\
+		(char *) memcpy (__new, __old, __len);		\
+	})
 #endif
 
 /*
@@ -239,7 +245,7 @@ static int extract_timestamp(const char *b, event *e)
 	return 0;
 }
 
-// This function will check events to see if they are complete 
+// This function will check events to see if they are complete
 // FIXME: Can we think of other ways to determine if the event is done?
 static void check_events(lol *lo, time_t sec)
 {
@@ -252,16 +258,37 @@ static void check_events(lol *lo, time_t sec)
 			if (cur->l->e.sec + eoe_timeout <= sec) {
 				cur->status = L_COMPLETE;
 				ready++;
-			} else if (cur->l->e.type == AUDIT_PROCTITLE ||
-				    cur->l->e.type < AUDIT_FIRST_EVENT ||
-				    cur->l->e.type >= AUDIT_FIRST_ANOM_MSG ||
-				    cur->l->e.type == AUDIT_KERNEL ||
-				    (cur->l->e.type >= AUDIT_MAC_UNLBL_ALLOW &&
-				    cur->l->e.type <= AUDIT_MAC_CALIPSO_DEL)) {
+			} else if (audit_is_last_record(cur->l->e.type)) {
 				// If known to be 1 record event, we are done
 				cur->status = L_COMPLETE;
 				ready++;
-			} 
+			}
+		}
+	}
+}
+
+// This function will check events to see if they are complete but not compare against a given time
+static void check_events_without_time(lol *lo)
+{
+	int i;
+
+	for(i=0;i<=lo->maxi; i++) {
+		lolnode *cur = &lo->array[i];
+		if (cur->status == L_BUILDING) {
+			/* We now iterate over the event's records but without affecting the node's current
+			 * pointer (cur->l->cur). That is, we don't call the list-* routines
+			 * We could jump to the last record in the list which is normally a PROCTITLE, but this
+			 * may not be guaranteed, so we check all record types
+			 */
+			lnode *ln = cur->l->head;
+			while (ln) {
+				if (audit_is_last_record(ln->type)) {
+					cur->status = L_COMPLETE;
+					ready++;
+					break;
+				}
+				ln = ln->next;
+			}
 		}
 	}
 }
@@ -284,6 +311,11 @@ int lol_add_record(lol *lo, char *buff)
 	n.a1 = 0L;
 	n.type = e.type;
 	n.message = strdup(buff);
+	if(n.message == NULL) {
+		free((char *)e.node);
+		fprintf(stderr, "Out of memory. Check %s file, %d line", __FILE__, __LINE__);
+		return 0;
+	}
 	ptr = strchr(n.message, AUDIT_INTERP_SEPARATOR);
 	if (ptr) {
 		n.mlen = ptr - n.message;
@@ -338,6 +370,13 @@ int lol_add_record(lol *lo, char *buff)
 
 	// Create new event and fill it in
 	l = malloc(sizeof(llist));
+	if (l == NULL) {
+		free((char *)e.node);
+		free(n.message);
+		fprintf(stderr, "Out of memory. Check %s file, %d line",
+			__FILE__, __LINE__);
+		return 0;
+	}
 	list_create(l);
 	l->e.milli = e.milli;
 	l->e.sec = e.sec;
@@ -363,6 +402,13 @@ void terminate_all_events(lol *lo)
 			ready++;
 		}
 	}
+}
+
+// This function will mark all events as complete if it can.
+void complete_all_events(lol *lo)
+{
+
+	check_events_without_time(lo);
 }
 
 /* Search the list for any event that is ready to go. The caller

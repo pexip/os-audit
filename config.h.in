@@ -1,5 +1,14 @@
 /* config.h.in.  Generated from configure.ac by autoheader.  */
 
+/* Define to the type of an int if <stdatomic.h> is not available. */
+#undef ATOMIC_INT
+
+/* Define to the type of an unsigned if <stdatomic.h> is not available. */
+#undef ATOMIC_UNSIGNED
+
+/* Define to 1 if you have the <stdatomic.h> header file. */
+#undef HAVE_ATOMIC
+
 /* Define to 1 if you have the `clock_gettime' function. */
 #undef HAVE_CLOCK_GETTIME
 
@@ -34,6 +43,9 @@
 
 /* Define to 1 if you have the `eventfd' function. */
 #undef HAVE_EVENTFD
+
+/* Define to 1 if you have the `faccessat' function. */
+#undef HAVE_FACCESSAT
 
 /* Define to 1 if the floor function is available */
 #undef HAVE_FLOOR
@@ -98,6 +110,9 @@
 /* Define to 1 if you have the `signalfd' function. */
 #undef HAVE_SIGNALFD
 
+/* Define to 1 if you have the <stdatomic.h> header file. */
+#undef HAVE_STDATOMIC_H
+
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
 
@@ -143,9 +158,6 @@
 /* Define to 1 if you have the <sys/timerfd.h> header file. */
 #undef HAVE_SYS_TIMERFD_H
 
-/* Define to 1 if you have the <sys/time.h> header file. */
-#undef HAVE_SYS_TIME_H
-
 /* Define to 1 if you have the <sys/types.h> header file. */
 #undef HAVE_SYS_TYPES_H
 
@@ -176,6 +188,12 @@
 /* Define to the version of this package. */
 #undef PACKAGE_VERSION
 
+/* The size of `long', as computed by sizeof. */
+#undef SIZEOF_LONG
+
+/* The size of `time_t', as computed by sizeof. */
+#undef SIZEOF_TIME_T
+
 /* The size of `unsigned int', as computed by sizeof. */
 #undef SIZEOF_UNSIGNED_INT
 
@@ -186,10 +204,6 @@
    required in a freestanding environment). This macro is provided for
    backward compatibility; new code need not use it. */
 #undef STDC_HEADERS
-
-/* Define to 1 if you can safely include both <sys/time.h> and <time.h>. This
-   macro is obsolete. */
-#undef TIME_WITH_SYS_TIME
 
 /* Defined when fanotify headers are found */
 #undef USE_FANOTIFY
@@ -211,3 +225,6 @@
 
 /* Define if you want to enable Arm eabi processor support. */
 #undef WITH_ARM
+
+/* Define if you want to enable io_uring support. */
+#undef WITH_IO_URING

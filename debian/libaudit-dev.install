@@ -1,3 +1,5 @@
+usr/include/audit-records.h
+usr/include/audit_logging.h
 usr/include/libaudit.h
 usr/lib/*/libaudit.a
 usr/lib/*/libaudit.so
