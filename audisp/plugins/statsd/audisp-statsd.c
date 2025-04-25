@@ -54,7 +54,7 @@ struct audit_report
 {
 	unsigned int backlog;
 	unsigned int lost;
-	unsigned int free_space;
+	long long unsigned int free_space;
 	unsigned int plugin_current_depth;
 	unsigned int plugin_max_depth;
 	unsigned int events_total_count;
@@ -78,7 +78,7 @@ static char msg[MAX_AUDIT_MESSAGE_LENGTH + 1];
 static struct daemon_config d;
 static struct audit_report r;
 
-/* Local function protoypes */
+/* Local function prototypes */
 static void handle_event(auparse_state_t *au, auparse_cb_event_t cb_event_type,
 			 void *user_data);
 
@@ -115,7 +115,7 @@ static char *get_line(FILE *f, char *buf, size_t len)
 }
 
 /*
- * Load the plugin's configuration. Returns 1 on failure and 0 on sucess.
+ * Load the plugin's configuration. Returns 1 on failure and 0 on success.
  */
 static int load_config(void)
 {
@@ -218,9 +218,9 @@ static void get_kernel_status(void)
 	struct audit_reply rep;
 
 	audit_request_status(audit_fd);
-	audit_get_reply(audit_fd, &rep, GET_REPLY_BLOCKING, 0);
+	int rc = audit_get_reply(audit_fd, &rep, GET_REPLY_BLOCKING, 0);
 
-	if (rep.type == AUDIT_GET) {
+	if (rc > 0 && rep.type == AUDIT_GET) {
 		// add info to global audit event struct
 		r.lost = rep.status->lost;
 		r.backlog = rep.status->backlog;
@@ -243,7 +243,7 @@ static void get_auditd_status(void)
 		while (fgets(buf, sizeof(buf), f)) {
 			if (memcmp(buf, "Logging", 7) == 0) {
 				sscanf(buf,
-				       "Logging partition free space %u",
+				       "Logging partition free space = %llu",
 				       &r.free_space);
 			} else if (memcmp(buf, "current plugin", 14) == 0) {
 				sscanf(buf,
@@ -276,7 +276,7 @@ static void send_statsd(void)
 	// incremented (events) are counters.
 	len = snprintf(message, sizeof(message),
 	  "kernel.lost:%u|g\nkernel.backlog:%u|g\n"
-	  "auditd.free_space:%u|g\nauditd.plugin_current_depth:%u|g\nauditd.plugin_max_depth:%u|g\n"
+	  "auditd.free_space:%llu|g\nauditd.plugin_current_depth:%u|g\nauditd.plugin_max_depth:%u|g\n"
 	  "events.total_count:%u|c\nevents.total_failed:%u|c\n"
 	  "events.avc_count:%u|c\nevents.fanotify_count:%u|c\n"
 	  "events.logins_success:%u|c\nevents.logins_failed:%u|c\n"
@@ -351,6 +351,10 @@ int main(void)
 
 	// Initialize interval timer
 	timer_fd = timerfd_create (CLOCK_MONOTONIC, 0);
+	if (timer_fd < 0) {
+		syslog(LOG_ERR, "unable to open a timerfd");
+		return 1;
+	}
 	pfd[1].fd = timer_fd;
 	pfd[1].events = POLLIN;
 	itval.it_interval.tv_sec = d.interval;

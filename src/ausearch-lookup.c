@@ -1,6 +1,6 @@
 /*
 * ausearch-lookup.c - Lookup values to something more readable
-* Copyright (c) 2005-06,2011-12,2015-17 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005-06,2011-12,2015-17 Red Hat Inc.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -110,7 +110,7 @@ const char *aulookup_syscall(llist *l, char *buf, size_t size)
 }
 
 // See include/linux/net.h
-static struct nv_pair socktab[] = {
+static const struct nv_pair socktab[] = {
 	{SYS_SOCKET, "socket"},
 	{SYS_BIND, "bind"},
 	{SYS_CONNECT, "connect"},
@@ -163,7 +163,7 @@ static const char *aulookup_socketcall(long sc)
 /*
  * This table maps ipc calls to their text name
  */
-static struct nv_pair ipctab[] = {
+static const struct nv_pair ipctab[] = {
         {SEMOP, "semop"},
         {SEMGET, "semget"},
         {SEMCTL, "semctl"},
@@ -251,14 +251,12 @@ void aulookup_destroy_uid_list(void)
 	uid_list_created = 0;
 }
 
-int is_hex_string(const char *str)
+static int is_hex_string(const char *str)
 {
-	int c=0;
 	while (*str) {
 		if (!isxdigit(*str))
 			return 0;
 		str++;
-		c++;
 	}
 	return 1;
 }
@@ -304,6 +302,10 @@ char *unescape(const char *buf)
 		return NULL;
 
 	str = strndup(buf, ptr - buf);
+	if (str == NULL) {
+		fprintf(stderr, "Out of memory. Check %s file, %d line", __FILE__, __LINE__);
+		return NULL;
+	}
 
 	if (*buf == '(')
 		return str;

@@ -15,7 +15,7 @@
 @SET_MAKE@
 
 # Makefile.am-- 
-# Copyright 2004-2006, 2008,2011-16,2018 Red Hat Inc., Durham, North Carolina.
+# Copyright 2004-2006, 2008,2011-16,2018 Red Hat Inc.
 # All Rights Reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -114,7 +114,7 @@ build_triplet = @build@
 host_triplet = @host@
 target_triplet = @target@
 sbin_PROGRAMS = auditd$(EXEEXT) auditctl$(EXEEXT) aureport$(EXEEXT) \
-	ausearch$(EXEEXT) autrace$(EXEEXT)
+	ausearch$(EXEEXT)
 @ENABLE_LISTENER_TRUE@am__append_1 = auditd-listen.c
 subdir = src
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
@@ -189,10 +189,6 @@ ausearch_OBJECTS = $(am_ausearch_OBJECTS)
 ausearch_DEPENDENCIES = ${top_builddir}/lib/libaudit.la \
 	${top_builddir}/auparse/libauparse.la \
 	${top_builddir}/common/libaucommon.la
-am_autrace_OBJECTS = autrace.$(OBJEXT) delete_all.$(OBJEXT) \
-	auditctl-llist.$(OBJEXT)
-autrace_OBJECTS = $(am_autrace_OBJECTS)
-autrace_DEPENDENCIES = ${top_builddir}/lib/libaudit.la
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
 am__v_P_0 = false
@@ -212,7 +208,6 @@ am__depfiles_remade = ./$(DEPDIR)/auditctl-auditctl-listing.Po \
 	./$(DEPDIR)/auditctl-auditctl-llist.Po \
 	./$(DEPDIR)/auditctl-auditctl.Po \
 	./$(DEPDIR)/auditctl-delete_all.Po \
-	./$(DEPDIR)/auditctl-llist.Po \
 	./$(DEPDIR)/auditd-auditd-config.Po \
 	./$(DEPDIR)/auditd-auditd-dispatch.Po \
 	./$(DEPDIR)/auditd-auditd-event.Po \
@@ -228,8 +223,7 @@ am__depfiles_remade = ./$(DEPDIR)/auditctl-auditctl-listing.Po \
 	./$(DEPDIR)/ausearch-match.Po ./$(DEPDIR)/ausearch-nvpair.Po \
 	./$(DEPDIR)/ausearch-options.Po ./$(DEPDIR)/ausearch-parse.Po \
 	./$(DEPDIR)/ausearch-report.Po ./$(DEPDIR)/ausearch-string.Po \
-	./$(DEPDIR)/ausearch-time.Po ./$(DEPDIR)/ausearch.Po \
-	./$(DEPDIR)/autrace.Po ./$(DEPDIR)/delete_all.Po
+	./$(DEPDIR)/ausearch-time.Po ./$(DEPDIR)/ausearch.Po
 am__mv = mv -f
 COMPILE = $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) \
 	$(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
@@ -250,9 +244,9 @@ am__v_CCLD_ = $(am__v_CCLD_@AM_DEFAULT_V@)
 am__v_CCLD_0 = @echo "  CCLD    " $@;
 am__v_CCLD_1 = 
 SOURCES = $(auditctl_SOURCES) $(auditd_SOURCES) $(aureport_SOURCES) \
-	$(ausearch_SOURCES) $(autrace_SOURCES)
+	$(ausearch_SOURCES)
 DIST_SOURCES = $(auditctl_SOURCES) $(am__auditd_SOURCES_DIST) \
-	$(aureport_SOURCES) $(ausearch_SOURCES) $(autrace_SOURCES)
+	$(aureport_SOURCES) $(ausearch_SOURCES)
 RECURSIVE_TARGETS = all-recursive check-recursive cscopelist-recursive \
 	ctags-recursive dvi-recursive html-recursive info-recursive \
 	install-data-recursive install-dvi-recursive \
@@ -331,6 +325,7 @@ AWK = @AWK@
 BUILD_EXEEXT = @BUILD_EXEEXT@
 BUILD_OBJEXT = @BUILD_OBJEXT@
 CAPNG_LDADD = @CAPNG_LDADD@
+CAPNG_PKG = @CAPNG_PKG@
 CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CC_FOR_BUILD = @CC_FOR_BUILD@
@@ -394,14 +389,10 @@ PACKAGE_TARNAME = @PACKAGE_TARNAME@
 PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
-PYINCLUDEDIR = @PYINCLUDEDIR@
 PYTHON = @PYTHON@
-PYTHON3 = @PYTHON3@
 PYTHON3_CFLAGS = @PYTHON3_CFLAGS@
-PYTHON3_EXEC_PREFIX = @PYTHON3_EXEC_PREFIX@
 PYTHON3_INCLUDES = @PYTHON3_INCLUDES@
 PYTHON3_LIBS = @PYTHON3_LIBS@
-PYTHON3_PREFIX = @PYTHON3_PREFIX@
 PYTHON_EXEC_PREFIX = @PYTHON_EXEC_PREFIX@
 PYTHON_PLATFORM = @PYTHON_PLATFORM@
 PYTHON_PREFIX = @PYTHON_PREFIX@
@@ -411,6 +402,7 @@ SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
+SWIG = @SWIG@
 VERSION = @VERSION@
 WFLAGS = @WFLAGS@
 abs_builddir = @abs_builddir@
@@ -461,10 +453,7 @@ pkgpythondir = @pkgpythondir@
 prefix = @prefix@
 program_transform_name = @program_transform_name@
 psdir = @psdir@
-py3execdir = @py3execdir@
-pybind_dir = @pybind_dir@
 pyexecdir = @pyexecdir@
-python3dir = @python3dir@
 pythondir = @pythondir@
 runstatedir = @runstatedir@
 sbindir = @sbindir@
@@ -499,8 +488,6 @@ aureport_SOURCES = aureport.c auditd-config.c ausearch-llist.c aureport-options.
 aureport_LDADD = ${top_builddir}/lib/libaudit.la ${top_builddir}/auparse/libauparse.la ${top_builddir}/common/libaucommon.la
 ausearch_SOURCES = ausearch.c auditd-config.c ausearch-llist.c ausearch-options.c ausearch-report.c ausearch-match.c ausearch-string.c ausearch-parse.c ausearch-int.c ausearch-time.c ausearch-nvpair.c ausearch-lookup.c ausearch-avc.c ausearch-lol.c ausearch-checkpt.c
 ausearch_LDADD = ${top_builddir}/lib/libaudit.la ${top_builddir}/auparse/libauparse.la ${top_builddir}/common/libaucommon.la
-autrace_SOURCES = autrace.c delete_all.c auditctl-llist.c
-autrace_LDADD = ${top_builddir}/lib/libaudit.la
 all: all-recursive
 
 .SUFFIXES:
@@ -600,10 +587,6 @@ ausearch$(EXEEXT): $(ausearch_OBJECTS) $(ausearch_DEPENDENCIES) $(EXTRA_ausearch
 	@rm -f ausearch$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(ausearch_OBJECTS) $(ausearch_LDADD) $(LIBS)
 
-autrace$(EXEEXT): $(autrace_OBJECTS) $(autrace_DEPENDENCIES) $(EXTRA_autrace_DEPENDENCIES) 
-	@rm -f autrace$(EXEEXT)
-	$(AM_V_CCLD)$(LINK) $(autrace_OBJECTS) $(autrace_LDADD) $(LIBS)
-
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
 
@@ -614,7 +597,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/auditctl-auditctl-llist.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/auditctl-auditctl.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/auditctl-delete_all.Po@am__quote@ # am--include-marker
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/auditctl-llist.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/auditd-auditd-config.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/auditd-auditd-dispatch.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/auditd-auditd-event.Po@am__quote@ # am--include-marker
@@ -641,8 +623,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ausearch-string.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ausearch-time.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ausearch.Po@am__quote@ # am--include-marker
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/autrace.Po@am__quote@ # am--include-marker
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/delete_all.Po@am__quote@ # am--include-marker
 
 $(am__depfiles_remade):
 	@$(MKDIR_P) $(@D)
@@ -651,22 +631,25 @@ $(am__depfiles_remade):
 am--depfiles: $(am__depfiles_remade)
 
 .c.o:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.o$$||'`;\
+@am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ $< &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Po
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(COMPILE) -c -o $@ $<
 
 .c.obj:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ `$(CYGPATH_W) '$<'`
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.obj$$||'`;\
+@am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ `$(CYGPATH_W) '$<'` &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Po
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(COMPILE) -c -o $@ `$(CYGPATH_W) '$<'`
 
 .c.lo:
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(LTCOMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Plo
+@am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.lo$$||'`;\
+@am__fastdepCC_TRUE@	$(LTCOMPILE) -MT $@ -MD -MP -MF $$depbase.Tpo -c -o $@ $< &&\
+@am__fastdepCC_TRUE@	$(am__mv) $$depbase.Tpo $$depbase.Plo
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LTCOMPILE) -c -o $@ $<
@@ -1035,7 +1018,6 @@ distclean: distclean-recursive
 	-rm -f ./$(DEPDIR)/auditctl-auditctl-llist.Po
 	-rm -f ./$(DEPDIR)/auditctl-auditctl.Po
 	-rm -f ./$(DEPDIR)/auditctl-delete_all.Po
-	-rm -f ./$(DEPDIR)/auditctl-llist.Po
 	-rm -f ./$(DEPDIR)/auditd-auditd-config.Po
 	-rm -f ./$(DEPDIR)/auditd-auditd-dispatch.Po
 	-rm -f ./$(DEPDIR)/auditd-auditd-event.Po
@@ -1062,8 +1044,6 @@ distclean: distclean-recursive
 	-rm -f ./$(DEPDIR)/ausearch-string.Po
 	-rm -f ./$(DEPDIR)/ausearch-time.Po
 	-rm -f ./$(DEPDIR)/ausearch.Po
-	-rm -f ./$(DEPDIR)/autrace.Po
-	-rm -f ./$(DEPDIR)/delete_all.Po
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
 	distclean-tags
@@ -1113,7 +1093,6 @@ maintainer-clean: maintainer-clean-recursive
 	-rm -f ./$(DEPDIR)/auditctl-auditctl-llist.Po
 	-rm -f ./$(DEPDIR)/auditctl-auditctl.Po
 	-rm -f ./$(DEPDIR)/auditctl-delete_all.Po
-	-rm -f ./$(DEPDIR)/auditctl-llist.Po
 	-rm -f ./$(DEPDIR)/auditd-auditd-config.Po
 	-rm -f ./$(DEPDIR)/auditd-auditd-dispatch.Po
 	-rm -f ./$(DEPDIR)/auditd-auditd-event.Po
@@ -1140,8 +1119,6 @@ maintainer-clean: maintainer-clean-recursive
 	-rm -f ./$(DEPDIR)/ausearch-string.Po
 	-rm -f ./$(DEPDIR)/ausearch-time.Po
 	-rm -f ./$(DEPDIR)/ausearch.Po
-	-rm -f ./$(DEPDIR)/autrace.Po
-	-rm -f ./$(DEPDIR)/delete_all.Po
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic
 

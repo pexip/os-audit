@@ -95,7 +95,7 @@ S_PPID, S_KEY, S_RAW, S_NODE, S_IN_LOGS, S_JUST_ONE, S_SESSION, S_EXIT,
 S_LINEBUFFERED, S_UUID, S_VMNAME, S_DEBUG, S_CHECKPOINT, S_ARCH, S_FORMAT,
 S_EXTRA_TIME, S_EXTRA_LABELS, S_EXTRA_KEYS, S_EXTRA_OBJ2, S_ESCAPE, S_EOE_TMO };
 
-static struct nv_pair optiontab[] = {
+static const struct nv_pair optiontab[] = {
 	{ S_EVENT, "-a" },
 	{ S_ARCH, "--arch" },
 	{ S_EVENT, "--event" },
@@ -253,7 +253,7 @@ static int convert_str_to_msg(const char *optarg)
 {
 	int tmp, retval = 0;
 
-	if (isdigit(optarg[0])) {
+	if (isdigit((unsigned char)optarg[0])) {
 		errno = 0;
 		tmp = strtoul(optarg, NULL, 10);
 		if (errno) {
@@ -335,7 +335,7 @@ int check_params(int count, char *vars[])
 				retval = -1;
 				break;
 			}
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				event_id = strtoul(optarg, NULL, 10);
 				if (errno) {
@@ -357,7 +357,7 @@ int check_params(int count, char *vars[])
 				retval = -1;
 				break;
 			}
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				arg_eoe_timeout = (time_t)strtoul(optarg, NULL, 10);
 				if (errno || arg_eoe_timeout == 0) {
@@ -463,7 +463,7 @@ int check_params(int count, char *vars[])
 				retval = -1;
 				break;
 			}
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				event_gid = strtoul(optarg,NULL,10);
 				if (errno) {
@@ -497,7 +497,7 @@ int check_params(int count, char *vars[])
 				retval = -1;
 				break;
 			}
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				event_egid = strtoul(optarg,NULL,10);
 				if (errno) {
@@ -529,7 +529,7 @@ int check_params(int count, char *vars[])
 				retval = -1;
 				break;
 			}
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				event_gid = strtoul(optarg,NULL,10);
 				if (errno) {
@@ -655,7 +655,7 @@ int check_params(int count, char *vars[])
 				retval = -1;
 				break;
 			}
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				event_ppid = strtol(optarg,NULL,10);
 				if (errno)
@@ -676,7 +676,7 @@ int check_params(int count, char *vars[])
 				retval = -1;
 				break;
 			}
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				event_pid = strtol(optarg,NULL,10);
 				if (errno)
@@ -794,7 +794,7 @@ int check_params(int count, char *vars[])
 				retval = -1;
 				break;
 			}
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				event_syscall = (int)strtoul(optarg, NULL, 10);
 				if (errno) {
@@ -893,21 +893,23 @@ int check_params(int count, char *vars[])
 			}
 			{
 			size_t len = strlen(optarg);
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
-				event_session_id = strtoul(optarg,NULL,10);
-				if (errno)
+				unsigned long optval = strtoul(optarg,NULL,10);
+				if (errno || optval >= (1ul << 32))
 					retval = -1;
+				event_session_id = optval;
 				c++;
                         } else if (len >= 2 && *(optarg)=='-' &&
-                                                (isdigit(optarg[1]))) {
+                                                (isdigit((unsigned char)optarg[1]))) {
 				errno = 0;
-                                event_session_id = strtoul(optarg, NULL, 0);
-				if (errno) {
+				long optval = strtol(optarg, NULL, 0);
+				if (errno || optval < INT_MIN || optval > INT_MAX) {
 					retval = -1;
 					fprintf(stderr, "Error converting %s\n",
 						optarg);
 				}
+				event_session_id = optval;
 				c++;
 			} else {
 				fprintf(stderr,
@@ -931,7 +933,7 @@ int check_params(int count, char *vars[])
 			}
 			{
 			size_t len = strlen(optarg);
-                        if (isdigit(optarg[0])) {
+                        if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
                                 event_exit = strtoll(optarg, NULL, 0);
 				if (errno) {
@@ -940,7 +942,7 @@ int check_params(int count, char *vars[])
 						optarg);
 				}
                         } else if (len >= 2 && *(optarg)=='-' &&
-                                                (isdigit(optarg[1]))) {
+                                                (isdigit((unsigned char)optarg[1]))) {
 				errno = 0;
                                 event_exit = strtoll(optarg, NULL, 0);
 				if (errno) {
@@ -1072,7 +1074,7 @@ int check_params(int count, char *vars[])
 				retval = -1;
 				break;
 			}
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				event_uid = strtoul(optarg,NULL,10);
 				if (errno) {
@@ -1105,7 +1107,7 @@ int check_params(int count, char *vars[])
 				retval = -1;
 				break;
 			}
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				event_euid = strtoul(optarg,NULL,10);
 				if (errno) {
@@ -1138,7 +1140,7 @@ int check_params(int count, char *vars[])
 				retval = -1;
 				break;
 			}
-			if (isdigit(optarg[0])) {
+			if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				event_uid = strtoul(optarg,NULL,10);
 				if (errno) {
@@ -1182,7 +1184,7 @@ int check_params(int count, char *vars[])
 			}
 			{
 			size_t len = strlen(optarg);
-                        if (isdigit(optarg[0])) {
+                        if (isdigit((unsigned char)optarg[0])) {
 				errno = 0;
 				event_loginuid = strtoul(optarg,NULL,10);
 				if (errno) {
@@ -1192,7 +1194,7 @@ int check_params(int count, char *vars[])
                                         retval = -1;
 				}
                         } else if (len >= 2 && *(optarg)=='-' &&
-                                                (isdigit(optarg[1]))) {
+                                                (isdigit((unsigned char)optarg[1]))) {
 				errno = 0;
                                 event_loginuid = strtol(optarg, NULL, 0);
 				if (errno) {

@@ -55,31 +55,22 @@ typedef enum { EVENT_EMPTY, EVENT_ACCUMULATING, EVENT_EMITTED } auparser_state_t
  * a list of events with their own list of records hence List of List (LOL)
  * event processing.
  *
- * When processing an event stream we define the end of an event via
- *      record type = AUDIT_EOE (audit end of event type record), or
- *      record type = AUDIT_PROCTITLE   (we note the AUDIT_PROCTITLE is always
- *                                      the last record), or
- *	record type = AUDIT_KERNEL (kernel events are one record events), or
- *      record type < AUDIT_FIRST_EVENT (only single record events appear
- *                                      before this type), or
- *      record type >= AUDIT_FIRST_ANOM_MSG (only single record events appear
- *                                      after this type), or
- *	record type >= AUDIT_MAC_UNLBL_ALLOW && record type <= AUDIT_MAC_CALIPSO_DEL (these are also one record events), or
- *      for the stream being processed, the time of the event is over eoe_timeout seconds
- *      old. eoe_timeout is the configuration item, 'end_of_event_timeout', in the auditd.conf
- *      configuration file. It's default is EOE_TIMEOUT
+ * When processing an event stream we detect the end of an event via a common
+ * function, audit_is_last_record, or the time of the event is over eoe_timeout
+ * seconds old. eoe_timeout is the configuration item, 'end_of_event_timeout',
+ * in the auditd.conf configuration file. It's default is EOE_TIMEOUT
  *
  * So, under LOL_EVENT processing, a event node (au_lolnode) can be either
  *
  * EBS_EMPTY: node is scheduled for emptying (freeing)
  * EBS_BUILDING: node is still building (awaiting more records and/or awaiting
  *               an End of Event action)
- * EBS_COMPLETE: node is complete and avaiable for use
+ * EBS_COMPLETE: node is complete and available for use
  *
  * The old auparse() library processed events as they appeared and hence failed
  * to deal with interleaved records. The old library kept a 'current' event
  * which it would parse. This new LOL_EVENT code maintains the concept of a
- * 'current' event, but it now points to an event within the list of list 
+ * 'current' event, but it now points to an event within the list of list
  * events structure.
  */
 typedef enum { EBS_EMPTY, EBS_BUILDING, EBS_COMPLETE } au_lol_t;
@@ -102,7 +93,7 @@ typedef struct {
 } au_lol;
 
 /*
- * The list is a dynamically growable list. We initally hold ARRAY_LIMIT
+ * The list is a dynamically growable list. We initially hold ARRAY_LIMIT
  * events and grow by ARRAY_LIMIT if we need to maintain more events at
  * any one time
  */
@@ -192,7 +183,6 @@ struct opaque
 AUDIT_HIDDEN_START
 
 // auditd-config.c
-void aup_clear_config(struct daemon_conf *config);
 int aup_load_config(auparse_state_t *au, struct daemon_conf *config, log_test_t lt);
 void aup_free_config(struct daemon_conf *config);
 

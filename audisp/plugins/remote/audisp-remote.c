@@ -51,15 +51,11 @@
 #include "libaudit.h"
 #include "private.h"
 #include "remote-config.h"
-#include "queue.h"
 #include "common.h"
+#include "queue.h"
 
 #define CONFIG_FILE "/etc/audit/audisp-remote.conf"
 #define BUF_SIZE 32
-
-/* MAX_AUDIT_MESSAGE_LENGTH, aligned to 4 KB so that an average q_append() only
-   writes to two disk disk blocks (1 aligned data block, 1 header block). */
-#define QUEUE_ENTRY_SIZE (3*4096)
 
 /* Error types */
 #define ET_SUCCESS	 0
@@ -87,11 +83,22 @@ static const char *SPOOL_FILE = "/var/spool/audit/remote.log";
 
 /* Local function declarations */
 static int check_message(void);
-static int relay_event(const char *s, size_t len);
+static int relay_event(const char *s, size_t len)
+	__attr_access ((__read_only__, 1, 2));
+static int relay_sock(const char *s, size_t len)
+	__attr_access ((__read_only__, 1, 2));
+static int relay_sock_managed(const char *s, size_t len)
+	__attr_access ((__read_only__, 1, 2));
+static int relay_sock_ascii(const char *s, size_t len)
+	__attr_access ((__read_only__, 1, 2));
+static int send_msg_tcp (unsigned char *header, const char *msg, uint32_t mlen)
+	__attr_access ((__read_only__, 2, 3));
 static int init_transport(void);
 static int stop_transport(void);
-static int ar_read (int, void *, int);
-static int ar_write (int, const void *, int);
+static int ar_read (int, void *, int)
+	__attr_access ((__write_only__, 2, 3));
+static int ar_write (int, const void *, int)
+	__attr_access ((__read_only__, 2, 3));
 
 #ifdef USE_GSSAPI
 /* We only ever talk to one server, so we don't need per-connection
@@ -501,7 +508,8 @@ int main(int argc, char *argv[])
 	if (config.local_port && config.local_port < 1024)
 		capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
 			CAP_NET_BIND_SERVICE);
-	capng_apply(CAPNG_SELECT_BOTH);
+	if (capng_apply(CAPNG_SELECT_BOTH))
+		syslog(LOG_WARNING, "audisp-remote plugin was unable to drop capabilities, continuing with elevated priviles");
 #endif
 	syslog(LOG_NOTICE, "Audisp-remote started with queue_size: %zu",
 		q_queue_length(queue));
@@ -544,7 +552,7 @@ int main(int argc, char *argv[])
 			continue; // If here, we had some kind of problem
 
 		if ((config.heartbeat_timeout > 0) && n == 0 && !remote_ended) {
-			/* We attempt a hearbeat if select fails, which
+			/* We attempt a heartbeat if select fails, which
 			 * may give us more heartbeats than we need. This
 			 * is safer than too few heartbeats.  */
 			if (config.format == F_MANAGED) {
@@ -1123,7 +1131,7 @@ static int init_sock(void)
 		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
 					(char *)&one, sizeof (int));
 
-		// If we are binding, resolve somethihng relative to
+		// If we are binding, resolve something relative to
 		// the address of the aggregating server
 		if (config.local_port != 0) {
 			struct addrinfo *ai2;

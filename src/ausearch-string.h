@@ -1,6 +1,6 @@
 /*
 * ausearch-string.h - Header file for ausearch-string.c
-* Copyright (c) 2005,2008 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005,2008,2023 Red Hat Inc.
 * All Rights Reserved.
 *
 * This software may be freely redistributed and/or modified under the
@@ -15,7 +15,7 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
 * Boston, MA 02110-1335, USA.
 *
 * Authors:
@@ -41,15 +41,15 @@ typedef struct _snode{
 typedef struct {
   snode *head;		// List head
   snode *cur;		// Pointer to current node
+  snode *last;		// Pointer to current node
   unsigned int cnt;	// How many items in this list
 } slist;
 
 void slist_create(slist *l);
 static inline void slist_first(slist *l) { l->cur = l->head; }
-void slist_last(slist *l);
 snode *slist_next(slist *l);
-static inline snode *slist_get_cur(slist *l) { return l->cur; }
-void slist_append(slist *l, snode *node);
+static inline snode *slist_get_cur(const slist *l) { return l->cur; }
+int slist_append(slist *l, const snode *node);
 void slist_clear(slist* l);
 
 /* append a string if its not already on the list */

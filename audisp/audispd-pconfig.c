@@ -1,11 +1,11 @@
 /* audispd-pconfig.c --
- * Copyright 2007,2010,2015,2021 Red Hat Inc.
+ * Copyright 2007,2010,2015,2021-23 Red Hat Inc.
  * All Rights Reserved.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software may be freely redistributed and/or modified under the
+ * terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2, or (at your option) any
+ * later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -13,8 +13,9 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; see the file COPYING. If not, write to the
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
+ * Boston, MA 02110-1335, USA.
  *
  * Authors:
  *   Steve Grubb <sgrubb@redhat.com>
@@ -37,15 +38,15 @@
 struct nv_pair
 {
 	const char *name;
-	const char *value;
-	const char *option;
+	char **values;
+	int nvalues;
 };
 
 struct kw_pair
 {
 	const char *name;
 	int (*parser)(struct nv_pair *, int, plugin_conf_t *);
-	int max_options;
+	int max_options; /* -1 means any number of options */
 };
 
 struct nv_list
@@ -55,30 +56,31 @@ struct nv_list
 };
 
 static char *get_line(FILE *f, char *buf, unsigned size, int *lineno,
-		const char *file);
+		const char *file) __attr_access ((__write_only__, 2, 3));
+static void nv_free(struct nv_pair *nv);
 static int nv_split(char *buf, struct nv_pair *nv);
 static const struct kw_pair *kw_lookup(const char *val);
-static int active_parser(struct nv_pair *nv, int line, 
+static int active_parser(struct nv_pair *nv, int line,
 		plugin_conf_t *config);
-static int direction_parser(struct nv_pair *nv, int line, 
+static int direction_parser(struct nv_pair *nv, int line,
 		plugin_conf_t *config);
-static int path_parser(struct nv_pair *nv, int line, 
+static int path_parser(struct nv_pair *nv, int line,
 		plugin_conf_t *config);
-static int service_type_parser(struct nv_pair *nv, int line, 
+static int service_type_parser(struct nv_pair *nv, int line,
 		plugin_conf_t *config);
-static int args_parser(struct nv_pair *nv, int line, 
+static int args_parser(struct nv_pair *nv, int line,
 		plugin_conf_t *config);
-static int format_parser(struct nv_pair *nv, int line, 
+static int format_parser(struct nv_pair *nv, int line,
 		plugin_conf_t *config);
 static int sanity_check(plugin_conf_t *config, const char *file);
 
-static const struct kw_pair keywords[] = 
+static const struct kw_pair keywords[] =
 {
   {"active",                   active_parser,			0 },
   {"direction",                direction_parser,		0 },
   {"path",                     path_parser,			0 },
   {"type",                     service_type_parser,		0 },
-  {"args",                     args_parser,			2 },
+  {"args",                     args_parser,			-1 },
   {"format",                   format_parser,			0 },
   { NULL,                      NULL,				0 }
 };
@@ -116,14 +118,12 @@ static const struct nv_list formats[] =
 */
 void clear_pconfig(plugin_conf_t *config)
 {
-	int i;
-
 	config->active = A_NO;
 	config->direction = D_UNSET;
 	config->path = NULL;
 	config->type = S_ALWAYS;
-	for (i=0; i< (MAX_PLUGIN_ARGS + 2); i++)
-		config->args[i] = NULL;
+	config->args = NULL;
+	config->nargs = 0;
 	config->format = F_STRING;
 	config->plug_pipe[0] = -1;
 	config->plug_pipe[1] = -1;
@@ -223,7 +223,7 @@ int load_pconfig(plugin_conf_t *config, char *file)
 			lineno++;
 			continue;
 		}
-		if (nv.value == NULL) {
+		if (nv.values == NULL) {
 			fclose(f);
 			return 1;
 		}
@@ -238,12 +238,15 @@ int load_pconfig(plugin_conf_t *config, char *file)
 			return 1;
 		}
 
-		/* Check number of options */
-		if (kw->max_options == 0 && nv.option != NULL) {
+		/* Check number of options 
+		 * nv.nvalues is always >= 1, because that's the right part of a 'key = value' conf line
+		 */
+		const int noptions = nv.nvalues - 1;
+		if (kw->max_options != -1 && kw->max_options < noptions) {
 			audit_msg(LOG_ERR,
-				"Keyword \"%s\" has invalid option "
-				"\"%s\" in line %d of %s",
-				nv.name, nv.option, lineno, file);
+				"Keyword \"%s\" has invalid options "
+				"in line %d of %s",
+				nv.name, lineno, file);
 			fclose(f);
 			return 1;
 		}
@@ -254,7 +257,7 @@ int load_pconfig(plugin_conf_t *config, char *file)
 			fclose(f);
 			return 1; // local parser puts message out
 		}
-
+		nv_free(&nv);
 		lineno++;
 	}
 
@@ -294,14 +297,19 @@ static char *get_line(FILE *f, char *buf, unsigned size, int *lineno,
 	return NULL;
 }
 
+static void nv_free(struct nv_pair *nv)
+{
+	free(nv->values);
+}
+
 static int nv_split(char *buf, struct nv_pair *nv)
 {
 	/* Get the name part */
 	char *ptr, *saved;
 
 	nv->name = NULL;
-	nv->value = NULL;
-	nv->option = NULL;
+	nv->values = NULL;
+	nv->nvalues = 0;
 	ptr = strtok_r(buf, " ", &saved);
 	if (ptr == NULL)
 		return 0; /* If there's nothing, go to next line */
@@ -316,22 +324,18 @@ static int nv_split(char *buf, struct nv_pair *nv)
 	if (strcmp(ptr, "=") != 0)
 		return 2;
 
-	/* get the value */
-	ptr = strtok_r(NULL, " ", &saved);
-	if (ptr == NULL)
-		return 1;
-	nv->value = ptr;
-
-	/* See if there's an option */
-	ptr = strtok_r(NULL, " ", &saved);
-	if (ptr) {
-		nv->option = ptr;
-
-		/* Make sure there's nothing else */
-		ptr = strtok_r(NULL, " ", &saved);
-		if (ptr)
+	/* get the value part */
+	while ((ptr = strtok_r(NULL, " ", &saved)) != NULL) {
+		nv->values = realloc(nv->values, (nv->nvalues + 1) * sizeof(char *));
+		if (nv->values == NULL) {
 			return 1;
+		}
+
+		nv->values[nv->nvalues++] = ptr;
 	}
+	/* Check if at least 1 value was present */
+	if (nv->values == NULL)
+		return 1;
 
 	/* Everything is OK */
 	return 0;
@@ -354,12 +358,12 @@ static int active_parser(struct nv_pair *nv, int line,
 	int i;
 
 	for (i=0; active[i].name != NULL; i++) {
-		if (strcasecmp(nv->value, active[i].name) == 0) {
+		if (strcasecmp(nv->values[0], active[i].name) == 0) {
 			config->active = active[i].option;
 			return 0;
 		}
 	}
-	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->value, line);
+	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->values[0], line);
 	return 1;
 }
 
@@ -369,32 +373,36 @@ static int direction_parser(struct nv_pair *nv, int line,
 	int i;
 
 	for (i=0; directions[i].name != NULL; i++) {
-		if (strcasecmp(nv->value, directions[i].name) == 0) {
+		if (strcasecmp(nv->values[0], directions[i].name) == 0) {
 			config->direction = directions[i].option;
 			return 0;
 		}
 	}
-	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->value, line);
+	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->values[0], line);
 	return 1;
 }
 
+static const char *BUILTIN_PATH="/sbin/audisp-af_unix";
 static int path_parser(struct nv_pair *nv, int line,
 	plugin_conf_t *config)
 {
 	char *dir = NULL, *tdir;
 
-	if (nv->value == NULL) {
+	if (nv->values == NULL) {
 		config->path = NULL;
 		return 0;
 	}
 
-	if (strncasecmp(nv->value, "builtin_", 8) == 0) {
-		config->path = strdup(nv->value);
+	if (strncasecmp(nv->values[0], "builtin_", 8) == 0) {
+		audit_msg(LOG_WARNING,
+			  "Option %s line %d is obsolete - using %s",
+			  nv->values[0], line, BUILTIN_PATH);
+		config->path = strdup(BUILTIN_PATH);
 		return 0;
 	}
 
 	/* get dir form name. */
-	tdir = strdup(nv->value);
+	tdir = strdup(nv->values[0]);
 	if (tdir)
 		dir = dirname(tdir);
 	if (dir == NULL || strlen(dir) < 4) { //  '/var' is shortest dirname
@@ -407,7 +415,7 @@ static int path_parser(struct nv_pair *nv, int line,
 
 	free((void *)tdir);
 	free((void *)config->path);
-	config->path = strdup(nv->value);
+	config->path = strdup(nv->values[0]);
 	if (config->path == NULL)
 		return 1;
 	return 0;
@@ -419,28 +427,30 @@ static int service_type_parser(struct nv_pair *nv, int line,
 	int i;
 
 	for (i=0; service_type[i].name != NULL; i++) {
-		if (strcasecmp(nv->value, service_type[i].name) == 0) {
+		if (strcasecmp(nv->values[0], service_type[i].name) == 0) {
 			config->type = service_type[i].option;
+			if (config->type == S_BUILTIN) {
+				audit_msg(LOG_WARNING,
+		"Option %s line %d is obsolete - update it", nv->values[0], line);
+				config->type = S_ALWAYS;
+			}
 			return 0;
 		}
 	}
-	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->value, line);
+	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->values[0], line);
 	return 1;
 }
 
 static int args_parser(struct nv_pair *nv, int line,
 	plugin_conf_t *config)
 {
-	int i;
+	config->args = calloc(nv->nvalues, sizeof(char *));
+	config->nargs = nv->nvalues;
 
-	for (i=0; i < (MAX_PLUGIN_ARGS + 2); i++) {
-		free((void *)config->args[i]);
-		config->args[i] = NULL;
+	for (int i = 0; i < nv->nvalues; i++) {
+		config->args[i] = strdup(nv->values[nv->nvalues - i - 1]);
 	}
 
-	config->args[1] = strdup(nv->value);
-	if (nv->option)
-		config->args[2] = strdup(nv->option);
 	return 0;
 }
 
@@ -450,12 +460,12 @@ static int format_parser(struct nv_pair *nv, int line,
 	int i;
 
 	for (i=0; formats[i].name != NULL; i++) {
-		if (strcasecmp(nv->value, formats[i].name) == 0) {
+		if (strcasecmp(nv->values[0], formats[i].name) == 0) {
 			config->format = formats[i].option;
 			return 0;
 		}
 	}
-	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->value, line);
+	audit_msg(LOG_ERR, "Option %s not found - line %d", nv->values[0], line);
 	return 1;
 }
 
@@ -516,8 +526,10 @@ void free_pconfig(plugin_conf_t *config)
 	if (config == NULL)
 		return;
 
-	for (i=0; i < (MAX_PLUGIN_ARGS + 2); i++)
+	for (i = 0; i < config->nargs; i++) {
 		free(config->args[i]);
+	}
+	free(config->args);
 	if (config->plug_pipe[0] >= 0)
 		close(config->plug_pipe[0]);
 	if (config->plug_pipe[1] >= 0)

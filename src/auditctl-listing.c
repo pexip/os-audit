@@ -1,5 +1,5 @@
 /* auditctl-listing.c --
- * Copyright 2014,16,2021 Red Hat Inc.
+ * Copyright 2014,16,2021-2 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -25,10 +25,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef WITH_IO_URING
+#include <linux/io_uring.h>
+#endif
 #include "auditctl-listing.h"
 #include "private.h"
 #include "auditctl-llist.h"
 #include "auparse-idata.h"
+
+#ifndef IORING_OP_LAST
+#define IORING_OP_LAST 37
+#endif
 
 /* Global vars */
 static llist l;
@@ -135,18 +142,24 @@ static int print_syscall(const struct audit_rule_data *r, unsigned int *sc)
 {
 	int count = 0;
 	int all = 1;
-	unsigned int i;
+	unsigned int i, len;
 	int machine = audit_detect_machine();
 
 	/* Rules on the following filters do not take a syscall */
 	if (((r->flags & AUDIT_FILTER_MASK) == AUDIT_FILTER_USER) ||
 	    ((r->flags & AUDIT_FILTER_MASK) == AUDIT_FILTER_TASK) ||
-	    ((r->flags &AUDIT_FILTER_MASK) == AUDIT_FILTER_EXCLUDE) ||
-	    ((r->flags &AUDIT_FILTER_MASK) == AUDIT_FILTER_FS))
+	    ((r->flags & AUDIT_FILTER_MASK) == AUDIT_FILTER_EXCLUDE) ||
+	    ((r->flags & AUDIT_FILTER_MASK) == AUDIT_FILTER_FS))
 		return 0;
 
+	int io_uring=(r->flags & AUDIT_FILTER_MASK) == AUDIT_FILTER_URING_EXIT;
+	if (io_uring)
+		len = IORING_OP_LAST;
+	else
+		len = AUDIT_BITMASK_SIZE-1;
+
 	/* See if its all or specific syscalls */
-	for (i = 0; i < (AUDIT_BITMASK_SIZE-1); i++) {
+	for (i = 0; i < len; i++) {
 		if (r->mask[i] != (uint32_t)~0) {
 			all = 0;
 			break;
@@ -156,25 +169,43 @@ static int print_syscall(const struct audit_rule_data *r, unsigned int *sc)
 	if (all) {
 		printf(" -S all");
 		count = i;
-	} else for (i = 0; i < AUDIT_BITMASK_SIZE * 32; i++) {
-		int word = AUDIT_WORD(i);
-		int bit  = AUDIT_BIT(i);
-		if (r->mask[word] & bit) {
-			const char *ptr;
-			if (_audit_elf)
-				machine = audit_elf_to_machine(_audit_elf);
-			if (machine < 0)
-				ptr = NULL;
-			else
-				ptr = audit_syscall_to_name(i, machine);
-			if (!count)
-				printf(" -S ");
-			if (ptr)
-				printf("%s%s", !count ? "" : ",", ptr);
-			else
-				printf("%s%u", !count ? "" : ",", i);
-			count++;
-			*sc = i;
+	} else if (io_uring) {
+		for (i = 0; i < IORING_OP_LAST; i++) {
+			int word = AUDIT_WORD(i);
+			int bit  = AUDIT_BIT(i);
+			if (r->mask[word] & bit) {
+				const char *ptr = audit_uringop_to_name(i);
+				if (!count)
+					printf(" -S ");
+				if (ptr)
+					printf("%s%s", !count ? "" : ",", ptr);
+				else
+					printf("%s%u", !count ? "" : ",", i);
+				count++;
+				*sc = i;
+			}
+		}
+	} else {
+		for (i = 0; i < AUDIT_BITMASK_SIZE * 32; i++) {
+			int word = AUDIT_WORD(i);
+			int bit  = AUDIT_BIT(i);
+			if (r->mask[word] & bit) {
+				const char *ptr;
+				if (_audit_elf)
+				    machine = audit_elf_to_machine(_audit_elf);
+				if (machine < 0)
+					ptr = NULL;
+				else
+					ptr = audit_syscall_to_name(i, machine);
+				if (!count)
+					printf(" -S ");
+				if (ptr)
+					printf("%s%s", !count ? "" : ",", ptr);
+				else
+					printf("%s%u", !count ? "" : ",", i);
+				count++;
+				*sc = i;
+			}
 		}
 	}
 	return count;
@@ -349,7 +380,9 @@ static void print_rule(const struct audit_rule_data *r)
 					printf("-w %.*s", r->values[i],
 						&r->buf[boffset]);
 				else
-					printf(" -F path=%.*s",	r->values[i],
+					printf(" -F path%s%.*s",
+						audit_operator_to_symbol(op),
+						r->values[i],
 						&r->buf[boffset]);
 				boffset += r->values[i];
 			} else if (field == AUDIT_DIR) {
@@ -357,12 +390,15 @@ static void print_rule(const struct audit_rule_data *r)
 					printf("-w %.*s", r->values[i],
 						&r->buf[boffset]);
 				else
-					printf(" -F dir=%.*s", r->values[i],
+					printf(" -F dir%s%.*s",
+						audit_operator_to_symbol(op),
+						r->values[i],
 						&r->buf[boffset]);
 
 				boffset += r->values[i];
 			} else if (field == AUDIT_EXE) {
-				printf(" -F exe=%.*s",
+				printf(" -F exe%s%.*s",
+					audit_operator_to_symbol(op),
 					r->values[i], &r->buf[boffset]);
 				boffset += r->values[i];
 			} else if (field == AUDIT_FILTERKEY) {
@@ -526,7 +562,7 @@ static const char *get_failure(unsigned f)
  * 0 if no more should be read and 1 to indicate that more messages of this
  * type may need to be read.
  */
-int audit_print_reply(struct audit_reply *rep, int fd)
+int audit_print_reply(const struct audit_reply *rep, int fd)
 {
 	_audit_elf = 0;
 

@@ -302,7 +302,7 @@ push_event(auparse_state_t * au, auparse_cb_event_t cb_event_type,
                 rc |= ber_printf(ber, "s", type);
                 
                 /* 
-                 * Nineth field is the LogString
+                 * Ninth field is the LogString
                  * we try to put something meaningful here
                  * we also start the relocations sequence
                  */
@@ -333,7 +333,7 @@ push_event(auparse_state_t * au, auparse_cb_event_t cb_event_type,
                         /* 
                          * we set a maximum of 1024 chars for
                          * relocation data (field=value pairs)
-                         * Hopefuly this wont overflow too often
+                         * Hopefully this wont overflow too often
                          */
                         char data[1024];
                         const char *name = auparse_get_field_name(au);
@@ -467,7 +467,8 @@ int main(int argc, char *argv[])
 #ifdef HAVE_LIBCAP_NG
 	// Drop all capabilities
         capng_clear(CAPNG_SELECT_BOTH);
-        capng_apply(CAPNG_SELECT_BOTH);
+        if (capng_apply(CAPNG_SELECT_BOTH))
+		syslog(LOG_WARNING, "zos-remote plugin was unable to drop capabilities, continuing with elevated priviles");
 #endif
 
         /* set stdin to O_NONBLOCK */

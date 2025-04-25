@@ -56,7 +56,7 @@ nvnode *nvlist_next(nvlist *l)
 }
 
 // 0 on success and 1 on error
-int nvlist_append(nvlist *l, nvnode *node)
+int nvlist_append(nvlist *l, const nvnode *node)
 {
 	if (node->name == NULL)
 		return 1;
@@ -65,9 +65,15 @@ int nvlist_append(nvlist *l, nvnode *node)
 		alloc_array(l);
 
 	if (l->cnt == l->size) {
-		l->array = realloc(l->array, l->size * sizeof(nvnode) * 2);
-		memset(l->array + l->size, 0, sizeof(nvnode) * l->size);
-		l->size = l->size * 2;
+		nvnode* tmp;
+		tmp = realloc(l->array, l->size * sizeof(nvnode) * 2);
+		if (tmp != NULL) {
+			l->array = tmp;
+			memset(l->array + l->size, 0, sizeof(nvnode) * l->size);
+			l->size = l->size * 2;
+		}
+		else 
+			return 1;
 	}
 
 	nvnode *newnode = &l->array[l->cnt];
@@ -85,7 +91,7 @@ int nvlist_append(nvlist *l, nvnode *node)
 /*
  * Its less code to make a fixup than a new append.
  */
-void nvlist_interp_fixup(nvlist *l)
+void nvlist_interp_fixup(const nvlist *l)
 {
 	nvnode* node = &l->array[l->cur];
 	node->interp_val = node->val;
@@ -157,9 +163,6 @@ void nvlist_clear(nvlist *l, int free_interp)
 {
 	unsigned int i = 0;
 	register nvnode *current;
-
-	if (l->cnt == 0)
-		return;
 
 	while (i < l->cnt) {
 		current = &l->array[i];

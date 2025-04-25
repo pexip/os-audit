@@ -126,12 +126,15 @@ extern int __audit_send(int fd, int type, const void *data, unsigned int size, i
 AUDIT_HIDDEN_START
 
 // This is the main messaging function used internally
-extern int audit_send_user_message(int fd, int type, hide_t hide_err, 
+extern int audit_send_user_message(int fd, int type, hide_t hide_err,
 	const char *message);
+int audit_name_to_perm(const char *name);
+const char *audit_perm_to_name(int perm);
 
 AUDIT_HIDDEN_END
 
 // libaudit.c
+int _audit_parse_syscall(const char *optarg, struct audit_rule_data *rule);
 extern int _audit_permadded;
 extern int _audit_archadded;
 extern int _audit_syscalladded;

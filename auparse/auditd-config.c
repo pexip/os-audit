@@ -74,7 +74,7 @@ static const struct kw_pair keywords[] =
 /*
  * Set everything to its default value
 */
-void aup_clear_config(struct daemon_conf *config)
+static void aup_clear_config(struct daemon_conf *config)
 {
 	config->local_events = 1;
 	config->sender_uid = 0;
@@ -107,14 +107,13 @@ void aup_clear_config(struct daemon_conf *config)
 }
 
 int aup_load_config(auparse_state_t *au, struct daemon_conf *config,
-		log_test_t lt)
+		log_test_t lt __attribute__((unused)))
 {
 	int fd, lineno = 1;
 	FILE *f;
 	char buf[160];
 
 	aup_clear_config(config);
-	lt = lt;
 
 	/* open the file */
 	fd = open(CONFIG_FILE, O_RDONLY|O_NOFOLLOW);
@@ -341,7 +340,7 @@ static int eoe_timeout_parser(auparse_state_t *au, const char *val, int line,
 
 	/* check that all chars are numbers */
 	for (i=0; ptr[i]; i++) {
-		if (!isdigit(ptr[i])) {
+		if (!isdigit((unsigned char)ptr[i])) {
 			audit_msg(au, LOG_ERR,
 				"Value %s should only be numbers - line %d",
 				val, line);

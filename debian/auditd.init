@@ -16,7 +16,7 @@
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="audit daemon"
 NAME=auditd
-DAEMON=/sbin/auditd
+DAEMON=/usr/sbin/auditd
 PIDFILE=/var/run/"$NAME".pid
 SCRIPTNAME=/etc/init.d/"$NAME"
 
@@ -46,11 +46,11 @@ do_start()
         # Call augenrules to compile audit rules.
         case "$USE_AUGENRULES" in
                 no|NO) ;;
-                *) [ -d /etc/audit/rules.d ] && /sbin/augenrules >/dev/null ;;
+                *) [ -d /etc/audit/rules.d ] && /usr/sbin/augenrules >/dev/null ;;
         esac
 	if [ -f /etc/audit/audit.rules ]
 	then
-		/sbin/auditctl -R /etc/audit/audit.rules >/dev/null
+		/usr/sbin/auditctl -R /etc/audit/audit.rules >/dev/null
 	fi
 }
 

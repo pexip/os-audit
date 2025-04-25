@@ -1,7 +1,7 @@
 /*
 * ellist.c - Minimal linked list library
-* Copyright (c) 2006-08,2014,2016-17 Red Hat Inc., Durham, North Carolina.
-* All Rights Reserved. 
+* Copyright (c) 2006-08,2014,2016-17,2023 Red Hat Inc.
+* All Rights Reserved.
 *
 * This library is free software; you can redistribute it and/or
 * modify it under the terms of the GNU Lesser General Public
@@ -98,7 +98,7 @@ static char *escape(const char *tmp)
 	return name;
 }
 
-/* This funtion does the heavy duty work of splitting a record into
+/* This function does the heavy duty work of splitting a record into
  * its little tiny pieces */
 static int parse_up_record(rnode* r)
 {
@@ -113,7 +113,7 @@ static int parse_up_record(rnode* r)
 	}
 	r->interp = ptr;
 	// Rather than call strndup, we will do it ourselves to reduce
-	// the number of interations across the record.
+	// the number of interactions across the record.
 	// len includes the string terminator.
 	len = strlen(r->record) + 1;
 	r->nv.record = buf = malloc(len);
@@ -122,6 +122,7 @@ static int parse_up_record(rnode* r)
 	memcpy(r->nv.record, r->record, len);
 	r->nv.end = r->nv.record + len;
 	ptr = audit_strsplit_r(buf, &saved);
+	// If no fields we have fuzzer induced problems, leave
 	if (ptr == NULL) {
 		free(buf);
 		r->nv.record = NULL;
@@ -130,9 +131,10 @@ static int parse_up_record(rnode* r)
 
 	do {	// If there's an '=' sign, its a keeper
 		nvnode n;
+
 		char *val = strchr(ptr, '=');
 		if (val) {
-			int len;
+			int vlen;
 
 			// If name is 'msg=audit' throw it away
 			if (*ptr == 'm' && strncmp(ptr, "msg=", 4) == 0) {
@@ -159,27 +161,27 @@ static int parse_up_record(rnode* r)
 			n.name = ptr;
 			n.val = val;
 			// Remove trailing punctuation
-			len = strlen(n.val);
+			vlen = strlen(n.val);
 			// Check for invalid val
-			if (!len)
+			if (!vlen)
 				continue;
-			if (len && n.val[len-1] == ':') {
-				n.val[len-1] = 0;
-				len--;
+			if (n.val[vlen-1] == ':') {
+				n.val[vlen-1] = 0;
+				vlen--;
 			}
-			if (len && n.val[len-1] == ',') {
-				n.val[len-1] = 0;
-				len--;
+			if (n.val[vlen-1] == ',') {
+				n.val[vlen-1] = 0;
+				vlen--;
 			}
-			if (len && n.val[len-1] == '\'') {
-				n.val[len-1] = 0;
-				len--;
+			if (n.val[vlen-1] == '\'') {
+				n.val[vlen-1] = 0;
+				vlen--;
 			}
-			if (len && n.val[len-1] == ')') {
+			if (n.val[vlen-1] == ')') {
 				if (strcmp(n.val, "(none)") &&
 					strcmp(n.val, "(null)")) {
-					n.val[len-1] = 0;
-					len--;
+					n.val[vlen-1] = 0;
+					vlen--;
 				}
 			}
 			// Make virtual keys or just store it
@@ -245,6 +247,8 @@ static int parse_up_record(rnode* r)
 			else if (r->nv.cnt == (1 + offset) &&
 					strcmp(n.name, "type") == 0) {
 				r->type = audit_name_to_msg_type(n.val);
+				if (r->type == AUDIT_URINGOP)
+					r->machine = MACH_IO_URING;
 				// This has to account for seccomp records
 			} else if ((r->nv.cnt == (2 + offset) ||
 					r->nv.cnt == (11 + offset)) &&
@@ -263,6 +267,12 @@ static int parse_up_record(rnode* r)
 				r->syscall = strtoul(n.val, NULL, 10);
 				if (errno)
 					r->syscall = -1;
+			} else if (r->nv.cnt == (2 + offset) &&
+				   strcmp(n.name, "uring_op") == 0) {
+				errno = 0;
+				r->syscall = strtoul(n.val, NULL, 10);
+				if (errno)
+					r->syscall = -1;
 			} else if (r->nv.cnt == (6 + offset) &&
 					strcmp(n.name, "a0") == 0){
 				errno = 0;
@@ -276,7 +286,8 @@ static int parse_up_record(rnode* r)
 				if (errno)
 					r->a1 = -1LL;
 			} else if (r->type == AUDIT_CWD) {
-				if (strcmp(n.name, "cwd") == 0)
+				// most common fuzzing hit: duplicate cwds
+				if (strcmp(n.name, "cwd") == 0 && !r->cwd)
 					r->cwd = strdup(n.val);
 			}
 		} else if (r->type == AUDIT_AVC || r->type == AUDIT_USER_AVC) {
@@ -291,14 +302,14 @@ static int parse_up_record(rnode* r)
 			} else if (nvlist_get_cnt(&r->nv) == (2 + offset)) {
 				// skip over open brace
 				if (*ptr == '{') {
-					int total = 0, len;
+					int total = 0, clen;
 					char tmpctx[256], *to;
 					tmpctx[0] = 0;
 					to = tmpctx;
 					ptr = audit_strsplit_r(NULL, &saved);
 					while (ptr && *ptr != '}') {
-						len = strlen(ptr);
-						if ((len+1) >= (256-total)) {
+						clen = strlen(ptr);
+						if ((clen+1) >= (256-total)) {
 						   if (nvlist_get_cnt(&r->nv)
 									 == 0)
 								free(buf);
@@ -309,7 +320,7 @@ static int parse_up_record(rnode* r)
 							total++;
 						}
 						to = stpcpy(to, ptr);
-						total += len;
+						total += clen;
 						ptr = audit_strsplit_r(NULL,
 								 &saved);
 					}
@@ -323,6 +334,7 @@ static int parse_up_record(rnode* r)
 				}
 			} else
 				continue;
+
 			n.val = ptr;
 			nvlist_append(&r->nv, &n);
 		}
@@ -334,6 +346,7 @@ static int parse_up_record(rnode* r)
 		r->nv.record = NULL;
 		r->nv.end = NULL;
 		free((void *)r->cwd);
+		r->cwd = NULL;
 	}
 
 	r->nv.cur = 0;	// reset to beginning
@@ -362,7 +375,7 @@ int aup_list_append(event_list_t *l, char *record, int list_idx,
 	r->a1 = 0LL;
 	r->machine = -1;
 	r->syscall = -1;
-	r->item = l->cnt; 
+	r->item = l->cnt;
 	r->list_idx = list_idx;
 	r->line_number = line_number;
 	r->next = NULL;
@@ -382,6 +395,9 @@ int aup_list_append(event_list_t *l, char *record, int list_idx,
 
 	// Then parse the record up into nvlist
 	rc = parse_up_record(r);
+	if (r->nv.cnt == 0) // This is fuzzer induced, return an error.
+		rc = -1;
+
 	if (r->cwd) {
 		// Should never be 2 cwd records unless log is corrupted
 		free((void *)l->cwd);
@@ -445,26 +461,11 @@ int aup_list_set_event(event_list_t* l, au_event_t *e)
 	return 1;
 }
 
-rnode *aup_list_find_rec(event_list_t *l, int i)
-{
-        register rnode* node;
-                                                                                
-       	node = l->head;	/* start at the beginning */
-	while (node) {
-		if (node->type == i) {
-			l->cur = node;
-			return node;
-		} else
-			node = node->next;
-	}
-	return NULL;
-}
-
 rnode *aup_list_goto_rec(event_list_t *l, int i)
 {
         register rnode* node;
-                                                                                
-       	node = l->head;	/* start at the beginning */
+
+	node = l->head;	/* start at the beginning */
 	while (node) {
 		if (node->item == i) {
 			l->cur = node;
@@ -475,25 +476,7 @@ rnode *aup_list_goto_rec(event_list_t *l, int i)
 	return NULL;
 }
 
-rnode *aup_list_find_rec_range(event_list_t *l, int low, int high)
-{
-        register rnode* node;
-
-	if (high <= low)
-		return NULL;
-
-	node = l->head;	/* Start at the beginning */
-	while (node) {
-		if (node->type >= low && node->type <= high) {
-			l->cur = node;
-			return node;
-		} else
-			node = node->next;
-	}
-	return NULL;
-}
-
-int aup_list_first_field(event_list_t *l)
+int aup_list_first_field(const event_list_t *l)
 {
 	if (l && l->cur) {
 		nvlist_first(&l->cur->nv);

@@ -1,5 +1,5 @@
 /* sockleveltab.h --
- * Copyright 2013-15,2018 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2013-15,2018 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Foundation Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335, USA
  *
  * Authors:
  *      Steve Grubb <sgrubb@redhat.com>
@@ -57,3 +57,8 @@ _S(280, "SOL_NFC")
 _S(281, "SOL_KCM")
 _S(282, "SOL_TLS")
 _S(283, "SOL_XDP")
+_S(284, "SOL_MPTCP")
+_S(285, "SOL_MCTP")
+_S(286, "SOL_SMC")
+_S(287, "SOL_VSOCK")
+

@@ -1,6 +1,6 @@
 /*
 * ausearch-nvpair.c - Minimal linked list library for name-value pairs
-* Copyright (c) 2006-08 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2006-08 Red Hat Inc.
 * All Rights Reserved. 
 *
 * This software may be freely redistributed and/or modified under the
@@ -34,17 +34,11 @@ void search_list_create(nvlist *l)
 	l->cnt = 0;
 }
 
-nvnode *search_list_next(nvlist *l)
-{
-	if (l->cur == NULL)
-		return NULL;
-	l->cur = l->cur->next;
-	return l->cur;
-}
-
-void search_list_append(nvlist *l, nvnode *node)
+int search_list_append(nvlist *l, nvnode *node)
 {
 	nvnode* newnode = malloc(sizeof(nvnode));
+	if (newnode == NULL)
+		return 1;
 
 	newnode->name = node->name;
 	newnode->val = node->val;
@@ -62,6 +56,8 @@ void search_list_append(nvlist *l, nvnode *node)
 	// make newnode current
 	l->cur = newnode;
 	l->cnt++;
+
+	return 0;
 }
 
 int search_list_find_val(nvlist *l, long val)

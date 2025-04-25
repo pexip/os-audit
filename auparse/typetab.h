@@ -1,5 +1,5 @@
 /* typetab.h --
- * Copyright 2007-09,2011-12,2014-18 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2007-09,2011-12,2014-18,2023 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -44,6 +44,7 @@ _S(AUPARSE_TYPE_GID,		"igid"		)
 _S(AUPARSE_TYPE_GID,		"inode_gid"	)
 _S(AUPARSE_TYPE_GID,		"new_gid"	)
 _S(AUPARSE_TYPE_SYSCALL,	"syscall"	)
+_S(AUPARSE_TYPE_SYSCALL,	"uring_op"	)
 _S(AUPARSE_TYPE_ARCH,		"arch"		)
 _S(AUPARSE_TYPE_EXIT,		"exit"		)
 _S(AUPARSE_TYPE_ESCAPED,	"path"		)
@@ -144,3 +145,8 @@ _S(AUPARSE_TYPE_ESCAPED,	"sw"		)
 _S(AUPARSE_TYPE_ESCAPED,	"root_dir"	)
 _S(AUPARSE_TYPE_NLMCGRP,	"nl-mcgrp"	)
 _S(AUPARSE_TYPE_RESOLVE,	"resolve"	)
+_S(AUPARSE_TYPE_TRUST,		"subj_trust"	)
+_S(AUPARSE_TYPE_TRUST,		"obj_trust"	)
+_S(AUPARSE_TYPE_FAN_TYPE,	"fan_type"	)
+_S(AUPARSE_TYPE_FAN_INFO,	"fan_info"	)
+_S(AUPARSE_TYPE_ERRNO,		"errno"		)

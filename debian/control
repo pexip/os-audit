@@ -2,7 +2,7 @@ Source: audit
 Priority: optional
 Maintainer: Pexip AS <packaging@pexip.com>
 XSBC-Pexip-Original-Maintainer: Laurent Bigonville <bigon@debian.org>
-Build-Depends: debhelper-compat (= 12),
+Build-Depends: dpkg-dev (>= 1.22.5), debhelper-compat (= 13),
                dh-python <!nopython>,
 #               dh-golang,
                dpkg-dev (>= 1.16.1~),
@@ -16,8 +16,8 @@ Build-Depends: debhelper-compat (= 12),
                python3-all-dev:any <!nopython>,
                libpython3-all-dev <!nopython>,
                swig
-Build-Depends-Indep: golang-go
-Standards-Version: 4.6.2
+Build-Depends-Indep: golang-any
+Standards-Version: 4.7.0
 Section: libs
 Homepage: https://people.redhat.com/sgrubb/audit/
 Vcs-Git: https://salsa.debian.org/debian/audit.git
@@ -31,7 +31,7 @@ Package: auditd
 Section: admin
 Architecture: linux-any
 Depends: libaudit1 (= ${binary:Version}),
-         libauparse0 (= ${binary:Version}),
+         libauparse0t64 (= ${binary:Version}),
          mawk | gawk,
          ${misc:Depends},
          ${shlibs:Depends}
@@ -45,7 +45,10 @@ Description: User space tools for security auditing
  .
  Also contains the audit dispatcher "audisp".
 
-Package: libauparse0
+Package: libauparse0t64
+Provides: ${t64:Provides}
+Replaces: libauparse0
+Breaks: libauparse0 (<< ${source:Version})
 Architecture: linux-any
 Pre-Depends: ${misc:Pre-Depends}
 Depends: libaudit1 (= ${binary:Version}), ${misc:Depends}, ${shlibs:Depends}
@@ -55,14 +58,14 @@ Description: Dynamic library for parsing security auditing
  applications to use the audit framework. It is used to monitor systems for
  security related events.
  .
- This package contains the libauparse0 library.
+ This package contains the libauparse0t64 library.
 
 Package: libauparse-dev
 Section: libdevel
 Architecture: linux-any
-Depends: libauparse0 (= ${binary:Version}), ${misc:Depends}
+Depends: libauparse0t64 (= ${binary:Version}), ${misc:Depends}
 Multi-Arch: same
-Description: Header files and static library for the libauparse0 library
+Description: Header files and static library for the libauparse0t64 library
  The audit-libs parse package contains the dynamic libraries needed for
  applications to use the audit framework. It is used to monitor systems for
  security related events.
@@ -105,7 +108,7 @@ Package: python3-audit
 Section: python
 Architecture: linux-any
 Depends: libaudit1 (= ${binary:Version}),
-         libauparse0 (= ${binary:Version}),
+         libauparse0t64 (= ${binary:Version}),
          ${misc:Depends},
          ${python3:Depends},
          ${shlibs:Depends}
@@ -131,7 +134,7 @@ Package: audispd-plugins
 Section: admin
 Architecture: linux-any
 Depends: auditd (= ${binary:Version}),
-         libauparse0 (= ${binary:Version}),
+         libauparse0t64 (= ${binary:Version}),
          ${misc:Depends},
          ${shlibs:Depends}
 Build-Profiles: <!pkg.audit.noldap>
