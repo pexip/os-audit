@@ -1,6 +1,6 @@
 /*
  * normalize_syscall_map.h
- * Copyright (c) 2016-17,2021 Red Hat Inc.
+ * Copyright (c) 2016-17,2021-24 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -13,9 +13,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program; see the file COPYING. If not, write to the
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
+ * Boston, MA 02110-1335, USA.
  *
  * Authors:
  *   Steve Grubb <sgrubb@redhat.com>
@@ -28,9 +29,11 @@ _S(NORM_FILE_STAT, "faccessat2")
 _S(NORM_FILE_CHPERM, "chmod")
 _S(NORM_FILE_CHPERM, "fchmod")
 _S(NORM_FILE_CHPERM, "fchmodat")
+_S(NORM_FILE_CHPERM, "fchmodat2")
 _S(NORM_FILE_CHOWN, "chown")
 _S(NORM_FILE_CHOWN, "fchown")
 _S(NORM_FILE_CHOWN, "fchownat")
+_S(NORM_FILE_CHOWN, "fchownat2")
 _S(NORM_FILE_CHOWN, "lchown")
 _S(NORM_FILE_LDMOD, "finit_module")
 _S(NORM_FILE_LDMOD, "init_module")
@@ -38,12 +41,15 @@ _S(NORM_FILE_UNLDMOD, "delete_module")
 _S(NORM_FILE_CHATTR, "setxattr")
 _S(NORM_FILE_CHATTR, "fsetxattr")
 _S(NORM_FILE_CHATTR, "lsetxattr")
+_S(NORM_FILE_CHATTR, "mount_setattr")
 _S(NORM_FILE_DIR, "mkdir")
 _S(NORM_FILE_DIR, "mkdirat")
+_S(NORM_FILE_MOUNT, "fsconfig")
+_S(NORM_FILE_MOUNT, "fsmount")
+_S(NORM_FILE_MOUNT, "fsopen")
+_S(NORM_FILE_MOUNT, "fspick")
 _S(NORM_FILE_MOUNT, "mount")
 _S(NORM_FILE_MOUNT, "move_mount")
-_S(NORM_FILE_MOUNT, "fsmount")
-_S(NORM_FILE_MOUNT, "fspick")
 _S(NORM_FILE_STAT, "newfstatat")
 _S(NORM_FILE_STAT, "stat")
 _S(NORM_FILE_STAT, "fstat")
@@ -52,16 +58,20 @@ _S(NORM_FILE_STAT, "stat64")
 _S(NORM_FILE_STAT, "statx")
 _S(NORM_FILE_SYS_STAT, "statfs")
 _S(NORM_FILE_SYS_STAT, "fstatfs")
+_S(NORM_FILE_SYS_STAT, "statmount")
 _S(NORM_FILE, "creat")
 _S(NORM_FILE, "fallocate")
 _S(NORM_FILE, "truncate")
 _S(NORM_FILE, "ftruncate")
 _S(NORM_FILE, "memfd_create")
+_S(NORM_FILE, "memfd_secret")
 _S(NORM_FILE, "open")
 _S(NORM_FILE, "openat")
 _S(NORM_FILE, "openat2")
 _S(NORM_FILE, "readlink")
 _S(NORM_FILE, "readlinkat")
+_S(NORM_FILE, "open_by_handle_at")
+_S(NORM_FILE, "pidfd_getfd")
 _S(NORM_FILE_CHATTR, "removexattr")
 _S(NORM_FILE_CHATTR, "fremovexattr")
 _S(NORM_FILE_CHATTR, "lremovexattr")
@@ -104,6 +114,7 @@ _S(NORM_GID, "setregid")
 _S(NORM_GID, "setresgid")
 _S(NORM_SYSTEM_TIME, "settimeofday")
 _S(NORM_SYSTEM_TIME, "clock_settime")
+_S(NORM_SYSTEM_TIME, "clock_settime64")
 _S(NORM_SYSTEM_TIME, "stime")
 _S(NORM_SYSTEM_TIME, "adjtimex")
 _S(NORM_MAKE_DEV, "mknod")
@@ -112,7 +123,13 @@ _S(NORM_SYSTEM_NAME, "sethostname")
 _S(NORM_SYSTEM_NAME, "setdomainname")
 _S(NORM_SYSTEM_MEMORY, "mmap")
 _S(NORM_SYSTEM_MEMORY, "brk")
+_S(NORM_SYSTEM_MEMORY, "map_shadow_stack")
 _S(NORM_SCHEDULER, "sched_setparam")
 _S(NORM_SCHEDULER, "sched_setscheduler")
 _S(NORM_SCHEDULER, "sched_setattr")
+_S(NORM_SECURITY_POLICY, "landlock_create_ruleset")
+_S(NORM_SECURITY_POLICY, "landlock_add_rule")
+_S(NORM_SECURITY_POLICY, "landlock_restrict_self")
+_S(NORM_SECURITY_POLICY, "lsm_set_self_attr")
+_S(NORM_SECURITY_POLICY, "mseal")
 

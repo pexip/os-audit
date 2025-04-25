@@ -1,5 +1,5 @@
 /* auparse.c --
- * Copyright 2006-08,2012-19,21 Red Hat Inc.
+ * Copyright 2006-08,2012-23 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -12,9 +12,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * You should have received a copy of the GNU General Public License
+ * along with this program; see the file COPYING. If not, write to the
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
+ * Boston, MA 02110-1335, USA.
  *
  * Authors:
  *      Steve Grubb <sgrubb@redhat.com>
@@ -31,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <stdio_ext.h>
 #include <limits.h>
 #include "common.h"
@@ -61,6 +63,20 @@ static char *strnchr(const char *s, int c, size_t n)
     return p_char;
 }
 
+static int access_ok(const char *filename)
+{
+	int rc = access(filename, R_OK);
+	if (rc == 0)
+		return rc;
+#ifdef HAVE_FACCESSAT
+	// If we have faccessat, let's try effective ids.
+	return faccessat(AT_FDCWD, filename, R_OK, AT_EACCESS);
+#else
+	// If we don't, return what we have from access()
+	return rc;
+#endif
+}
+
 static int setup_log_file_array(auparse_state_t *au)
 {
         struct daemon_conf config;
@@ -83,7 +99,7 @@ static int setup_log_file_array(auparse_state_t *au)
 	/* Find oldest log file */
 	snprintf(filename, len, "%s", config.log_file);
 	do {
-		if (access(filename, R_OK) != 0)
+		if (access_ok(filename) != 0)
 			break;
 		num++;
 		snprintf(filename, len, "%s.%d", config.log_file, num);
@@ -97,6 +113,12 @@ static int setup_log_file_array(auparse_state_t *au)
 	}
 	num--;
 	tmp = malloc((num+2)*sizeof(char *));
+	if (!tmp) {
+		fprintf(stderr, "Out of memory. Check %s file, %d line", __FILE__, __LINE__);
+		aup_free_config(&config);
+		free(filename);
+		return 1;
+	}
 
         /* Got it, now process logs from last to first */
 	if (num > 0)
@@ -294,14 +316,7 @@ static void au_check_events(auparse_state_t *au, time_t sec)
                         if (cur->l->e.sec + eoe_timeout <= sec) {
                                 cur->status = EBS_COMPLETE;
 				au->au_ready++;
-                        } else if ( // FIXME: Check this v remains true
-				r->type == AUDIT_PROCTITLE ||
-				r->type == AUDIT_EOE ||
-				r->type < AUDIT_FIRST_EVENT ||
-				r->type >= AUDIT_FIRST_ANOM_MSG ||
-				r->type == AUDIT_KERNEL ||
-				(r->type >= AUDIT_MAC_UNLBL_ALLOW &&
-                                 r->type <= AUDIT_MAC_CALIPSO_DEL)) {
+                        } else if (audit_is_last_record(r->type)) {
                                 // If known to be 1 record event, we are done
 				cur->status = EBS_COMPLETE;
 				au->au_ready++;
@@ -477,9 +492,11 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 		case AUSOURCE_FILE:
 			if (b == NULL)
 				goto bad_exit;
-			if (access(b, R_OK))
+			if (access_ok(b))
 				goto bad_exit;
 			tmp = malloc(2*sizeof(char *));
+			if (tmp == NULL)
+				goto bad_exit;
 			tmp[0] = strdup(b);
 			tmp[1] = NULL;
 			au->source_list = tmp;
@@ -489,7 +506,7 @@ auparse_state_t *auparse_init(ausource_t source, const void *b)
 				goto bad_exit;
 			n = 0;
 			while (bb[n]) {
-				if (access(bb[n], R_OK))
+				if (access_ok(bb[n]))
 					goto bad_exit;
 				n++;
 			}
@@ -657,7 +674,7 @@ int auparse_flush_feed(auparse_state_t *au)
 
 // If there is any data in the state machine, return 1.
 // Otherwise return 0 to indicate its empty
-int auparse_feed_has_data(auparse_state_t *au)
+int auparse_feed_has_data(const auparse_state_t *au)
 {
 	if (!au)
 		return 0;
@@ -769,6 +786,25 @@ int auparse_reset(auparse_state_t *au)
 	return 0;
 }
 
+char *auparse_metrics(const auparse_state_t *au)
+{
+	char *metrics;
+	unsigned int uid, gid;
+
+	aulookup_metrics(&uid, &gid);
+
+	if (asprintf(&metrics,
+		     "max lol available: %lu\n"
+		     "max lol used: %d\n"
+		     "pending lol: %d\n"
+		     "uid cache size: %u\n"
+		     "gid cache size: %u",
+		     au->au_lo->limit,
+		     au->au_lo->maxi,
+		     au->au_ready, uid, gid) < 0)
+		metrics = NULL;
+	return metrics;
+}
 
 /* Add EXPR to AU, using HOW to select the combining operator.
    On success, return 0.
@@ -1012,7 +1048,7 @@ static void auparse_destroy_common(auparse_state_t *au)
 
 void auparse_destroy(auparse_state_t *au)
 {
-	lookup_destroy_uid_list();
+	aulookup_destroy_uid_list();
 	aulookup_destroy_gid_list();
 
 	auparse_destroy_common(au);
@@ -1172,13 +1208,14 @@ static int str2event(char *s, au_event_t *e)
 }
 
 #ifndef HAVE_STRNDUPA
-static inline char *strndupa(const char *old, size_t n)
-{
-	size_t len = strnlen(old, n);
-	char *tmp = alloca(len + 1);
-	tmp[len] = 0;
-	return memcpy(tmp, old, len);
-}
+#define strndupa(s, n)								\
+	({												\
+		const char *__old = (s);					\
+		size_t __len = strnlen (__old, (n));		\
+		char *__new = (char *) alloca(__len + 1);	\
+		__new[__len] = '\0';						\
+		(char *) memcpy (__new, __old, __len);		\
+	})
 #endif
 
 /* Returns 0 on success and 1 on error */
@@ -1229,7 +1266,7 @@ static int extract_timestamp(const char *b, au_event_t *e)
 	return rc;
 }
 
-static int events_are_equal(au_event_t *e1, au_event_t *e2)
+static int events_are_equal(const au_event_t *e1, const au_event_t *e2)
 {
 	// Check time & serial first since its most likely way
 	// to spot 2 different events
@@ -1355,7 +1392,7 @@ static int retrieve_next_line(auparse_state_t *au)
 /*******
 * Functions that traverse events.
 ********/
-static int ausearch_reposition_cursors(auparse_state_t *au)
+static int ausearch_reposition_cursors(const auparse_state_t *au)
 {
 	int rc = 0;
 
@@ -1391,6 +1428,30 @@ static int ausearch_compare(auparse_state_t *au)
 	if (r) {
 		int res = expr_eval(au, r, au->expr);
 		return res;
+	}
+
+	return 0;
+}
+
+// Returns < 0 on error, 0 no data, > 0 success
+int ausearch_cur_event(auparse_state_t* au) {
+	int rc, records;
+
+	if (au->expr == NULL) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	records = auparse_get_num_records(au);
+	for (int i = 0; i < records; i++) {
+		if (auparse_goto_record_num(au, i) != 1)
+			return -1;
+
+		if ((rc = ausearch_compare(au)) > 0) {
+			ausearch_reposition_cursors(au);
+			return 1;
+		} else if (rc < 0)
+			return rc;
 	}
 
 	return 0;
@@ -1630,6 +1691,9 @@ static int au_auparse_next_event(auparse_state_t *au)
 		}
 		if (au_lol_append(au->au_lo, l) == NULL) {
 			free((char *)e.host);
+			au->cur_buf = NULL;
+			aup_list_clear(l);
+			free(l);
 #ifdef	LOL_EVENTS_DEBUG01
 			if (debug) printf("error appending to lol\n");
 #endif	/* LOL_EVENTS_DEBUG01 */
@@ -1663,7 +1727,7 @@ int auparse_next_event(auparse_state_t *au)
 }
 
 /* Accessors to event data */
-const au_event_t *auparse_get_timestamp(auparse_state_t *au)
+const au_event_t *auparse_get_timestamp(const auparse_state_t *au)
 {
 	if (au && au->le && au->le->e.sec != 0)
 		return &au->le->e;
@@ -1672,7 +1736,7 @@ const au_event_t *auparse_get_timestamp(auparse_state_t *au)
 }
 
 
-time_t auparse_get_time(auparse_state_t *au)
+time_t auparse_get_time(const auparse_state_t *au)
 {
 	if (au && au->le)
 		return au->le->e.sec;
@@ -1681,7 +1745,7 @@ time_t auparse_get_time(auparse_state_t *au)
 }
 
 
-unsigned int auparse_get_milli(auparse_state_t *au)
+unsigned int auparse_get_milli(const auparse_state_t *au)
 {
 	if (au && au->le)
 		return au->le->e.milli;
@@ -1690,7 +1754,7 @@ unsigned int auparse_get_milli(auparse_state_t *au)
 }
 
 
-unsigned long auparse_get_serial(auparse_state_t *au)
+unsigned long auparse_get_serial(const auparse_state_t *au)
 {
 	if (au && au->le)
 		return au->le->e.serial;
@@ -1700,7 +1764,7 @@ unsigned long auparse_get_serial(auparse_state_t *au)
 
 
 // Gets the machine node name
-const char *auparse_get_node(auparse_state_t *au)
+const char *auparse_get_node(const auparse_state_t *au)
 {
 	if (au && au->le && au->le->e.host != NULL)
 		return strdup(au->le->e.host);
@@ -1709,7 +1773,7 @@ const char *auparse_get_node(auparse_state_t *au)
 }
 
 
-int auparse_node_compare(au_event_t *e1, au_event_t *e2)
+int auparse_node_compare(const au_event_t *e1, const au_event_t *e2)
 {
 	// If both have a host, only a string compare can tell if they
 	// are the same. Otherwise, if only one of them have a host, they
@@ -1725,7 +1789,7 @@ int auparse_node_compare(au_event_t *e1, au_event_t *e2)
 }
 
 
-int auparse_timestamp_compare(au_event_t *e1, au_event_t *e2)
+int auparse_timestamp_compare(const au_event_t *e1, const au_event_t *e2)
 {
 	if (e1->sec > e2->sec)
 		return 1;
@@ -1745,13 +1809,13 @@ int auparse_timestamp_compare(au_event_t *e1, au_event_t *e2)
 	return 0;
 }
 
-unsigned int auparse_get_num_records(auparse_state_t *au)
+unsigned int auparse_get_num_records(const auparse_state_t *au)
 {
 	// Its OK if au->le == NULL because get_cnt handles it
 	return aup_list_get_cnt(au->le);
 }
 
-unsigned int auparse_get_record_num(auparse_state_t *au)
+unsigned int auparse_get_record_num(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return 0;
@@ -1819,7 +1883,7 @@ int auparse_next_record(auparse_state_t *au)
 }
 
 
-int auparse_goto_record_num(auparse_state_t *au, unsigned int num)
+int auparse_goto_record_num(const auparse_state_t *au, unsigned int num)
 {
 	rnode *r;
 
@@ -1849,7 +1913,7 @@ int auparse_goto_record_num(auparse_state_t *au, unsigned int num)
 
 
 /* Accessors to record data */
-int auparse_get_type(auparse_state_t *au)
+int auparse_get_type(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return 0;
@@ -1862,7 +1926,7 @@ int auparse_get_type(auparse_state_t *au)
 }
 
 
-const char *auparse_get_type_name(auparse_state_t *au)
+const char *auparse_get_type_name(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return NULL;
@@ -1875,7 +1939,7 @@ const char *auparse_get_type_name(auparse_state_t *au)
 }
 
 
-unsigned int auparse_get_line_number(auparse_state_t *au)
+unsigned int auparse_get_line_number(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return 0;
@@ -1888,7 +1952,7 @@ unsigned int auparse_get_line_number(auparse_state_t *au)
 }
 
 
-const char *auparse_get_filename(auparse_state_t *au)
+const char *auparse_get_filename(const auparse_state_t *au)
 {
 	switch (au->source)
 	{
@@ -1912,7 +1976,7 @@ const char *auparse_get_filename(auparse_state_t *au)
 }
 
 
-int auparse_first_field(auparse_state_t *au)
+int auparse_first_field(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return 0;
@@ -1921,7 +1985,7 @@ int auparse_first_field(auparse_state_t *au)
 }
 
 
-int auparse_next_field(auparse_state_t *au)
+int auparse_next_field(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return 0;
@@ -1937,7 +2001,7 @@ int auparse_next_field(auparse_state_t *au)
 }
 
 
-unsigned int auparse_get_num_fields(auparse_state_t *au)
+unsigned int auparse_get_num_fields(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return 0;
@@ -1949,7 +2013,7 @@ unsigned int auparse_get_num_fields(auparse_state_t *au)
 		return 0;
 }
 
-const char *auparse_get_record_text(auparse_state_t *au)
+const char *auparse_get_record_text(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return NULL;
@@ -1961,7 +2025,7 @@ const char *auparse_get_record_text(auparse_state_t *au)
 		return NULL;
 }
 
-const char *auparse_get_record_interpretations(auparse_state_t *au)
+const char *auparse_get_record_interpretations(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return NULL;
@@ -2001,7 +2065,7 @@ const char *auparse_find_field(auparse_state_t *au, const char *name)
 }
 
 /* Increment 1 location and then scan for next field */
-const char *auparse_find_field_next(auparse_state_t *au)
+const char *auparse_find_field_next(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return NULL;
@@ -2035,7 +2099,7 @@ const char *auparse_find_field_next(auparse_state_t *au)
 
 
 /* Accessors to field data */
-unsigned int auparse_get_field_num(auparse_state_t *au)
+unsigned int auparse_get_field_num(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return 0;
@@ -2049,7 +2113,7 @@ unsigned int auparse_get_field_num(auparse_state_t *au)
 	return 0;
 }
 
-int auparse_goto_field_num(auparse_state_t *au, unsigned int num)
+int auparse_goto_field_num(const auparse_state_t *au, unsigned int num)
 {
 	if (au->le == NULL)
 		return 0;
@@ -2065,7 +2129,7 @@ int auparse_goto_field_num(auparse_state_t *au, unsigned int num)
 	return 0;
 }
 
-const char *auparse_get_field_name(auparse_state_t *au)
+const char *auparse_get_field_name(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return NULL;
@@ -2079,7 +2143,7 @@ const char *auparse_get_field_name(auparse_state_t *au)
 }
 
 
-const char *auparse_get_field_str(auparse_state_t *au)
+const char *auparse_get_field_str(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return NULL;
@@ -2092,7 +2156,7 @@ const char *auparse_get_field_str(auparse_state_t *au)
 	return NULL;
 }
 
-int auparse_get_field_type(auparse_state_t *au)
+int auparse_get_field_type(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return AUPARSE_TYPE_UNCLASSIFIED;
@@ -2105,7 +2169,7 @@ int auparse_get_field_type(auparse_state_t *au)
 	return AUPARSE_TYPE_UNCLASSIFIED;
 }
 
-int auparse_get_field_int(auparse_state_t *au)
+int auparse_get_field_int(const auparse_state_t *au)
 {
 	const char *v = auparse_get_field_str(au);
 	if (v) {
@@ -2136,7 +2200,7 @@ const char *auparse_interpret_field(auparse_state_t *au)
 }
 
 
-const char *auparse_interpret_realpath(auparse_state_t *au)
+const char *auparse_interpret_realpath(const auparse_state_t *au)
 {
 	if (au->le == NULL)
 		return NULL;

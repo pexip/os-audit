@@ -1,5 +1,5 @@
 /* ipctab.h --
- * Copyright 2007,2012-13 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2007,2012-13 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -34,4 +34,5 @@ _S(SHMAT,	"shmat"		)
 _S(SHMDT,	"shmdt"		)
 _S(SHMGET,	"shmget"	)
 _S(SHMCTL,	"shmctl"	)
+_S(DIPC,	"dipc"		)
 

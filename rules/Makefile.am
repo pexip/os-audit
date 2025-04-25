@@ -27,7 +27,7 @@ EXTRA_DIST = 10-base-config.rules 10-no-audit.rules 11-loginuid.rules \
 12-ignore-error.rules  12-cont-fail.rules \
 20-dont-audit.rules 21-no32bit.rules 22-ignore-chrony.rules \
 23-ignore-filesystems.rules \
-30-nispom.rules 30-stig.rules 30-pci-dss-v31.rules 30-ospp-v42.rules \
+30-stig.rules 30-pci-dss-v31.rules 30-ospp-v42.rules \
 30-ospp-v42-1-create-failed.rules 30-ospp-v42-1-create-success.rules \
 30-ospp-v42-2-modify-failed.rules 30-ospp-v42-2-modify-success.rules \
 30-ospp-v42-3-access-failed.rules 30-ospp-v42-3-access-success.rules \
@@ -42,6 +42,6 @@ EXTRA_DIST = 10-base-config.rules 10-no-audit.rules 11-loginuid.rules \
 70-einval.rules 71-networking.rules \
 99-finalize.rules README-rules
 
-rulesdir = $(datadir)/audit/sample-rules
+rulesdir = $(datadir)/audit-rules
 dist_rules_DATA = $(EXTRA_DIST)
 

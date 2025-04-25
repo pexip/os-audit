@@ -62,7 +62,7 @@ static int get_next_event(llist **);
 
 extern const char *checkpt_filename;	/* checkpoint file name */
 extern int checkpt_timeonly;	/* use timestamp from within checkpoint file */
-static int have_chkpt_data = 0;		/* have checkpt need to compare wit */
+static int have_chkpt_data = 0;		/* have checkpt need to compare with */
 extern char *user_file;
 extern int force_logs;
 static int userfile_is_dir = 0;
@@ -109,9 +109,20 @@ int main(int argc, char *argv[])
 	(void) umask( umask( 077 ) | 027 );
 
 	/* Load config so we know where logs are and eoe_timeout */
-	if (load_config(&config, TEST_SEARCH))
-	        fprintf(stderr, "NOTE - using built-in logs: %s\n",
+	if (load_config(&config, TEST_SEARCH)) {
+
+		/* Config was not loaded successfully,
+		 * so we are using the default config values
+		 */
+		fprintf(stderr, "NOTE - using built-in end_of_event_timeout: %lu\n",
+			config.end_of_event_timeout);
+
+		/* Using built-in logs when --input was not given */
+		if (user_file == NULL) {
+			fprintf(stderr, "NOTE - using built-in logs: %s\n",
 				config.log_file);
+		}
+	}
 
 	/* Set timeout from the config file */
 	lol_set_eoe_timeout((time_t)config.end_of_event_timeout);
@@ -181,7 +192,7 @@ int main(int argc, char *argv[])
 
 	/* Generate a checkpoint if required */
 	if (checkpt_filename) {
-		/* Providing haven't failed and have sucessfully read data
+		/* Providing haven't failed and have successfully read data
 		 *  records, save a checkpoint */
 		if (!checkpt_failure && (rc == 0))
 			save_ChkPt(checkpt_filename);
@@ -472,10 +483,10 @@ static int process_log_fd(void)
 				output_event(entries);
 			} else if (do_output == 3) {
 				fprintf(stderr,
-			"Corrupted checkpoint file. Inode match, but newer complete event (%lu.%03u:%lu) found before loaded checkpoint %lu.%03u:%lu\n",
-					entries->e.sec, entries->e.milli,
-					entries->e.serial,
-					chkpt_input_levent.sec,
+			"Corrupted checkpoint file. Inode match, but newer complete event (%lld.%03u:%lu) found before loaded checkpoint %lld.%03u:%lu\n",
+					(long long int)entries->e.sec,
+					entries->e.milli, entries->e.serial,
+					(long long int)chkpt_input_levent.sec,
 					chkpt_input_levent.milli,
 					chkpt_input_levent.serial);
 				checkpt_failure |= CP_CORRUPTED;
@@ -599,19 +610,21 @@ static int get_next_event(llist **l)
 			 * If we get an EINTR error or we are at EOF, we check
 			 * to see if we have any events to print and return
 			 * appropriately. If we are the last file being
-			 * processed, we mark all incomplete events as
-			 * complete so they will be printed.
+			 * processed, and we are not checkpointing, we mark all incomplete
+			 * events as complete so they will be printed. If we are checkpointing
+			 * we do an exhaustive validation to see if there are complete events still
 			 */
 			if ((ferror_unlocked(log_fd) &&
 			     errno == EINTR) || feof_unlocked(log_fd)) {
 				/*
-				 * Only mark all events as L_COMPLETE if we are
+				 * Only attempt to mark all events as L_COMPLETE if we are
 				 * the last file being processed.
-				 * We DO NOT do this if we are checkpointing.
 				 */
 				if (files_to_process == 0) {
 					if (!checkpt_filename)
-					terminate_all_events(&lo);
+					 	terminate_all_events(&lo);	// terminate as we are not checkpointing
+					else
+					 	complete_all_events(&lo);	// exhaustively check if we can complete events
 				}
 				*l = get_ready_event(&lo);
 				if (*l)

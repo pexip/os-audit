@@ -1,5 +1,5 @@
 /* auditd-listen.c -- 
- * Copyright 2008,2009,2011,2016,2018 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2008,2009,2011,2016,2018 Red Hat Inc.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -55,7 +55,6 @@
 
 #include "ev.h"
 
-extern volatile int stop;
 extern int send_audit_event(int type, const char *str);
 #define DEFAULT_BUF_SZ  192
 
@@ -91,7 +90,7 @@ static char *my_service_name, *my_gss_realm;
 #define USE_GSS (transport == T_KRB5)
 #endif
 
-static char *sockaddr_to_string(struct sockaddr_storage *addr)
+static char *sockaddr_to_string(const struct sockaddr_storage *addr)
 {
 	static char buf[INET6_ADDRSTRLEN];
 
@@ -103,7 +102,7 @@ static char *sockaddr_to_string(struct sockaddr_storage *addr)
 	return buf;
 }
 
-static unsigned int sockaddr_to_port(struct sockaddr_storage *addr)
+static unsigned int sockaddr_to_port(const struct sockaddr_storage *addr)
 {
 	unsigned int rc;
 
@@ -329,7 +328,7 @@ static void gss_failure(const char *msg, int major_status, int minor_status)
 		return -1; }
 
 /* These are our private credentials, which come from a key file on
-   our server.  They are aquired once, at program start.  */
+   our server.  They are acquired once, at program start.  */
 static krb5_context kcontext = NULL;
 static int server_acquire_creds(const char *service_name,
 		gss_cred_id_t *lserver_creds)
@@ -358,6 +357,7 @@ static int server_acquire_creds(const char *service_name,
 	if (major_status != GSS_S_COMPLETE) {
 		gss_failure("acquiring credentials",
 				major_status, minor_status);
+		(void) gss_release_name(&minor_status, &server_name);
 		return -1;
 	}
 
@@ -443,8 +443,8 @@ static int negotiate_credentials(ev_tcp *io)
 				gss_release_name(&min_stat, &client);
 				return -1;
 			}
-			gss_release_buffer(&min_stat, &send_tok);
 		}
+		gss_release_buffer(&min_stat, &send_tok);
 	} while (maj_stat == GSS_S_CONTINUE_NEEDED);
 
 	maj_stat = gss_display_name(&min_stat, client, &recv_tok, NULL);
@@ -506,7 +506,7 @@ static void client_ack(void *ack_data, const unsigned char *header,
 	if (USE_GSS) {
 		OM_uint32 major_status, minor_status;
 		gss_buffer_desc utok, etok;
-		int rc, mlen;
+		int mlen;
 
 		mlen = strlen(msg);
 		utok.length = AUDIT_RMW_HEADER_SIZE + mlen;
@@ -532,8 +532,8 @@ static void client_ack(void *ack_data, const unsigned char *header,
 			free(utok.value);
 			return;
 		}
-		// FIXME: What were we going to do with rc?
-		rc = send_token(io->io.fd, &etok);
+		// FIXME: Should we check the return code of this?
+		send_token(io->io.fd, &etok);
 		free(utok.value);
 		(void) gss_release_buffer(&minor_status, &etok);
 
@@ -764,7 +764,7 @@ static int auditd_tcpd_check(int sock)
  * a 1 if there are too many and a 0 otherwise. It assumes the incoming
  * connection has not been added to the linked list yet.
  */
-static int check_num_connections(struct sockaddr_storage *aaddr)
+static int check_num_connections(const struct sockaddr_storage *aaddr)
 {
 	int num = 0;
 	struct ev_tcp *client = client_chain;
@@ -1168,7 +1168,7 @@ void auditd_tcp_listen_uninit(struct ev_loop *loop, struct daemon_conf *config)
 	transport = T_TCP;
 }
 
-static void periodic_reconfigure(struct daemon_conf *config)
+static void periodic_reconfigure(const struct daemon_conf *config)
 {
 	struct ev_loop *loop = ev_default_loop(EVFLAG_AUTO);
 	if (config->tcp_listen_port && config->tcp_client_max_idle) {
@@ -1180,7 +1180,7 @@ static void periodic_reconfigure(struct daemon_conf *config)
 	}
 }
 
-void auditd_tcp_listen_reconfigure(struct daemon_conf *nconf,
+void auditd_tcp_listen_reconfigure(const struct daemon_conf *nconf,
 				     struct daemon_conf *oconf)
 {
 	use_libwrap = nconf->use_libwrap;

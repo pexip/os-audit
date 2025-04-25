@@ -25,17 +25,20 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <syslog.h>
+#ifdef HAVE_ATOMIC
+#include <stdatomic.h>
+#endif
 #include "queue.h"
 
 static volatile event_t **q;
 static pthread_mutex_t queue_lock;
 static pthread_cond_t queue_nonempty;
-static unsigned int q_next, q_last, q_depth, processing_suspended;
-static unsigned int currently_used, max_used, overflowed;
+static unsigned int q_next, q_last, q_depth, processing_suspended, overflowed;
+static ATOMIC_UNSIGNED currently_used, max_used;
 static const char *SINGLE = "1";
 static const char *HALT = "0";
 static int queue_full_warning = 0;
-extern volatile int disp_hup;
+extern volatile ATOMIC_INT disp_hup;
 #define QUEUE_FULL_LIMIT 5
 
 void reset_suspended(void)
@@ -229,6 +232,11 @@ void increase_queue_depth(unsigned int size)
 		void *tmp_q;
 
 		tmp_q = realloc(q, size * sizeof(event_t *));
+		if (tmp_q == NULL) {
+			fprintf(stderr, "Out of Memory. Check %s file, %d line", __FILE__, __LINE__);
+			pthread_mutex_unlock(&queue_lock);
+			return;
+		}
 		q = tmp_q;
 		for (i=q_depth; i<size; i++)
 			q[i] = NULL;

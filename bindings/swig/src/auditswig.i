@@ -1,6 +1,6 @@
 /* Author: Dan Walsh
  *
- * Copyright (C) 2005,2006,2009 Red Hat
+ * Copyright (C) 2005,2006,2009,2023 Red Hat
  * 
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -20,7 +20,13 @@
 
 %module audit
 %{
-        #include "../lib/libaudit.h"
+        #include "../lib/audit_logging.h"
+// Have to declare these so they can be wrapped later
+extern int audit_elf_to_machine(unsigned int elf);
+extern const char *audit_machine_to_name(int machine);
+extern const char *audit_syscall_to_name(int sc, int machine);
+extern int audit_detect_machine(void);
+extern const char *audit_msg_type_to_name(int msg_type);
 %}
 
 #if defined(SWIGPYTHON)
@@ -39,8 +45,22 @@ signed
 #define __attribute(X) /*nothing*/
 typedef unsigned __u32;
 typedef unsigned uid_t;
+/* Sidestep SWIG's limitation of handling c99 Flexible arrays by not:
+ * generating setters against them: https://github.com/swig/swig/issues/1699
+ */
+%ignore audit_rule_data::buf;
+
 %include "/usr/include/linux/audit.h"
 #define __extension__ /*nothing*/
 %include <stdint.i>
-%include "../lib/libaudit.h"
+%include "../lib/audit-records.h"
+%include "../lib/audit_logging.h"
 
+/*
+ * These are provided especially for setroubleshooter support
+ */
+int audit_elf_to_machine(unsigned int elf);
+const char *audit_machine_to_name(int machine);
+const char *audit_syscall_to_name(int sc, int machine);
+int audit_detect_machine(void);
+const char *audit_msg_type_to_name(int msg_type);

@@ -92,6 +92,7 @@ int extract_search_items(llist *l)
 		do {
 			switch (n->type) {
 			case AUDIT_SYSCALL:
+			case AUDIT_URINGOP:
 				ret = parse_syscall(n, s);
 				break;
 			case AUDIT_CWD:
@@ -147,6 +148,7 @@ int extract_search_items(llist *l)
 				break;
 			case AUDIT_FEATURE_CHANGE:
 			case AUDIT_ANOM_LINK:
+			case AUDIT_DM_CTRL:
 				ret = parse_task_info(n, s);
 				break;
 			case AUDIT_SECCOMP:
@@ -176,6 +178,7 @@ int extract_search_items(llist *l)
 			case AUDIT_PROCTITLE:
 			case AUDIT_REPLACE...AUDIT_BPF:
 			case AUDIT_OPENAT2:
+			case AUDIT_DM_EVENT:
 				// Nothing to parse
 				break;
 			case AUDIT_NETFILTER_CFG:
@@ -508,7 +511,8 @@ static int parse_syscall(lnode *n, search_items *s)
 	int ret;
 
 	term = n->message;
-	if (report_format > RPT_DEFAULT || event_machine != -1) {
+	if ((report_format > RPT_DEFAULT || event_machine != -1) &&
+	    n->type == AUDIT_SYSCALL) {
 		// get arch
 		str = strstr(term, "arch=");
 		if (str == NULL) 
@@ -525,7 +529,13 @@ static int parse_syscall(lnode *n, search_items *s)
 		*term = ' ';
 	} 
 	// get syscall
-	str = strstr(term, "syscall=");
+	if (n->type == AUDIT_SYSCALL)
+		str = strstr(term, "syscall=");
+	else if (n->type == AUDIT_URINGOP) { // or uring_op
+		str = strstr(term, "uring_op=");
+		s->arch = MACH_IO_URING;
+	} else
+		str = NULL; // unimplemented type
 	if (str == NULL)
 		return 4;
 	ptr = str + 8;
@@ -571,36 +581,38 @@ static int parse_syscall(lnode *n, search_items *s)
 		s->exit_is_set = 1;
 		*term = ' ';
 	}
-	// get a0
-	str = strstr(term, "a0=");
-	if (str == NULL)
-		return 11;
-	ptr = str + 3;
-	term = strchr(ptr, ' ');
-	if (term == NULL)
-		return 12;
-	*term = 0;
-	errno = 0;
-	// 64 bit dump on 32 bit machine looks bad here - need long long
-	n->a0 = strtoull(ptr, NULL, 16); // Hex
-	if (errno)
-		return 13;
-	*term = ' ';
-	// get a1
-	str = strstr(term, "a1=");
-	if (str == NULL)
-		return 11;
-	ptr = str + 3;
-	term = strchr(ptr, ' ');
-	if (term == NULL)
-		return 12;
-	*term = 0;
-	errno = 0;
-	// 64 bit dump on 32 bit machine looks bad here - need long long
-	n->a1 = strtoull(ptr, NULL, 16); // Hex
-	if (errno)
-		return 13;
-	*term = ' ';
+	if (n->type == AUDIT_SYSCALL) {
+		// get a0
+		str = strstr(term, "a0=");
+		if (str == NULL)
+			return 11;
+		ptr = str + 3;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 12;
+		*term = 0;
+		errno = 0;
+		// 64 bit dump on 32 bit machine looks bad here - need long long
+		n->a0 = strtoull(ptr, NULL, 16); // Hex
+		if (errno)
+			return 13;
+		*term = ' ';
+		// get a1
+		str = strstr(term, "a1=");
+		if (str == NULL)
+			return 11;
+		ptr = str + 3;
+		term = strchr(ptr, ' ');
+		if (term == NULL)
+			return 12;
+		*term = 0;
+		errno = 0;
+		// 64 bit dump on 32 bit machine looks bad here - need long long
+		n->a1 = strtoull(ptr, NULL, 16); // Hex
+		if (errno)
+			return 13;
+		*term = ' ';
+	}
 
 	ret = parse_task_info(n, s);
 	if (ret)
@@ -707,6 +719,10 @@ static int common_path_parser(search_items *s, char *path)
 			// append
 			snode sn;
 			sn.str = strdup(path);
+			if (sn.str == NULL) {
+				fprintf(stderr, "Out of memory. Check %s file, %d line\n", __FILE__, __LINE__);
+				return 8;
+			}
 			sn.key = NULL;
 			sn.hits = 1;
 			// Attempt to rebuild path if relative
@@ -753,9 +769,11 @@ static int common_path_parser(search_items *s, char *path)
 			if ((sn.str[0] == '.') && ((sn.str[1] == '.') ||
 				(sn.str[1] == '/')) && s->cwd) {
 				char *tmp = malloc(PATH_MAX);
-				if (tmp == NULL)
+				if (tmp == NULL) {
+					free(sn.str);
 					return 6;
-				snprintf(tmp, PATH_MAX, "%s/%s", 
+				}
+				snprintf(tmp, PATH_MAX, "%s/%s",
 					s->cwd, sn.str);
 				free(sn.str);
 				sn.str = tmp;
@@ -1116,7 +1134,7 @@ try_again:
 				return 25;
 			ptr = str + 4;
 			term = ptr;
-			while (isdigit(*term))
+			while (isdigit((unsigned char)*term))
 				term++;
 			if (term == ptr)
 				return 14;
@@ -1164,7 +1182,8 @@ skip:
 			saved = *term;
 			*term = 0;
 			ptr++;
-			s->acct = strdup(ptr);
+			if (!s->acct) //fuzzer induced duplicate
+				s->acct = strdup(ptr);
 			*term = saved;
 		} else { 
 			/* Handle legacy accts */
@@ -1204,6 +1223,10 @@ skip:
 			saved = *term;
 			*term = 0;
 			s->hostname = strdup(str);
+			if (s->hostname == NULL) {
+				fprintf(stderr, "Out of memory. Check %s file, %d line\n", __FILE__, __LINE__);
+				return 33;
+			}
 			*term = saved;
 
 			// Lets see if there is something more
@@ -1693,20 +1716,22 @@ static int parse_sockaddr(const lnode *n, search_items *s)
 				}
 				len = sizeof(struct sockaddr_in6);
 			} else if (saddr->sa_family == AF_UNIX) {
-				if (len < 4) {
-					fprintf(stderr,
-						"sun_path len too short\n");
-					return 3;
-				}
 				struct sockaddr_un *un =
 					(struct sockaddr_un *)saddr;
+				if (len != sizeof(saddr->sa_family) &&
+				    len < 4) {
+					fprintf(stderr,
+						"sun_path len too short (%u)\n",
+						len);
+					return 4;
+				}
 				if (event_filename) {
 					if (!s->filename) {
 						//create
 						s->filename =
 							malloc(sizeof(slist));
 						if (s->filename == NULL)
-							return 4;
+							return 5;
 						slist_create(s->filename);
 					}
 					if (s->filename) {
@@ -1715,9 +1740,12 @@ static int parse_sockaddr(const lnode *n, search_items *s)
 						if (un->sun_path[0])
 						    sn.str =
 							strdup(un->sun_path);
-						else
+						else if (un->sun_path[1])
 						    sn.str =
 							strdup(un->sun_path+1);
+						else
+							return 6;
+
 						sn.key = NULL;
 						sn.hits = 1;
 						slist_append(s->filename, &sn);
@@ -2417,7 +2445,7 @@ static int parse_simple_message(const lnode *n, search_items *s)
 
 	// defaulting this to 1 for these messages. The kernel generally
 	// does not log the res since it can be nothing but success. 
-	// But it can still be overriden below if res= is found in the event
+	// But it can still be overridden below if res= is found in the event
 	if (n->type == AUDIT_CONFIG_CHANGE) 
 		s->success = S_SUCCESS;
 

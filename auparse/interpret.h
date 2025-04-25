@@ -1,5 +1,5 @@
 /* interpret.h --
- * Copyright 2007,08,2016 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2007,08,2016-23 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -12,9 +12,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program; see the file COPYING. If not, write to the
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
+ * Boston, MA 02110-1335, USA.
  *
  * Authors:
  *      Steve Grubb <sgrubb@redhat.com>
@@ -37,8 +38,9 @@ void free_interpretation_list(void);
 unsigned int interpretation_list_cnt(void);
 int lookup_type(const char *name);
 const char *do_interpret(rnode *r, auparse_esc_t escape_mode);
-void lookup_destroy_uid_list(void);
+void aulookup_destroy_uid_list(void);
 void aulookup_destroy_gid_list(void);
+void aulookup_metrics(unsigned int *uid, unsigned int *gid);
 char *au_unescape(char *buf);
 
 AUDIT_HIDDEN_END

@@ -15,7 +15,7 @@
 @SET_MAKE@
 
 # Makefile.am --
-# Copyright 2015 Red Hat Inc., Durham, North Carolina.
+# Copyright 2023 Red Hat Inc.
 # All Rights Reserved.
 #
 # This library is free software; you can redistribute it and/or
@@ -111,8 +111,7 @@ POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
 target_triplet = @target@
-@HAVE_PYTHON_TRUE@am__append_1 = python
-@USE_PYTHON3_TRUE@am__append_2 = python3
+@USE_PYTHON3_TRUE@am__append_1 = python3
 subdir = bindings/swig
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/ax_prog_cc_for_build.m4 \
@@ -178,7 +177,7 @@ am__define_uniq_tagged_files = \
   unique=`for i in $$list; do \
     if test -f "$$i"; then echo $$i; else echo $(srcdir)/$$i; fi; \
   done | $(am__uniquify_input)`
-DIST_SUBDIRS = src python python3
+DIST_SUBDIRS = src python3
 am__DIST_COMMON = $(srcdir)/Makefile.in
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 am__relativize = \
@@ -217,6 +216,7 @@ AWK = @AWK@
 BUILD_EXEEXT = @BUILD_EXEEXT@
 BUILD_OBJEXT = @BUILD_OBJEXT@
 CAPNG_LDADD = @CAPNG_LDADD@
+CAPNG_PKG = @CAPNG_PKG@
 CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CC_FOR_BUILD = @CC_FOR_BUILD@
@@ -280,14 +280,10 @@ PACKAGE_TARNAME = @PACKAGE_TARNAME@
 PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
-PYINCLUDEDIR = @PYINCLUDEDIR@
 PYTHON = @PYTHON@
-PYTHON3 = @PYTHON3@
 PYTHON3_CFLAGS = @PYTHON3_CFLAGS@
-PYTHON3_EXEC_PREFIX = @PYTHON3_EXEC_PREFIX@
 PYTHON3_INCLUDES = @PYTHON3_INCLUDES@
 PYTHON3_LIBS = @PYTHON3_LIBS@
-PYTHON3_PREFIX = @PYTHON3_PREFIX@
 PYTHON_EXEC_PREFIX = @PYTHON_EXEC_PREFIX@
 PYTHON_PLATFORM = @PYTHON_PLATFORM@
 PYTHON_PREFIX = @PYTHON_PREFIX@
@@ -297,6 +293,7 @@ SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
+SWIG = @SWIG@
 VERSION = @VERSION@
 WFLAGS = @WFLAGS@
 abs_builddir = @abs_builddir@
@@ -347,10 +344,7 @@ pkgpythondir = @pkgpythondir@
 prefix = @prefix@
 program_transform_name = @program_transform_name@
 psdir = @psdir@
-py3execdir = @py3execdir@
-pybind_dir = @pybind_dir@
 pyexecdir = @pyexecdir@
-python3dir = @python3dir@
 pythondir = @pythondir@
 runstatedir = @runstatedir@
 sbindir = @sbindir@
@@ -368,7 +362,7 @@ top_srcdir = @top_srcdir@
 use_python3 = @use_python3@
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
 EXTRA_DIST = src/auditswig.i
-SUBDIRS = src $(am__append_1) $(am__append_2)
+SUBDIRS = src $(am__append_1)
 all: all-recursive
 
 .SUFFIXES:

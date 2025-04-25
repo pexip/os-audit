@@ -1,6 +1,6 @@
 /*
 * ausearch-int.h - Header file for ausearch-int.c
-* Copyright (c) 2005,2008 Red Hat Inc., Durham, North Carolina.
+* Copyright (c) 2005,2008 Red Hat Inc.
 * All Rights Reserved.
 *
 * This software may be freely redistributed and/or modified under the
@@ -47,8 +47,8 @@ typedef struct {
 void ilist_create(ilist *l);
 static inline void ilist_first(ilist *l) { l->cur = l->head; }
 int_node *ilist_next(ilist *l);
-static inline int_node *ilist_get_cur(ilist *l) { return l->cur; }
-void ilist_append(ilist *l, int num, unsigned int hits, int aux);
+static inline int_node *ilist_get_cur(const ilist *l) { return l->cur; }
+int ilist_append(ilist *l, int num, unsigned int hits, int aux);
 void ilist_clear(ilist* l);
 
 /* append a number if its not already on the list */

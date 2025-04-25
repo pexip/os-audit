@@ -179,7 +179,8 @@ static unsigned int add_subj_attr(auparse_state_t *au, const char *str,
 	if ((auparse_find_field(au, str))) {
 		attr = set_record(0, rnum);
 		attr = set_field(attr, auparse_get_field_num(au));
-		cllist_append(&D.actor.attr, attr, NULL);
+		if (cllist_append(&D.actor.attr, attr, NULL))
+			return 1;
 		return 0;
 	} else
 		auparse_goto_record_num(au, rnum);
@@ -224,7 +225,8 @@ static unsigned int add_obj_attr(auparse_state_t *au, const char *str,
 	if ((auparse_find_field(au, str))) {
 		attr = set_record(0, rnum);
 		attr = set_field(attr, auparse_get_field_num(au));
-		cllist_append(&D.thing.attr, attr, NULL);
+		if (cllist_append(&D.thing.attr, attr, NULL))
+			return 1;
 		return 0;
 	} else
 		auparse_goto_record_num(au, rnum);
@@ -360,21 +362,23 @@ static void collect_id_obj2(auparse_state_t *au, const char *syscall)
 	}
 }
 
-static void collect_path_attrs(auparse_state_t *au)
+static int collect_path_attrs(auparse_state_t *au)
 {
 	value_t attr;
 	unsigned int rnum = auparse_get_record_num(au);
 
 	auparse_first_field(au);
 	if (add_obj_attr(au, "mode", rnum))
-		return;	// Failed opens don't have anything else
+		return 1;	// Failed opens don't have anything else
 
 	// All the rest of the fields matter
 	while ((auparse_next_field(au))) {
 		attr = set_record(0, rnum);
 		attr = set_field(attr, auparse_get_field_num(au));
-		cllist_append(&D.thing.attr, attr, NULL);
+		if (cllist_append(&D.thing.attr, attr, NULL))
+			return 1;
 	}
+	return 0;
 }
 
 static void collect_cwd_attrs(auparse_state_t *au)
@@ -524,6 +528,13 @@ static int set_program_obj(auparse_state_t *au)
 			D.thing.primary = set_field(D.thing.primary,
 					auparse_get_field_num(au));
 		}
+	} else if (type == AUDIT_MAC_POLICY_LOAD) {
+		if (auparse_find_field(au, "lsm")) {
+			D.thing.primary = set_record(0,
+					auparse_get_record_num(au));
+			D.thing.primary = set_field(D.thing.primary,
+					auparse_get_field_num(au));
+		}
 	} else if (auparse_find_field(au, "exe")) {
 		const char *exe = auparse_interpret_field(au);
 		if ((strncmp(exe, "/usr/bin/python", 15) == 0) ||
@@ -612,6 +623,9 @@ static int normalize_syscall(auparse_state_t *au, const char *syscall)
 	if (objtype == NORM_UNKNOWN)
 		normalize_syscall_map_s2i(syscall, &objtype);
 
+// FIXME: Need to address: landlock_*, lsm_*, map_shadow_stack, pkey_*,
+// kexec_file_load, They likely need new NORM_* types. Also, these suggest
+// that NORM_WHAT_ may need some new types.
 	switch (objtype)
 	{
 		case NORM_FILE:
@@ -771,7 +785,7 @@ static int normalize_syscall(auparse_state_t *au, const char *syscall)
 		case NORM_MAC_LOAD:
 			act = normalize_record_map_i2s(ttype);
 			// FIXME: What is the object?
-			D.thing.what = NORM_WHAT_MAC_CONFIG;
+			D.thing.what = NORM_WHAT_SECURITY_POLICY;
 			break;
 		case NORM_MAC_CONFIG:
 			act = normalize_record_map_i2s(ttype);
@@ -782,7 +796,7 @@ static int normalize_syscall(auparse_state_t *au, const char *syscall)
 				D.thing.primary = set_field(D.thing.primary,
 					auparse_get_field_num(au));
 			}
-			D.thing.what = NORM_WHAT_MAC_CONFIG;
+			D.thing.what = NORM_WHAT_SECURITY_POLICY;
 			break;
 		case NORM_MAC_ENFORCE:
 			act = normalize_record_map_i2s(ttype);
@@ -793,7 +807,7 @@ static int normalize_syscall(auparse_state_t *au, const char *syscall)
 				D.thing.primary = set_field(D.thing.primary,
 					auparse_get_field_num(au));
 			}
-			D.thing.what = NORM_WHAT_MAC_CONFIG;
+			D.thing.what = NORM_WHAT_SECURITY_POLICY;
 			break;
 		case NORM_MAC_ERR:
 			// FIXME: What could the object be?
@@ -917,6 +931,15 @@ static int normalize_syscall(auparse_state_t *au, const char *syscall)
 			D.thing.what = NORM_WHAT_SOCKET;
 			set_program_obj(au);
 			break;
+		case NORM_SECURITY_POLICY:
+			act = "adjusted-security-policy-of";
+			D.thing.what = NORM_WHAT_PROCESS;
+			set_program_obj(au);
+			if (D.how) {
+				free((void *)D.how);
+				D.how = strdup(syscall);
+			}
+			break;
 		default:
 			{
 				const char *k;
@@ -1037,6 +1060,7 @@ static const char *normalize_determine_evkind(int type)
 		case AUDIT_SOCKADDR ... AUDIT_MQ_GETSETATTR:
 		case AUDIT_FD_PAIR ... AUDIT_OBJ_PID:
 		case AUDIT_BPRM_FCAPS ... AUDIT_NETFILTER_PKT:
+		case AUDIT_URINGOP:
 			kind = NORM_EVTYPE_AUDIT_RULE;
 			break;
 		case AUDIT_FANOTIFY:
@@ -1086,6 +1110,10 @@ const char *find_config_change_object(auparse_state_t *au)
 	f = auparse_find_field(au, "actions"); // seccomp-logging
 	if (f)
 		return f;
+	auparse_first_record(au);
+	f = auparse_find_field(au, "list");	// If nothing else, the list
+	if (f)
+		return f;
 
 	return NULL;
 }
@@ -1097,7 +1125,10 @@ static int normalize_compound(auparse_state_t *au)
 
 	otype = type = auparse_get_type(au);
 
-	// All compound events have a syscall record, find it
+	// All compound events have a syscall record, find it. After this
+	// loop, type should be syscall, and otype is the original type.
+	// Traditionally, the first record is the purpose of the event and
+	// the syscall is added on next to support/enhance information content.
 	if (type != AUDIT_SYSCALL) {
 		do {
 			// If we go off the end without finding a syscall
@@ -1173,6 +1204,11 @@ static int normalize_compound(auparse_state_t *au)
 		if (f) {
 			const char *exe = auparse_interpret_field(au);
 			D.how = strdup(exe);
+			if (D.how == NULL) {
+				fprintf(stderr, "Out of memory. Check %s file, %d line", __FILE__, __LINE__);
+				free((void *)syscall);
+				return 1;
+			}
 			if ((strncmp(D.how, "/usr/bin/python", 15) == 0) ||
 			    (strncmp(D.how, "/usr/bin/sh", 11) == 0) ||
 			    (strncmp(D.how, "/usr/bin/bash", 13) == 0) ||
@@ -1219,8 +1255,6 @@ static int normalize_compound(auparse_state_t *au)
 				D.action = strdup(act);
 			// FIXME: AUDIT_ANOM_LINK needs an object
 		} else if (otype == AUDIT_CONFIG_CHANGE) {
-			const char *f;
-
 			auparse_first_record(au);
 			f = auparse_find_field(au, "op");
 			if (f) {
@@ -1233,8 +1267,11 @@ static int normalize_compound(auparse_state_t *au)
 				o = find_simple_object(au, AUDIT_CONFIG_CHANGE);
 				D.thing.primary = o;
 			}
-		} else
+		} else {
 			normalize_syscall(au, syscall);
+			if (otype == AUDIT_MAC_POLICY_LOAD)
+				set_program_obj(au);
+		}
 	}
 
 	free((void *)syscall);
@@ -1344,17 +1381,17 @@ static value_t find_simple_object(auparse_state_t *au, int type)
 			break;
 		case AUDIT_MAC_CONFIG_CHANGE:
 			f = auparse_find_field(au, "bool");
-			D.thing.what = NORM_WHAT_MAC_CONFIG;
+			D.thing.what = NORM_WHAT_SECURITY_POLICY;
 			break;
 		case AUDIT_MAC_STATUS:
 			f = auparse_find_field(au, "enforcing");
-			D.thing.what = NORM_WHAT_MAC_CONFIG;
+			D.thing.what = NORM_WHAT_SECURITY_POLICY;
 			break;
 		// These deal with policy, not sure about object yet
 		case AUDIT_MAC_POLICY_LOAD:
 		case AUDIT_LABEL_OVERRIDE:
 		case AUDIT_DEV_ALLOC ... AUDIT_USER_MAC_CONFIG_CHANGE:
-			D.thing.what = NORM_WHAT_MAC_CONFIG;
+			D.thing.what = NORM_WHAT_SECURITY_POLICY;
 			break;
 		case AUDIT_USER:
 			f = auparse_find_field(au, "addr");
@@ -1846,7 +1883,7 @@ map:
 		}
 
 		// Object type
-		D.thing.what = NORM_WHAT_MAC_CONFIG;
+		D.thing.what = NORM_WHAT_SECURITY_POLICY;
 
 		// Results
 		set_results(au, 0);
@@ -1980,6 +2017,10 @@ map:
 	if (f) {
 		const char *exe = auparse_interpret_field(au);
 		D.how = strdup(exe);
+		if (D.how == NULL) {
+			fprintf(stderr, "Out of memory. Check %s file, %d line", __FILE__, __LINE__);
+			return 1;
+		}
 		if ((strncmp(D.how, "/usr/bin/python", 15) == 0) ||
 		    (strncmp(D.how, "/usr/bin/sh", 11) == 0) ||
 		    (strncmp(D.how, "/usr/bin/bash", 13) == 0) ||
@@ -2004,7 +2045,7 @@ map:
 
 /*
  * This is the main entry point for the normalization. This function
- * will analyze the current record to pick out the important pieces.
+ * will analyze the current event to pick out the important pieces.
  */
 int auparse_normalize(auparse_state_t *au, normalize_option_t opt)
 {
@@ -2058,7 +2099,7 @@ static int seek_field(auparse_state_t *au, value_t location)
 	return 1;
 }
 
-const char *auparse_normalize_get_event_kind(auparse_state_t *au)
+const char *auparse_normalize_get_event_kind(const auparse_state_t *au)
 {
 	return D.evkind;
 }
@@ -2078,7 +2119,7 @@ int auparse_normalize_subject_secondary(auparse_state_t *au)
 	return seek_field(au, D.actor.secondary);
 }
 
-const char *auparse_normalize_subject_kind(auparse_state_t *au)
+const char *auparse_normalize_subject_kind(const auparse_state_t *au)
 {
 	return D.actor.what;
 }
@@ -2110,7 +2151,7 @@ int auparse_normalize_subject_next_attribute(auparse_state_t *au)
 	return 0;
 }
 
-const char *auparse_normalize_get_action(auparse_state_t *au)
+const char *auparse_normalize_get_action(const auparse_state_t *au)
 {
 	return D.action;
 }
@@ -2157,7 +2198,7 @@ int auparse_normalize_object_next_attribute(auparse_state_t *au)
 	return 0;
 }
 
-const char *auparse_normalize_object_kind(auparse_state_t *au)
+const char *auparse_normalize_object_kind(const auparse_state_t *au)
 {
 	return normalize_obj_kind_map_i2s(D.thing.what);
 }
@@ -2167,7 +2208,7 @@ int auparse_normalize_get_results(auparse_state_t *au)
 	return seek_field(au, D.results);
 }
 
-const char *auparse_normalize_how(auparse_state_t *au)
+const char *auparse_normalize_how(const auparse_state_t *au)
 {
 	return D.how;
 }

@@ -939,8 +939,8 @@ err:
 	return NULL;
 }
 
-/* Create a binary expresion for OP and subexpressions E1 and E2.
-   On success, return the created expresion.
+/* Create a binary expression for OP and subexpressions E1 and E2.
+   On success, return the created expression.
    On error, set errno and return NULL. */
 struct expr *
 expr_create_binary(unsigned op, struct expr *e1, struct expr *e2)
@@ -1008,7 +1008,7 @@ eval_unsigned_value(rnode *record, const struct expr *expr, int *valid)
    Set *FREE_IT to 1 if the return value should free()'d.
    Return NULL on *error.  */
 static char *
-eval_interpreted_value(auparse_state_t *au, rnode *record,
+eval_interpreted_value(const auparse_state_t *au, rnode *record,
 		       const struct expr *expr, int *free_it)
 {
 	if (expr->virtual_field == 0) {
@@ -1047,8 +1047,8 @@ compare_unsigned_values(uint32_t one, uint32_t two)
 /* Return -1, 0, 1 depending on comparing the field in EXPR with RECORD in AU.
    Set *ERROR to 0 if OK, non-zero otherwise. */
 static int
-compare_values(auparse_state_t *au, rnode *record, const struct expr *expr,
-	       int *error)
+compare_values(const auparse_state_t *au, const rnode *record,
+	       const struct expr *expr, int *error)
 {
 	int res;
 	if (expr->numeric_field == 0) {
