@@ -1,3 +1,9 @@
+audit (1:4.0.2-2+pexip25u1) pexip-trixie; urgency=medium
+
+  * Initial trixie build
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Tue, 29 Apr 2025 22:27:35 +0100
+
 audit (1:4.0.2-2) unstable; urgency=medium
 
   * debian/rules: Fix the building of the python module for the non default
