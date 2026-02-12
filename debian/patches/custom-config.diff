@@ -1,3 +1,5 @@
+Set up PexOS custom configuration for dealing with audit events
+
 --- a/init.d/auditd.conf
 +++ b/init.d/auditd.conf
 @@ -21,8 +21,8 @@
