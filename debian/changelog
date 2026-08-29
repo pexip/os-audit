@@ -1,3 +1,11 @@
+audit (1:4.0.2-2+deb13u1) trixie; urgency=medium
+
+  * Non-maintainer upload.
+  * d/p/04-riscv64.patch: backport riscv64 support from version 4.0.3
+  * debian/rules: Pass --with-riscv to configure (Closes: #1136948)
+
+ -- Aurelien Jarno <aurel32@debian.org>  Sat, 29 Aug 2026 10:54:36 +0200
+
 audit (1:4.0.2-2) unstable; urgency=medium
 
   * debian/rules: Fix the building of the python module for the non default

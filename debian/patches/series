@@ -1,2 +1,3 @@
 01-no-refusemanualstop.patch
 03-Set-log_group-adm.patch
+04-riscv64.patch
