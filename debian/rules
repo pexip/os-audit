@@ -60,7 +60,7 @@ debian/config-python-stamp:
 		--with-libcap-ng \
 		--with-io_uring \
 		$(CONFIGURE_FLAGS) \
-		--with-arm --with-aarch64 ${EXTRA_ARCH_TABLE}
+		--with-arm --with-aarch64 --with-riscv ${EXTRA_ARCH_TABLE}
 	touch $@
 debian/config-python3-%-stamp: debian/config-python-stamp
 	cp -lpr debian/build/bindings/swig   debian/build/bindings/swig3.$*
